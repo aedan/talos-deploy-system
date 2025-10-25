@@ -1,0 +1,10 @@
+# Static DHCP host reservations
+# Only machines defined here will receive IP addresses
+
+{% for host in pxe_hosts %}
+# {{ host.name }}
+dhcp-host={{ host.mac }},{{ host.ip }},{{ host.name }},{{ dhcp_lease_time }}
+{% endfor %}
+
+# Ignore unknown clients - only serve known MAC addresses
+dhcp-ignore=#known

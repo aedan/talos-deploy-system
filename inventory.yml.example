@@ -1,0 +1,60 @@
+---
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+
+      # Network configuration
+      dhcp_interface: eth0                       # Change to your network interface (e.g., eno1, ens192)
+      domain: pxe.local                          # Your internal domain name
+
+      # DHCP range (for fallback, actual IPs come from static assignments)
+      dhcp_range:
+        start: 192.168.1.100
+        end: 192.168.1.150
+
+      lease_time: "12h"
+
+      # Talos Image Factory configuration
+      talos_version: v1.8.3                      # Talos Linux version
+      talos_arch: amd64                          # Architecture (amd64, arm64)
+      talos_extensions:                          # System extensions to include
+        - siderolabs/iscsi-tools
+        - siderolabs/util-linux-tools
+      talos_extra_kernel_args: []                # Optional extra kernel arguments
+      # talos_download_iso: true                 # Uncomment to download ISO file
+
+      # PXE boot configuration
+      pxe_boot_image: /var/lib/tftpboot/pxelinux.0
+      pxe_kernel: kernel-amd64                   # Relative to tftp_root
+      pxe_initrd: initramfs-amd64.xz             # Relative to tftp_root
+      pxe_boot_label: talos-install
+      pxe_boot_menu_text: Install Talos Linux
+      pxe_boot_params: talos.platform=metal console=tty0 init_on_alloc=1 slab_nomerge pti=on consoleblank=0 nvme_core.io_timeout=4294967295 printk.devkmsg=on selinux=1
+      pxe_timeout: 30                             # Timeout in deciseconds (30 = 3 seconds)
+      pxe_default_label: talos-install            # Auto-boot this label on timeout
+
+      # DNS settings (optional)
+      dns_enabled: true  # Set to false to disable DNS functions
+
+      # Static host reservations - only these machines will get DHCP leases
+      pxe_hosts:
+        - name: node01.pxe.local
+          mac: 52:54:00:12:34:56
+          ip: 192.168.1.101
+
+        - name: node02.pxe.local
+          mac: 52:54:00:12:34:57
+          ip: 192.168.1.102
+
+        - name: node03.pxe.local
+          mac: 52:54:00:12:34:58
+          ip: 192.168.1.103
+
+        - name: node04.pxe.local
+          mac: 52:54:00:12:34:59
+          ip: 192.168.1.104
+
+        - name: node05.pxe.local
+          mac: 52:54:00:12:34:5a
+          ip: 192.168.1.105

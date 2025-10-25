@@ -1,0 +1,36 @@
+# Ansible
+*.retry
+inventory.yml
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Generated files
+/tmp/
+
+# Schematic files (may contain sensitive info)
+talos-schematic.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+.nfs*
+
+# Editor directories and files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace

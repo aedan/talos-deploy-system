@@ -1,0 +1,14 @@
+# PXE-specific configuration
+
+# Set the PXE prompt and timeout
+pxe-prompt="Press F8 for boot menu", 3
+
+# Set the PXE service
+pxe-service=x86PC, "Boot from network", pxelinux
+
+# DHCP options for PXE
+# Option 66: TFTP server name
+dhcp-option=66,{{ ansible_default_ipv4.address | default(hostvars['localhost']['ansible_default_ipv4']['address']) }}
+
+# Option 67: Bootfile name
+dhcp-option=67,pxelinux.0

@@ -1,0 +1,41 @@
+# Main dnsmasq configuration
+# Interface to listen on
+interface={{ dnsmasq_interface }}
+bind-interfaces
+
+# Never forward plain names (without a dot or domain part)
+domain-needed
+
+# Never forward addresses in the non-routed address spaces
+bogus-priv
+
+# Set the domain for dnsmasq
+domain={{ domain_name }}
+expand-hosts
+
+# Set the DHCP server to authoritative mode
+dhcp-authoritative
+
+# DHCP range - we'll use static reservations only
+# This range is just a fallback, actual IPs come from static assignments
+dhcp-range={{ dhcp_range_start }},{{ dhcp_range_end }},{{ dhcp_lease_time }}
+
+
+# Enable TFTP server
+enable-tftp
+tftp-root={{ dnsmasq_tftp_root }}
+
+# Set the boot filename for PXE
+dhcp-boot=pxelinux.0
+
+# Disable DNS functions if only using DHCP/PXE
+{% if dns_enabled is defined and not dns_enabled %}
+port=0
+{% endif %}
+
+# Logging
+log-queries
+log-dhcp
+
+# Include additional configuration files
+conf-dir={{ dnsmasq_conf_dir }},*.conf

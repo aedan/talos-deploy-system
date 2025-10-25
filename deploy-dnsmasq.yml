@@ -1,0 +1,222 @@
+---
+- name: Deploy and configure dnsmasq for DHCP and PXE boot
+  hosts: localhost
+  become: yes
+  vars:
+    dnsmasq_conf_dir: /etc/dnsmasq.d
+    dnsmasq_tftp_root: /var/lib/tftpboot
+    dnsmasq_interface: "{{ dhcp_interface | default('eth0') }}"
+    dhcp_range_start: "{{ dhcp_range.start | default('192.168.1.100') }}"
+    dhcp_range_end: "{{ dhcp_range.end | default('192.168.1.150') }}"
+    dhcp_lease_time: "{{ lease_time | default('12h') }}"
+    domain_name: "{{ domain | default('pxe.local') }}"
+
+  tasks:
+    - name: Install required packages
+      package:
+        name:
+          - dnsmasq
+          - syslinux-common
+          - pxelinux
+        state: present
+
+    - name: Create TFTP root directory
+      file:
+        path: "{{ dnsmasq_tftp_root }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Create dnsmasq configuration directory
+      file:
+        path: "{{ dnsmasq_conf_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create PXE boot directory structure
+      file:
+        path: "{{ dnsmasq_tftp_root }}/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - pxelinux.cfg
+        - images
+
+    - name: Find syslinux BIOS modules directory
+      shell: |
+        for dir in /usr/lib/syslinux/modules/bios /usr/lib/SYSLINUX /usr/share/syslinux; do
+          if [ -f "$dir/ldlinux.c32" ]; then
+            echo "$dir"
+            exit 0
+          fi
+        done
+        exit 1
+      register: syslinux_dir
+      changed_when: false
+      failed_when: syslinux_dir.rc != 0
+
+    - name: Find pxelinux.0 location
+      shell: |
+        for dir in /usr/lib/PXELINUX /usr/lib/syslinux /usr/share/syslinux; do
+          if [ -f "$dir/pxelinux.0" ]; then
+            echo "$dir"
+            exit 0
+          fi
+        done
+        exit 1
+      register: pxelinux_dir
+      changed_when: false
+      failed_when: pxelinux_dir.rc != 0
+
+    - name: Copy required syslinux .c32 modules to TFTP root
+      copy:
+        src: "{{ syslinux_dir.stdout }}/{{ item }}"
+        dest: "{{ dnsmasq_tftp_root }}/{{ item }}"
+        mode: '0644'
+        remote_src: yes
+      loop:
+        - ldlinux.c32
+        - menu.c32
+        - libutil.c32
+        - libcom32.c32
+
+    - name: Copy pxelinux.0 to TFTP root
+      copy:
+        src: "{{ pxelinux_dir.stdout }}/pxelinux.0"
+        dest: "{{ dnsmasq_tftp_root }}/pxelinux.0"
+        mode: '0644'
+        remote_src: yes
+
+    - name: Find and copy additional syslinux files if they exist
+      shell: |
+        for file in vesamenu.c32 chain.c32; do
+          for dir in /usr/lib/syslinux/modules/bios /usr/lib/SYSLINUX /usr/share/syslinux; do
+            if [ -f "$dir/$file" ]; then
+              cp "$dir/$file" "{{ dnsmasq_tftp_root }}/$file"
+              chmod 0644 "{{ dnsmasq_tftp_root }}/$file"
+              break
+            fi
+          done
+        done
+      changed_when: false
+      failed_when: false
+
+    - name: Generate Talos schematic file
+      template:
+        src: templates/talos-schematic.yaml.j2
+        dest: /tmp/talos-schematic.yaml
+        mode: '0644'
+      when: talos_version is defined
+
+    - name: Upload schematic to Talos Image Factory
+      uri:
+        url: https://factory.talos.dev/schematics
+        method: POST
+        body: "{{ lookup('file', '/tmp/talos-schematic.yaml') }}"
+        body_format: raw
+        return_content: yes
+        status_code: [200, 201]
+      register: schematic_response
+      when: talos_version is defined
+
+    - name: Extract schematic ID from JSON response
+      set_fact:
+        talos_schematic_id: "{{ schematic_response.json.id }}"
+      when: talos_version is defined and schematic_response is defined
+
+    - name: Display schematic ID
+      debug:
+        msg: "Talos schematic ID: {{ talos_schematic_id }}"
+      when: talos_schematic_id is defined
+
+    - name: Download Talos kernel from Image Factory
+      get_url:
+        url: "https://factory.talos.dev/image/{{ talos_schematic_id }}/{{ talos_version }}/kernel-{{ talos_arch }}"
+        dest: "{{ dnsmasq_tftp_root }}/kernel-{{ talos_arch }}"
+        mode: '0644'
+        force: yes
+        timeout: 300
+      retries: 3
+      delay: 5
+      register: kernel_download
+      until: kernel_download is succeeded
+      when: talos_version is defined and talos_schematic_id is defined
+
+    - name: Download Talos initramfs from Image Factory
+      get_url:
+        url: "https://factory.talos.dev/image/{{ talos_schematic_id }}/{{ talos_version }}/initramfs-{{ talos_arch }}.xz"
+        dest: "{{ dnsmasq_tftp_root }}/initramfs-{{ talos_arch }}.xz"
+        mode: '0644'
+        force: yes
+        timeout: 600
+      retries: 3
+      delay: 5
+      register: initramfs_download
+      until: initramfs_download is succeeded
+      when: talos_version is defined and talos_schematic_id is defined
+
+    - name: Download Talos metal ISO (optional)
+      get_url:
+        url: "https://factory.talos.dev/image/{{ talos_schematic_id }}/{{ talos_version }}/metal-{{ talos_arch }}.iso"
+        dest: "{{ dnsmasq_tftp_root }}/talos-{{ talos_version }}-{{ talos_arch }}.iso"
+        mode: '0644'
+        force: yes
+      when: talos_version is defined and talos_schematic_id is defined and talos_download_iso | default(false)
+
+    - name: Deploy main dnsmasq configuration
+      template:
+        src: templates/dnsmasq.conf.j2
+        dest: /etc/dnsmasq.conf
+        mode: '0644'
+        backup: yes
+      notify: restart dnsmasq
+
+    - name: Deploy PXE-specific dnsmasq configuration
+      template:
+        src: templates/dnsmasq-pxe.conf.j2
+        dest: "{{ dnsmasq_conf_dir }}/pxe.conf"
+        mode: '0644'
+      notify: restart dnsmasq
+
+    - name: Generate static host reservations
+      template:
+        src: templates/dnsmasq-hosts.conf.j2
+        dest: "{{ dnsmasq_conf_dir }}/hosts.conf"
+        mode: '0644'
+      notify: restart dnsmasq
+
+    - name: Copy PXE boot image to TFTP root
+      copy:
+        src: "{{ pxe_boot_image }}"
+        dest: "{{ dnsmasq_tftp_root }}/images/"
+        mode: '0644'
+      when: pxe_boot_image is defined
+
+    - name: Generate PXE boot menu configuration
+      template:
+        src: templates/pxelinux.cfg.default.j2
+        dest: "{{ dnsmasq_tftp_root }}/pxelinux.cfg/default"
+        mode: '0644'
+
+    - name: Enable and start dnsmasq service
+      systemd:
+        name: dnsmasq
+        enabled: yes
+        state: started
+
+    - name: Display deployment summary
+      debug:
+        msg:
+          - "dnsmasq has been configured successfully"
+          - "Interface: {{ dnsmasq_interface }}"
+          - "DHCP Range: {{ dhcp_range_start }} - {{ dhcp_range_end }}"
+          - "Domain: {{ domain_name }}"
+          - "TFTP Root: {{ dnsmasq_tftp_root }}"
+          - "Static hosts configured: {{ pxe_hosts | length }}"
+
+  handlers:
+    - name: restart dnsmasq
+      systemd:
+        name: dnsmasq
+        state: restarted

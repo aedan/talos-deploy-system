@@ -1,0 +1,15 @@
+DEFAULT menu.c32
+PROMPT 0
+TIMEOUT {{ pxe_timeout | default('30') }}
+ONTIMEOUT {{ pxe_default_label | default(pxe_boot_label) | default('local') }}
+
+MENU TITLE PXE Boot Menu
+
+LABEL local
+    MENU LABEL Boot from local disk
+    LOCALBOOT 0
+
+LABEL {{ pxe_boot_label | default('install') }}
+    MENU LABEL {{ pxe_boot_menu_text | default('Network Installation') }}
+    KERNEL {{ dnsmasq_tftp_root }}/{{ pxe_kernel | default('vmlinuz') }}
+    APPEND initrd={{ dnsmasq_tftp_root }}/{{ pxe_initrd | default('initrd.img') }} {{ pxe_boot_params | default('') }}

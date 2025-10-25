@@ -1,0 +1,14 @@
+customization:
+{% if talos_extra_kernel_args is defined and talos_extra_kernel_args | length > 0 %}
+  extraKernelArgs:
+{% for arg in talos_extra_kernel_args %}
+    - {{ arg }}
+{% endfor %}
+{% endif %}
+{% if talos_extensions is defined and talos_extensions | length > 0 %}
+  systemExtensions:
+    officialExtensions:
+{% for ext in talos_extensions %}
+      - {{ ext }}
+{% endfor %}
+{% endif %}
