@@ -1,7 +1,7 @@
 ---
 - name: Trigger PXE boot on servers via OOB management
   hosts: localhost
-  gather_facts: no
+  gather_facts: yes
   vars:
     boot_wait_time: 10  # Wait time between hosts (seconds)
 
@@ -44,6 +44,7 @@
       register: boot_device_result
       ignore_errors: yes
       when: host.oob_address is defined
+      no_log: true
 
     - name: Power cycle servers to trigger PXE boot
       command: >
@@ -59,6 +60,7 @@
       register: restart_result
       ignore_errors: yes
       when: host.oob_address is defined
+      no_log: true
 
     - name: Parse boot device results
       set_fact:

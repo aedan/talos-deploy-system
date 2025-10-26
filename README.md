@@ -319,19 +319,22 @@ ls -la /var/lib/tftpboot/
 
 ### Reset all nodes to maintenance mode
 
-Useful for reprovisioning or troubleshooting:
+Useful for reprovisioning, upgrading, or troubleshooting:
 ```bash
 ansible-playbook -i inventory.yml reset-to-maintenance.yml
 ```
 
 This will:
-- Check if nodes are reachable via talosctl
-- Reboot reachable nodes using `talosctl reboot --mode=maintenance`
-- For unreachable nodes, use OOB to set PXE boot and restart
-- All nodes will boot into Talos maintenance mode
+- Wipe ALL disks on worker nodes first (using control plane as endpoint)
+- Wipe ALL disks on control plane nodes (using their own endpoint)
+- Nodes automatically reboot with wiped disks
+- Nodes PXE boot into Talos maintenance mode (no OS on disk)
+- Delete talos-configs/ directory to force fresh cluster
 
-After reset, re-apply configurations:
+After reset, regenerate configs and redeploy:
 ```bash
+# Optionally update Talos version in inventory.yml
+ansible-playbook -i inventory.yml generate-talos-configs.yml
 ansible-playbook -i inventory.yml deploy-talos-cluster.yml
 ```
 

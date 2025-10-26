@@ -65,6 +65,12 @@ def make_request(url, username, password, method='GET', data=None):
                 request = Request(redirect_url, data=data, headers=headers, method=method)
                 response = opener.open(request, timeout=30)
                 return True, response.getcode(), f"Success (after redirect to {original_redirect})"
+            except HTTPError as redirect_err:
+                # If redirect fails with 400 and this is a Reset action, return error code and URL
+                # The caller will handle trying alternative reset types
+                if redirect_err.code == 400:
+                    return False, redirect_err.code, f"HTTP 400 after redirect to {original_redirect}"
+                return False, e.code, f"Redirect to {original_redirect} failed: {str(redirect_err)}"
             except Exception as redirect_err:
                 return False, e.code, f"Redirect to {original_redirect} failed: {str(redirect_err)}"
         return False, e.code, f"HTTP Error: {e.reason}"
@@ -105,6 +111,22 @@ def set_boot_device(oob_address, username, password, boot_device="Pxe"):
 
     return False, code, msg
 
+def get_power_state(oob_address, username, password):
+    """Get current power state of the server"""
+    url = f"https://{oob_address}/redfish/v1/Systems/1"
+
+    success, code, msg = make_request(url, username, password, method='GET')
+    if success:
+        # Parse the response to get PowerState
+        # This is a simplified version - in production you'd parse the JSON response
+        return "Unknown"  # We'll handle both states in reset_server
+
+    # Try Dell OEM endpoint
+    oem_url = f"https://{oob_address}/redfish/v1/Systems/System.Embedded.1"
+    success_oem, code_oem, msg_oem = make_request(oem_url, username, password, method='GET')
+
+    return "Unknown"
+
 def reset_server(oob_address, username, password, reset_type="ForceRestart"):
     """Trigger server reset via Redfish"""
     url = f"https://{oob_address}/redfish/v1/Systems/1/Actions/ComputerSystem.Reset"
@@ -117,7 +139,14 @@ def reset_server(oob_address, username, password, reset_type="ForceRestart"):
     if success:
         return True, code, "Server reset triggered"
 
-    # If standard Redfish fails with 400, try Dell OEM variations
+    # If standard Redfish fails with 400, server might be off - try "On" instead
+    if code == 400:
+        data_on = {"ResetType": "On"}
+        success_on, code_on, msg_on = make_request(url, username, password, method='POST', data=data_on)
+        if success_on:
+            return True, code_on, "Server powered on (was off)"
+
+    # If still failing, try Dell OEM variations
     if code == 400:
         oem_url = f"https://{oob_address}/redfish/v1/Systems/System.Embedded.1/Actions/ComputerSystem.Reset"
 
