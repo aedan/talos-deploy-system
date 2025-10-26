@@ -104,7 +104,8 @@
           - ""
           - "Next steps:"
           - "  1. Wait for all nodes to PXE boot (2-5 minutes)"
-          - "  2. Run: ansible-playbook -i inventory.yml deploy-talos-cluster.yml"
+          - "  2. Generate Talos configs: ansible-playbook -i inventory.yml generate-talos-configs.yml"
+          - "  3. Deploy cluster: ansible-playbook -i inventory.yml deploy-talos-cluster.yml"
           - "========================================="
 
     - name: Create boot log
@@ -158,6 +159,10 @@
           Once all nodes have PXE booted into Talos maintenance mode:
 
           ```bash
+          # 1. Generate Talos configurations
+          ansible-playbook -i inventory.yml generate-talos-configs.yml
+
+          # 2. Deploy the cluster
           ansible-playbook -i inventory.yml deploy-talos-cluster.yml
           ```
         dest: "{{ playbook_dir }}/pxe-boot-{{ ansible_date_time.epoch }}.log"

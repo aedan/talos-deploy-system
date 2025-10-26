@@ -57,54 +57,48 @@
 
           Press ENTER to continue or Ctrl+C to abort...
 
-    # Apply configurations to control plane nodes
-    - name: Apply configuration to control plane nodes
+    # Apply configurations to ALL nodes (control plane + workers)
+    - name: Apply configuration to all nodes (insecure mode)
       command: >
         talosctl apply-config
         --insecure
         --nodes {{ host.ip }}
         --file {{ talos_config_dir }}/{{ host.name.split('.')[0] }}.yaml
-        --talosconfig {{ talosconfig_file }}
-      loop: "{{ controlplane_hosts }}"
+      loop: "{{ pxe_hosts }}"
       loop_control:
         loop_var: host
-      register: apply_controlplane
-      failed_when: apply_controlplane.rc != 0
+      register: apply_all_insecure
+      ignore_errors: yes
       async: "{{ apply_timeout }}"
       poll: 10
+      no_log: true
 
-    - name: Wait for control plane nodes to be ready
-      pause:
-        seconds: 30
-        prompt: "Waiting for control plane nodes to apply configuration..."
-
-    # Apply configurations to worker nodes
-    - name: Apply configuration to worker nodes
+    - name: Apply configuration to already-configured nodes (authenticated mode)
       command: >
         talosctl apply-config
-        --insecure
-        --nodes {{ host.ip }}
-        --file {{ talos_config_dir }}/{{ host.name.split('.')[0] }}.yaml
+        --nodes {{ item.host.ip }}
+        --endpoints {{ item.host.ip }}
+        --file {{ talos_config_dir }}/{{ item.host.name.split('.')[0] }}.yaml
         --talosconfig {{ talosconfig_file }}
-      loop: "{{ worker_hosts }}"
-      loop_control:
-        loop_var: host
-      register: apply_workers
-      failed_when: apply_workers.rc != 0
+      loop: "{{ apply_all_insecure.results }}"
+      when: item.rc != 0
+      register: apply_all_auth
+      ignore_errors: yes
       async: "{{ apply_timeout }}"
       poll: 10
-      when: worker_hosts | length > 0
+      no_log: true
 
-    - name: Wait for all nodes to stabilize
+    - name: Wait for all nodes to apply configuration and reboot
       pause:
-        seconds: 60
-        prompt: "Waiting for all nodes to stabilize after configuration..."
+        seconds: 90
+        prompt: "Waiting for all nodes to apply configuration and stabilize..."
 
     # Check if cluster is already bootstrapped
     - name: Check if cluster is already bootstrapped
       command: >
         talosctl get members
         --nodes {{ first_controlplane.ip }}
+        --endpoints {{ first_controlplane.ip }}
         --talosconfig {{ talosconfig_file }}
       register: bootstrap_check
       failed_when: false
@@ -114,6 +108,7 @@
       command: >
         talosctl bootstrap
         --nodes {{ first_controlplane.ip }}
+        --endpoints {{ first_controlplane.ip }}
         --talosconfig {{ talosconfig_file }}
       when: bootstrap_check.rc != 0
       register: bootstrap_result
@@ -130,6 +125,7 @@
       command: >
         talosctl etcd members
         --nodes {{ first_controlplane.ip }}
+        --endpoints {{ first_controlplane.ip }}
         --talosconfig {{ talosconfig_file }}
       register: etcd_check
       retries: 20
@@ -140,6 +136,7 @@
       command: >
         talosctl get members
         --nodes {{ first_controlplane.ip }}
+        --endpoints {{ first_controlplane.ip }}
         --talosconfig {{ talosconfig_file }}
       register: api_check
       retries: 15
@@ -169,6 +166,7 @@
       command: >
         talosctl kubeconfig
         --nodes {{ first_controlplane.ip }}
+        --endpoints {{ first_controlplane.ip }}
         --talosconfig {{ talosconfig_file }}
         --force
         {{ kubeconfig_dest }}

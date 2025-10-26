@@ -7,7 +7,6 @@ machine:
     token: {{ talos_machine_token }}
     ca:
         crt: {{ talos_machine_ca_crt }}
-        key: {{ talos_machine_ca_key }}
     certSANs: []
 
     kubelet:
@@ -80,7 +79,6 @@ cluster:
     secretboxEncryptionSecret: {{ talos_secretbox_secret }}
     ca:
         crt: {{ talos_cluster_ca_crt }}
-        key: {{ talos_cluster_ca_key }}
 
     discovery:
         enabled: true
