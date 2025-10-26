@@ -4,7 +4,6 @@
   gather_facts: no
   vars:
     boot_wait_time: 10  # Wait time between hosts (seconds)
-    verify_ssl: false   # Set to true if using valid SSL certificates
 
   tasks:
     - name: Set inventory variables as facts
@@ -32,85 +31,71 @@
 
           Press ENTER to continue or Ctrl+C to abort...
 
-    - name: Set one-time PXE boot via Redfish
-      uri:
-        url: "https://{{ host.oob_address }}/redfish/v1/Systems/1/Actions/ComputerSystem.Reset"
-        method: POST
-        user: "{{ host.oob_username }}"
-        password: "{{ host.oob_password }}"
-        body_format: json
-        body:
-          ResetType: "ForceRestart"
-        force_basic_auth: yes
-        validate_certs: "{{ verify_ssl }}"
-        status_code: [200, 202, 204]
-        headers:
-          Content-Type: "application/json"
-      loop: "{{ pxe_hosts }}"
-      loop_control:
-        loop_var: host
-        pause: "{{ boot_wait_time }}"
-      register: boot_result
-      ignore_errors: yes
-      when: host.oob_address is defined
-
-    - name: Set boot device to PXE before reset (alternative method)
-      uri:
-        url: "https://{{ host.oob_address }}/redfish/v1/Systems/1"
-        method: PATCH
-        user: "{{ host.oob_username }}"
-        password: "{{ host.oob_password }}"
-        body_format: json
-        body:
-          Boot:
-            BootSourceOverrideEnabled: "Once"
-            BootSourceOverrideTarget: "Pxe"
-        force_basic_auth: yes
-        validate_certs: "{{ verify_ssl }}"
-        status_code: [200, 202, 204]
-        headers:
-          Content-Type: "application/json"
+    - name: Set boot device to PXE (one-time boot override)
+      command: >
+        {{ playbook_dir }}/scripts/redfish_pxe_boot.py
+        {{ host.oob_address }}
+        {{ host.oob_username }}
+        {{ host.oob_password }}
+        set_boot
       loop: "{{ pxe_hosts }}"
       loop_control:
         loop_var: host
       register: boot_device_result
       ignore_errors: yes
-      when:
-        - host.oob_address is defined
-        - boot_result.results[loop_index0].failed | default(false)
-      loop_control:
-        index_var: loop_index0
+      when: host.oob_address is defined
+      no_log: true  # Hide passwords from logs
 
-    - name: Power cycle servers with PXE boot set
-      uri:
-        url: "https://{{ host.oob_address }}/redfish/v1/Systems/1/Actions/ComputerSystem.Reset"
-        method: POST
-        user: "{{ host.oob_username }}"
-        password: "{{ host.oob_password }}"
-        body_format: json
-        body:
-          ResetType: "ForceRestart"
-        force_basic_auth: yes
-        validate_certs: "{{ verify_ssl }}"
-        status_code: [200, 202, 204]
-        headers:
-          Content-Type: "application/json"
+    - name: Power cycle servers to trigger PXE boot
+      command: >
+        {{ playbook_dir }}/scripts/redfish_pxe_boot.py
+        {{ host.oob_address }}
+        {{ host.oob_username }}
+        {{ host.oob_password }}
+        reset
       loop: "{{ pxe_hosts }}"
       loop_control:
         loop_var: host
         pause: "{{ boot_wait_time }}"
       register: restart_result
-      when:
-        - host.oob_address is defined
-        - boot_device_result is defined
+      ignore_errors: yes
+      when: host.oob_address is defined
+      no_log: true  # Hide passwords from logs
+
+    - name: Parse boot device results
+      set_fact:
+        boot_results_parsed: >-
+          {{
+            boot_device_result.results | default([]) |
+            selectattr('skipped', 'undefined') |
+            map(attribute='stdout') |
+            map('from_json') |
+            list
+          }}
+
+    - name: Parse restart results
+      set_fact:
+        restart_results_parsed: >-
+          {{
+            restart_result.results | default([]) |
+            selectattr('skipped', 'undefined') |
+            map(attribute='stdout') |
+            map('from_json') |
+            list
+          }}
 
     - name: Display boot results
       debug:
         msg:
           - "========================================="
-          - "PXE Boot Triggered"
+          - "PXE Boot Results"
           - "========================================="
-          - "Servers are now restarting and will PXE boot"
+          - ""
+          - "Boot device configuration:"
+          - "{% for idx in range(pxe_hosts | length) %}{% if boot_results_parsed[idx] is defined %}  - {{ pxe_hosts[idx].name }}: {{ 'SUCCESS' if not boot_results_parsed[idx].failed else 'FAILED - ' + boot_results_parsed[idx].msg }}{% endif %}{% endfor %}"
+          - ""
+          - "Power cycle status:"
+          - "{% for idx in range(pxe_hosts | length) %}{% if restart_results_parsed[idx] is defined %}  - {{ pxe_hosts[idx].name }}: {{ 'SUCCESS (HTTP ' + (restart_results_parsed[idx].status_code | string) + ')' if not restart_results_parsed[idx].failed else 'FAILED - ' + restart_results_parsed[idx].msg }}{% endif %}{% endfor %}"
           - ""
           - "Monitor progress:"
           - "  - Check dnsmasq DHCP logs: journalctl -u dnsmasq -f"
@@ -139,13 +124,19 @@
             - Role: {{ host.role }}
           {% endfor %}
 
-          ## Boot Status
+          ## Boot Device Configuration
 
-          {% for result in boot_result.results %}
-          {% if result.failed | default(false) %}
-          - {{ result.host.name }}: FAILED - {{ result.msg | default('Unknown error') }}
-          {% else %}
-          - {{ result.host.name }}: SUCCESS
+          {% for idx in range(pxe_hosts | length) %}
+          {% if boot_results_parsed[idx] is defined %}
+          - {{ pxe_hosts[idx].name }}: {{ 'SUCCESS' if not boot_results_parsed[idx].failed else 'FAILED - ' + boot_results_parsed[idx].msg }}
+          {% endif %}
+          {% endfor %}
+
+          ## Power Cycle Status
+
+          {% for idx in range(pxe_hosts | length) %}
+          {% if restart_results_parsed[idx] is defined %}
+          - {{ pxe_hosts[idx].name }}: {{ 'SUCCESS (HTTP ' + (restart_results_parsed[idx].status_code | string) + ')' if not restart_results_parsed[idx].failed else 'FAILED - ' + restart_results_parsed[idx].msg }}
           {% endif %}
           {% endfor %}
 
