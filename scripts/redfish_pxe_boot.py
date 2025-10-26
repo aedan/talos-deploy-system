@@ -119,26 +119,35 @@ def reset_server(oob_address, username, password, reset_type="ForceRestart"):
 
     # If standard Redfish fails with 400, try Dell OEM variations
     if code == 400:
-        # Try Dell-specific OEM endpoint for iDRAC7/8
         oem_url = f"https://{oob_address}/redfish/v1/Systems/System.Embedded.1/Actions/ComputerSystem.Reset"
+
+        # Try ForceRestart first (for when server is on)
         success_oem, code_oem, msg_oem = make_request(oem_url, username, password, method='POST', data=data)
         if success_oem:
             return True, code_oem, "Server reset triggered (Dell OEM)"
 
-        # Try with different reset type for older iDRAC
-        data_alt = {"ResetType": "ForceOff"}
-        success_alt, code_alt, msg_alt = make_request(oem_url, username, password, method='POST', data=data_alt)
-        if success_alt:
-            return True, code_alt, "Server reset triggered (Dell OEM ForceOff)"
+        # If server might be off, try On to power it on
+        data_on = {"ResetType": "On"}
+        success_on, code_on, msg_on = make_request(oem_url, username, password, method='POST', data=data_on)
+        if success_on:
+            return True, code_on, "Server powered on (Dell OEM)"
 
-        # Try older Dell action format
-        old_url = f"https://{oob_address}/redfish/v1/Systems/System.Embedded.1/Actions/Oem/EID_674_Manager.Reset"
-        data_old = {"ResetType": "GracefulRestart"}
-        success_old, code_old, msg_old = make_request(old_url, username, password, method='POST', data=data_old)
-        if success_old:
-            return True, code_old, "Server reset triggered (Dell legacy OEM)"
+        # Try ForceOff then On (two-step reboot for servers that are currently on)
+        data_off = {"ResetType": "ForceOff"}
+        success_off, code_off, msg_off = make_request(oem_url, username, password, method='POST', data=data_off)
+        if success_off:
+            # Wait for server to fully power off
+            import time
+            time.sleep(5)
+            # Now power it back on
+            success_on2, code_on2, msg_on2 = make_request(oem_url, username, password, method='POST', data=data_on)
+            if success_on2:
+                return True, code_on2, "Server reset triggered (Dell OEM ForceOff+On)"
+            else:
+                # ForceOff worked but On failed - return partial success message
+                return False, code_on2, f"Server powered off successfully but failed to power back on: {msg_on2}"
 
-        return False, code_oem, f"All Dell reset methods failed: std={msg}, oem1={msg_oem}, oem2={msg_alt}, oem3={msg_old}"
+        return False, code_oem, f"All Dell reset methods failed: std={msg}, oem={msg_oem}, on={msg_on}, off={msg_off}"
 
     return False, code, msg
 
