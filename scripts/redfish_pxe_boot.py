@@ -23,10 +23,10 @@ def create_legacy_ssl_context():
     context.set_ciphers('DEFAULT:@SECLEVEL=1')
     return context
 
-def setup_auth(username, password):
+def setup_auth(url, username, password):
     """Setup basic auth handler"""
     password_mgr = HTTPPasswordMgrWithDefaultRealm()
-    password_mgr.add_password(None, None, username, password)
+    password_mgr.add_password(None, url, username, password)
     auth_handler = HTTPBasicAuthHandler(password_mgr)
     return auth_handler
 
@@ -41,7 +41,7 @@ def set_boot_device(oob_address, username, password, boot_device="Pxe"):
         }
     }
 
-    auth_handler = setup_auth(username, password)
+    auth_handler = setup_auth(url, username, password)
     opener = build_opener(auth_handler)
     install_opener(opener)
 
@@ -69,7 +69,7 @@ def reset_server(oob_address, username, password, reset_type="ForceRestart"):
         "ResetType": reset_type
     }
 
-    auth_handler = setup_auth(username, password)
+    auth_handler = setup_auth(url, username, password)
     opener = build_opener(auth_handler)
     install_opener(opener)
 

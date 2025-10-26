@@ -44,7 +44,6 @@
       register: boot_device_result
       ignore_errors: yes
       when: host.oob_address is defined
-      no_log: true  # Hide passwords from logs
 
     - name: Power cycle servers to trigger PXE boot
       command: >
@@ -60,7 +59,6 @@
       register: restart_result
       ignore_errors: yes
       when: host.oob_address is defined
-      no_log: true  # Hide passwords from logs
 
     - name: Parse boot device results
       set_fact:
