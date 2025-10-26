@@ -23,9 +23,11 @@ talos-configs/
 !generate-talos-configs.yml
 !deploy-talos-cluster.yml
 !pxe-boot-servers.yml
+!reset-to-maintenance.yml
 
 # PXE boot logs
 pxe-boot-*.log
+maintenance-reset-*.log
 
 # Python
 __pycache__/

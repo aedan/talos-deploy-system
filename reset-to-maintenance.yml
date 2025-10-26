@@ -1,0 +1,217 @@
+---
+- name: Reset Talos nodes to maintenance mode
+  hosts: localhost
+  gather_facts: no
+  vars:
+    talosctl_timeout: 30  # Timeout for talosctl commands in seconds
+
+  tasks:
+    - name: Set inventory variables as facts
+      set_fact:
+        pxe_hosts: "{{ hostvars[inventory_hostname]['pxe_hosts'] }}"
+        talos_config_dir: "{{ playbook_dir }}/talos-configs"
+
+    - name: Check if talosconfig exists
+      stat:
+        path: "{{ talos_config_dir }}/talosconfig"
+      register: talosconfig_stat
+
+    - name: Display maintenance mode plan
+      debug:
+        msg:
+          - "========================================="
+          - "Reset Nodes to Maintenance Mode"
+          - "========================================="
+          - "Total nodes: {{ pxe_hosts | length }}"
+          - "This will:"
+          - "  1. Check if each node is reachable via talosctl"
+          - "  2. Reboot reachable nodes to maintenance mode via talosctl"
+          - "  3. For unreachable nodes, use OOB to PXE boot"
+          - "========================================="
+
+    - name: Pause for confirmation
+      pause:
+        prompt: |
+
+          WARNING: This will reboot all nodes into maintenance mode!
+          All running workloads will be stopped.
+
+          Press ENTER to continue or Ctrl+C to abort...
+
+    - name: Check node reachability via talosctl
+      command: >
+        talosctl --talosconfig {{ talos_config_dir }}/talosconfig
+        --nodes {{ host.ip }}
+        version --client=false
+      loop: "{{ pxe_hosts }}"
+      loop_control:
+        loop_var: host
+      register: node_check
+      ignore_errors: yes
+      failed_when: false
+      changed_when: false
+      when: talosconfig_stat.stat.exists
+
+    - name: Reboot reachable nodes to maintenance mode via talosctl
+      command: >
+        talosctl --talosconfig {{ talos_config_dir }}/talosconfig
+        --nodes {{ item.host.ip }}
+        reboot --mode=maintenance
+      loop: "{{ node_check.results | default([]) }}"
+      when:
+        - talosconfig_stat.stat.exists
+        - item.rc is defined
+        - item.rc == 0
+      register: talosctl_reboot
+      ignore_errors: yes
+
+    - name: Identify nodes that need OOB PXE boot
+      set_fact:
+        oob_needed: >-
+          {{
+            pxe_hosts | selectattr('oob_address', 'defined') |
+            rejectattr('ip', 'in',
+              (node_check.results | default([]) |
+              selectattr('rc', 'defined') |
+              selectattr('rc', 'equalto', 0) |
+              map(attribute='host.ip') | list)
+            ) | list
+          }}
+      when: talosconfig_stat.stat.exists
+
+    - name: Set all hosts for OOB if no talosconfig exists
+      set_fact:
+        oob_needed: "{{ pxe_hosts | selectattr('oob_address', 'defined') | list }}"
+      when: not talosconfig_stat.stat.exists
+
+    - name: Display OOB boot plan
+      debug:
+        msg:
+          - "Nodes requiring OOB PXE boot: {{ oob_needed | length }}"
+          - "{% for host in oob_needed %}- {{ host.name }} ({{ host.ip }}){% endfor %}"
+      when: oob_needed | length > 0
+
+    - name: Set boot device to PXE for unreachable nodes
+      command: >
+        {{ playbook_dir }}/scripts/redfish_pxe_boot.py
+        {{ host.oob_address }}
+        {{ host.oob_username }}
+        {{ host.oob_password }}
+        set_boot
+      loop: "{{ oob_needed }}"
+      loop_control:
+        loop_var: host
+      register: oob_boot_device
+      ignore_errors: yes
+      when: oob_needed | length > 0
+
+    - name: Power cycle unreachable nodes via OOB
+      command: >
+        {{ playbook_dir }}/scripts/redfish_pxe_boot.py
+        {{ host.oob_address }}
+        {{ host.oob_username }}
+        {{ host.oob_password }}
+        reset
+      loop: "{{ oob_needed }}"
+      loop_control:
+        loop_var: host
+        pause: 10
+      register: oob_reset
+      ignore_errors: yes
+      when: oob_needed | length > 0
+
+    - name: Parse OOB boot device results
+      set_fact:
+        oob_boot_parsed: >-
+          {{
+            oob_boot_device.results | default([]) |
+            selectattr('skipped', 'undefined') |
+            map(attribute='stdout') |
+            map('from_json') |
+            list
+          }}
+      when: oob_needed | length > 0
+
+    - name: Parse OOB reset results
+      set_fact:
+        oob_reset_parsed: >-
+          {{
+            oob_reset.results | default([]) |
+            selectattr('skipped', 'undefined') |
+            map(attribute='stdout') |
+            map('from_json') |
+            list
+          }}
+      when: oob_needed | length > 0
+
+    - name: Display final results
+      debug:
+        msg:
+          - "========================================="
+          - "Maintenance Mode Reset Results"
+          - "========================================="
+          - ""
+          - "Nodes reset via talosctl:"
+          - "{% for result in talosctl_reboot.results | default([]) %}{% if not result.skipped | default(false) %}  - {{ result.item.host.name }}: {{ 'SUCCESS' if result.rc == 0 else 'FAILED' }}{% endif %}{% endfor %}"
+          - ""
+          - "Nodes reset via OOB:"
+          - "{% for idx in range(oob_needed | length) %}{% if oob_reset_parsed is defined and oob_reset_parsed[idx] is defined %}  - {{ oob_needed[idx].name }}: {{ 'SUCCESS' if not oob_reset_parsed[idx].failed else 'FAILED - ' + oob_reset_parsed[idx].msg }}{% endif %}{% endfor %}"
+          - ""
+          - "All nodes should now be in maintenance mode."
+          - "Monitor with: journalctl -u dnsmasq -f"
+          - ""
+          - "Next steps:"
+          - "  1. Wait for all nodes to PXE boot (2-5 minutes)"
+          - "  2. Verify nodes are in maintenance mode"
+          - "  3. Apply configurations with: ansible-playbook -i inventory.yml deploy-talos-cluster.yml"
+          - "========================================="
+
+    - name: Create maintenance reset log
+      copy:
+        content: |
+          # Maintenance Mode Reset Log
+
+          Triggered: {{ ansible_date_time.iso8601 }}
+          By: {{ ansible_env.USER }}@{{ ansible_hostname }}
+
+          ## Nodes Reset via talosctl
+
+          {% for result in talosctl_reboot.results | default([]) %}
+          {% if not result.skipped | default(false) %}
+          - {{ result.item.host.name }} ({{ result.item.host.ip }}): {{ 'SUCCESS' if result.rc == 0 else 'FAILED - ' + (result.stderr | default('Unknown error')) }}
+          {% endif %}
+          {% endfor %}
+
+          ## Nodes Reset via OOB
+
+          {% for idx in range(oob_needed | length) %}
+          {% if oob_boot_parsed is defined and oob_boot_parsed[idx] is defined %}
+          - {{ oob_needed[idx].name }} ({{ oob_needed[idx].ip }})
+            - Boot device: {{ 'SUCCESS' if not oob_boot_parsed[idx].failed else 'FAILED - ' + oob_boot_parsed[idx].msg }}
+            - Reset: {{ 'SUCCESS' if not oob_reset_parsed[idx].failed else 'FAILED - ' + oob_reset_parsed[idx].msg }}
+          {% endif %}
+          {% endfor %}
+
+          ## Monitoring Commands
+
+          ```bash
+          # Watch DHCP requests
+          sudo journalctl -u dnsmasq -f | grep DHCP
+
+          # Watch TFTP downloads
+          sudo journalctl -u dnsmasq -f | grep TFTP
+
+          # Check node status
+          talosctl --talosconfig {{ talos_config_dir }}/talosconfig get members --nodes <node-ip>
+          ```
+
+          ## Next Steps
+
+          Once all nodes have booted into maintenance mode:
+
+          ```bash
+          # Re-apply configurations
+          ansible-playbook -i inventory.yml deploy-talos-cluster.yml
+          ```
+        dest: "{{ playbook_dir }}/maintenance-reset-{{ ansible_date_time.epoch }}.log"
+        mode: '0644'

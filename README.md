@@ -150,9 +150,12 @@ This will:
 ├── deploy-dnsmasq.yml              # PXE server deployment playbook
 ├── generate-talos-configs.yml      # Generate Talos node configs
 ├── pxe-boot-servers.yml            # Trigger PXE boot via iLO/iDRAC
+├── reset-to-maintenance.yml        # Reset nodes to maintenance mode
 ├── deploy-talos-cluster.yml        # Bootstrap and deploy cluster
 ├── inventory.yml.example           # Example inventory file
 ├── inventory.yml                   # Your inventory (gitignored)
+├── scripts/
+│   └── redfish_pxe_boot.py         # Redfish API client for OOB management
 ├── templates/
 │   ├── dnsmasq.conf.j2             # Main dnsmasq configuration
 │   ├── dnsmasq-pxe.conf.j2         # PXE-specific settings
@@ -167,6 +170,7 @@ This will:
 │   ├── talosconfig                 # Talos CLI config
 │   └── DEPLOYMENT.md               # Deployment guide
 ├── pxe-boot-*.log                  # Boot trigger logs (gitignored)
+├── maintenance-reset-*.log         # Maintenance reset logs (gitignored)
 └── README.md                       # This file
 ```
 
@@ -311,6 +315,24 @@ sudo cat /var/lib/misc/dnsmasq.leases
 
 # Verify TFTP files
 ls -la /var/lib/tftpboot/
+```
+
+### Reset all nodes to maintenance mode
+
+Useful for reprovisioning or troubleshooting:
+```bash
+ansible-playbook -i inventory.yml reset-to-maintenance.yml
+```
+
+This will:
+- Check if nodes are reachable via talosctl
+- Reboot reachable nodes using `talosctl reboot --mode=maintenance`
+- For unreachable nodes, use OOB to set PXE boot and restart
+- All nodes will boot into Talos maintenance mode
+
+After reset, re-apply configurations:
+```bash
+ansible-playbook -i inventory.yml deploy-talos-cluster.yml
 ```
 
 ### Regenerate configs for new nodes
