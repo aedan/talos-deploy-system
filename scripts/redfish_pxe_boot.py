@@ -7,8 +7,9 @@ Handles legacy SSL ciphers and HTTP redirects for iLO/iDRAC
 import ssl
 import sys
 import json
+import base64
 import urllib3
-from urllib.request import Request, urlopen, HTTPPasswordMgrWithDefaultRealm, HTTPBasicAuthHandler, build_opener, install_opener
+from urllib.request import Request, urlopen, HTTPPasswordMgrWithDefaultRealm, HTTPBasicAuthHandler, build_opener, install_opener, HTTPHandler, HTTPSHandler
 from urllib.error import HTTPError, URLError
 
 # Disable SSL warnings for self-signed certificates
@@ -23,12 +24,54 @@ def create_legacy_ssl_context():
     context.set_ciphers('DEFAULT:@SECLEVEL=1')
     return context
 
-def setup_auth(url, username, password):
-    """Setup basic auth handler"""
-    password_mgr = HTTPPasswordMgrWithDefaultRealm()
-    password_mgr.add_password(None, url, username, password)
-    auth_handler = HTTPBasicAuthHandler(password_mgr)
-    return auth_handler
+def make_request(url, username, password, method='GET', data=None):
+    """Make HTTP request with auth and legacy SSL support"""
+    context = create_legacy_ssl_context()
+
+    # Create Basic Auth header manually
+    credentials = f"{username}:{password}"
+    encoded_credentials = base64.b64encode(credentials.encode('utf-8')).decode('utf-8')
+    auth_header = f"Basic {encoded_credentials}"
+
+    # Build opener with custom SSL context
+    https_handler = HTTPSHandler(context=context)
+    opener = build_opener(https_handler)
+
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': auth_header
+    }
+
+    if data:
+        data = json.dumps(data).encode('utf-8')
+
+    base_url = '/'.join(url.split('/')[:3])  # https://host
+
+    request = Request(url, data=data, headers=headers, method=method)
+
+    try:
+        response = opener.open(request, timeout=30)
+        return True, response.getcode(), f"Success"
+    except HTTPError as e:
+        # Handle redirects manually for PATCH/POST
+        if e.code in [301, 302, 307, 308] and 'Location' in e.headers:
+            redirect_url = e.headers['Location']
+            original_redirect = redirect_url  # Save for debugging
+            if not redirect_url.startswith('http'):
+                redirect_url = f"{base_url}{redirect_url}"
+
+            # Retry with redirect URL - auth header is already in headers dict
+            try:
+                request = Request(redirect_url, data=data, headers=headers, method=method)
+                response = opener.open(request, timeout=30)
+                return True, response.getcode(), f"Success (after redirect to {original_redirect})"
+            except Exception as redirect_err:
+                return False, e.code, f"Redirect to {original_redirect} failed: {str(redirect_err)}"
+        return False, e.code, f"HTTP Error: {e.reason}"
+    except URLError as e:
+        return False, -1, f"URL Error: {str(e.reason)}"
+    except Exception as e:
+        return False, -1, f"Error: {str(e)}"
 
 def set_boot_device(oob_address, username, password, boot_device="Pxe"):
     """Set one-time boot device via Redfish"""
@@ -41,25 +84,26 @@ def set_boot_device(oob_address, username, password, boot_device="Pxe"):
         }
     }
 
-    auth_handler = setup_auth(url, username, password)
-    opener = build_opener(auth_handler)
-    install_opener(opener)
+    success, code, msg = make_request(url, username, password, method='PATCH', data=data)
+    if success:
+        return True, code, "Boot device set successfully"
 
-    try:
-        request = Request(url,
-                         data=json.dumps(data).encode('utf-8'),
-                         headers={'Content-Type': 'application/json'},
-                         method='PATCH')
+    # If standard Redfish fails with 400, try Dell OEM method for old iDRAC
+    if code == 400:
+        # Try Dell-specific OEM endpoint for iDRAC7/8
+        oem_url = f"https://{oob_address}/redfish/v1/Systems/System.Embedded.1"
+        oem_data = {
+            "Boot": {
+                "BootSourceOverrideEnabled": "Once",
+                "BootSourceOverrideTarget": boot_device
+            }
+        }
+        success_oem, code_oem, msg_oem = make_request(oem_url, username, password, method='PATCH', data=oem_data)
+        if success_oem:
+            return True, code_oem, "Boot device set successfully (Dell OEM)"
+        return False, code_oem, f"Standard and OEM methods failed: {msg} / {msg_oem}"
 
-        context = create_legacy_ssl_context()
-        response = urlopen(request, context=context, timeout=30)
-        return True, response.getcode(), "Boot device set successfully"
-    except HTTPError as e:
-        return False, e.code, f"HTTP Error: {e.reason}"
-    except URLError as e:
-        return False, -1, f"URL Error: {e.reason}"
-    except Exception as e:
-        return False, -1, f"Error: {str(e)}"
+    return False, code, msg
 
 def reset_server(oob_address, username, password, reset_type="ForceRestart"):
     """Trigger server reset via Redfish"""
@@ -69,39 +113,34 @@ def reset_server(oob_address, username, password, reset_type="ForceRestart"):
         "ResetType": reset_type
     }
 
-    auth_handler = setup_auth(url, username, password)
-    opener = build_opener(auth_handler)
-    install_opener(opener)
+    success, code, msg = make_request(url, username, password, method='POST', data=data)
+    if success:
+        return True, code, "Server reset triggered"
 
-    try:
-        request = Request(url,
-                         data=json.dumps(data).encode('utf-8'),
-                         headers={'Content-Type': 'application/json'},
-                         method='POST')
+    # If standard Redfish fails with 400, try Dell OEM variations
+    if code == 400:
+        # Try Dell-specific OEM endpoint for iDRAC7/8
+        oem_url = f"https://{oob_address}/redfish/v1/Systems/System.Embedded.1/Actions/ComputerSystem.Reset"
+        success_oem, code_oem, msg_oem = make_request(oem_url, username, password, method='POST', data=data)
+        if success_oem:
+            return True, code_oem, "Server reset triggered (Dell OEM)"
 
-        context = create_legacy_ssl_context()
-        response = urlopen(request, context=context, timeout=30)
-        return True, response.getcode(), "Server reset triggered"
-    except HTTPError as e:
-        # Some servers return 308 redirect - follow it
-        if e.code == 308 and 'Location' in e.headers:
-            try:
-                redirect_url = e.headers['Location']
-                if not redirect_url.startswith('http'):
-                    redirect_url = f"https://{oob_address}{redirect_url}"
-                request = Request(redirect_url,
-                                data=json.dumps(data).encode('utf-8'),
-                                headers={'Content-Type': 'application/json'},
-                                method='POST')
-                response = urlopen(request, context=context, timeout=30)
-                return True, response.getcode(), "Server reset triggered (after redirect)"
-            except Exception as redirect_err:
-                return False, e.code, f"Redirect failed: {str(redirect_err)}"
-        return False, e.code, f"HTTP Error: {e.reason}"
-    except URLError as e:
-        return False, -1, f"URL Error: {e.reason}"
-    except Exception as e:
-        return False, -1, f"Error: {str(e)}"
+        # Try with different reset type for older iDRAC
+        data_alt = {"ResetType": "ForceOff"}
+        success_alt, code_alt, msg_alt = make_request(oem_url, username, password, method='POST', data=data_alt)
+        if success_alt:
+            return True, code_alt, "Server reset triggered (Dell OEM ForceOff)"
+
+        # Try older Dell action format
+        old_url = f"https://{oob_address}/redfish/v1/Systems/System.Embedded.1/Actions/Oem/EID_674_Manager.Reset"
+        data_old = {"ResetType": "GracefulRestart"}
+        success_old, code_old, msg_old = make_request(old_url, username, password, method='POST', data=data_old)
+        if success_old:
+            return True, code_old, "Server reset triggered (Dell legacy OEM)"
+
+        return False, code_oem, f"All Dell reset methods failed: std={msg}, oem1={msg_oem}, oem2={msg_alt}, oem3={msg_old}"
+
+    return False, code, msg
 
 def main():
     if len(sys.argv) != 5:
