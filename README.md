@@ -70,7 +70,7 @@ pxe_hosts:
     ip: 192.168.1.101
 ```
 
-### 3. Deploy
+### 3. Deploy PXE Server
 
 ```bash
 ansible-playbook -i inventory.yml deploy-dnsmasq.yml
@@ -86,11 +86,54 @@ The playbook will:
 7. Configure PXE boot menu
 8. Start dnsmasq service
 
+### 4. Generate Talos Configurations
+
+```bash
+ansible-playbook -i inventory.yml generate-talos-configs.yml
+```
+
+This will:
+1. Download/update talosctl to match your Talos version
+2. Generate cluster secrets (only once, idempotent)
+3. Create individual node configs for control plane and workers
+4. Generate talosconfig for cluster management
+5. Create deployment documentation
+
+Output: `./talos-configs/` directory with:
+- Individual node YAML configs
+- `secrets.yaml` (keep secure!)
+- `talosconfig` for cluster access
+- `README.md` with deployment instructions
+
+### 5. PXE Boot All Nodes
+
+Boot all your machines via PXE. They will:
+1. Download kernel and initramfs from dnsmasq
+2. Boot into Talos maintenance mode
+3. Wait for configuration to be applied
+
+### 6. Deploy the Cluster
+
+```bash
+ansible-playbook -i inventory.yml deploy-talos-cluster.yml
+```
+
+This will:
+1. Apply configurations to all nodes
+2. Bootstrap etcd on first control plane node
+3. Wait for Kubernetes API to be available
+4. Extract kubeconfig to `~/.kube/config`
+5. Verify cluster access
+
+**Note:** Nodes will show `NotReady` until CNI (kube-ovn) is installed - this is expected!
+
 ## File Structure
 
 ```
 .
-├── deploy-dnsmasq.yml              # Main Ansible playbook
+├── deploy-dnsmasq.yml              # PXE server deployment playbook
+├── generate-talos-configs.yml      # Generate Talos node configs
+├── deploy-talos-cluster.yml        # Bootstrap and deploy cluster
 ├── inventory.yml.example           # Example inventory file
 ├── inventory.yml                   # Your inventory (gitignored)
 ├── templates/
@@ -98,7 +141,14 @@ The playbook will:
 │   ├── dnsmasq-pxe.conf.j2         # PXE-specific settings
 │   ├── dnsmasq-hosts.conf.j2       # Static DHCP reservations
 │   ├── pxelinux.cfg.default.j2     # PXE boot menu
-│   └── talos-schematic.yaml.j2     # Talos Image Factory schematic
+│   ├── talos-schematic.yaml.j2     # Talos Image Factory schematic
+│   ├── talos-controlplane.yaml.j2  # Control plane node template
+│   └── talos-worker.yaml.j2        # Worker node template
+├── talos-configs/                  # Generated configs (gitignored)
+│   ├── *.yaml                      # Individual node configs
+│   ├── secrets.yaml                # Cluster secrets
+│   ├── talosconfig                 # Talos CLI config
+│   └── DEPLOYMENT.md               # Deployment guide
 └── README.md                       # This file
 ```
 
@@ -140,27 +190,74 @@ pxe_default_label: talos-install         # Auto-boot option
 pxe_boot_params: talos.platform=metal... # Kernel parameters
 ```
 
+### Cluster Configuration
+
+```yaml
+talos_cluster_name: cluster.local
+talos_cluster_endpoint: https://talos-api.example.com:6443
+talos_kubernetes_version: v1.34.1
+
+# Network configuration (from deployer node)
+network_gateway: 192.168.1.1
+network_netmask: 24
+network_nameservers:
+  - 8.8.8.8
+  - 1.1.1.1
+network_mtu: 1500
+network_primary_interface: eno1
+
+# Longhorn configuration
+longhorn_mount_path: /var/lib/longhorn
+```
+
 ### Host Definitions
 
 Each machine needs:
 - **name**: FQDN or hostname
 - **mac**: MAC address (XX:XX:XX:XX:XX:XX format)
 - **ip**: Static IP address
+- **role**: `controlplane` or `worker`
+- **install_disk**: Disk for Talos installation
 
 ```yaml
 pxe_hosts:
   - name: control-plane-1.k8s.local
     mac: 52:54:00:aa:bb:cc
     ip: 192.168.1.10
+    role: controlplane
+    install_disk: /dev/sda
 
   - name: worker-1.k8s.local
     mac: 52:54:00:dd:ee:ff
     ip: 192.168.1.20
+    role: worker
+    install_disk: /dev/sda
+```
+
+## Complete Workflow
+
+### Full Deployment from Scratch
+
+```bash
+# 1. Deploy PXE server
+ansible-playbook -i inventory.yml deploy-dnsmasq.yml
+
+# 2. Generate Talos configurations
+ansible-playbook -i inventory.yml generate-talos-configs.yml
+
+# 3. PXE boot all nodes (manual step)
+
+# 4. Deploy the cluster
+ansible-playbook -i inventory.yml deploy-talos-cluster.yml
+
+# 5. Verify cluster
+kubectl get nodes  # Will show NotReady (expected without CNI)
+kubectl get pods -A
 ```
 
 ## Usage Examples
 
-### Deploy with default settings
+### Deploy PXE server only
 
 ```bash
 ansible-playbook -i inventory.yml deploy-dnsmasq.yml
@@ -182,6 +279,17 @@ sudo cat /var/lib/misc/dnsmasq.leases
 ls -la /var/lib/tftpboot/
 ```
 
+### Regenerate configs for new nodes
+
+Add nodes to inventory, then:
+```bash
+# Generate new node configs (existing configs won't be overwritten)
+ansible-playbook -i inventory.yml generate-talos-configs.yml
+
+# Apply to new nodes
+talosctl apply-config --insecure --nodes <new-node-ip> --file talos-configs/<node>.yaml
+```
+
 ### Update to new Talos version
 
 Edit `inventory.yml`:
@@ -189,20 +297,45 @@ Edit `inventory.yml`:
 talos_version: v1.9.0
 ```
 
-Re-run the playbook to download new images:
+Re-run playbooks:
 ```bash
+# Download new PXE images
 ansible-playbook -i inventory.yml deploy-dnsmasq.yml
+
+# Regenerate configs (delete talos-configs/ first!)
+rm -rf talos-configs/
+ansible-playbook -i inventory.yml generate-talos-configs.yml
 ```
 
 ## How It Works
 
-### Talos Image Factory Integration
+### 1. Talos Image Factory Integration
 
-1. **Schematic Generation**: The playbook creates a YAML schematic based on your configuration
-2. **API Upload**: Schematic is uploaded to `https://factory.talos.dev/schematics`
-3. **ID Retrieval**: Image Factory returns a unique schematic ID
-4. **Image Download**: Custom kernel and initramfs are downloaded using the schematic ID
-5. **PXE Configuration**: Boot menu is configured to use the downloaded images
+1. **Schematic Generation**: Creates YAML schematic with your system extensions
+2. **API Upload**: Uploads to `https://factory.talos.dev/schematics`
+3. **ID Retrieval**: Receives unique schematic ID
+4. **Image Download**: Downloads custom kernel and initramfs with extensions
+5. **PXE Configuration**: Configures boot menu for downloaded images
+
+### 2. Configuration Generation
+
+1. **Secret Generation**: Uses `talosctl gen secrets` (once, reuses existing)
+2. **Secret Parsing**: Extracts all PKI certificates and tokens
+3. **Template Rendering**: Generates individual configs per node with:
+   - Unique hostname and IP from inventory
+   - Proper role (controlplane/worker)
+   - Network config from deployer node
+   - Longhorn mount configuration
+   - CNI set to "none" (for kube-ovn)
+4. **Talosconfig Creation**: Generates CLI config for cluster management
+
+### 3. Cluster Bootstrap
+
+1. **Config Application**: Applies configs to all nodes via `talosctl apply-config --insecure`
+2. **etcd Bootstrap**: Bootstraps etcd on first control plane node
+3. **API Availability**: Waits for Kubernetes API to respond
+4. **Kubeconfig Extraction**: Downloads kubeconfig to `~/.kube/config`
+5. **Verification**: Verifies cluster access (nodes will be NotReady without CNI)
 
 ### DHCP Whitelist
 
