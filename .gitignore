@@ -21,6 +21,11 @@ talos-configs/
 !inventory.yml.example
 !deploy-dnsmasq.yml
 !generate-talos-configs.yml
+!deploy-talos-cluster.yml
+!pxe-boot-servers.yml
+
+# PXE boot logs
+pxe-boot-*.log
 
 # Python
 __pycache__/

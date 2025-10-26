@@ -61,27 +61,48 @@ all:
           ip: 192.168.1.101
           role: controlplane                     # controlplane or worker
           install_disk: /dev/sda                 # Disk for Talos installation
+          # Out-of-Band Management (iLO/iDRAC/Redfish)
+          oob_type: ilo                          # ilo, idrac, or redfish
+          oob_address: 192.168.1.201             # iLO/iDRAC IP address
+          oob_username: Administrator            # OOB username
+          oob_password: changeme                 # OOB password
 
         - name: node02.pxe.local
           mac: 52:54:00:12:34:57
           ip: 192.168.1.102
           role: controlplane
           install_disk: /dev/sda
+          oob_type: ilo
+          oob_address: 192.168.1.202
+          oob_username: Administrator
+          oob_password: changeme
 
         - name: node03.pxe.local
           mac: 52:54:00:12:34:58
           ip: 192.168.1.103
           role: controlplane
           install_disk: /dev/sda
+          oob_type: idrac
+          oob_address: 192.168.1.203
+          oob_username: root
+          oob_password: changeme
 
         - name: node04.pxe.local
           mac: 52:54:00:12:34:59
           ip: 192.168.1.104
           role: worker
           install_disk: /dev/sda
+          oob_type: ilo
+          oob_address: 192.168.1.204
+          oob_username: Administrator
+          oob_password: changeme
 
         - name: node05.pxe.local
           mac: 52:54:00:12:34:5a
           ip: 192.168.1.105
           role: worker
           install_disk: /dev/sda
+          oob_type: idrac
+          oob_address: 192.168.1.205
+          oob_username: root
+          oob_password: changeme

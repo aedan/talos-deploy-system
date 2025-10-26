@@ -107,7 +107,23 @@ Output: `./talos-configs/` directory with:
 
 ### 5. PXE Boot All Nodes
 
-Boot all your machines via PXE. They will:
+**Option A: Automated via OOB Management (iLO/iDRAC)**
+
+```bash
+ansible-playbook -i inventory.yml pxe-boot-servers.yml
+```
+
+This will:
+1. Connect to each server's iLO/iDRAC via Redfish API
+2. Set next boot to PXE/Network
+3. Trigger server restart
+4. Monitor boot progress via dnsmasq logs
+
+**Option B: Manual Boot**
+
+Manually boot each server and select network/PXE boot from BIOS or iLO/iDRAC console.
+
+All nodes will:
 1. Download kernel and initramfs from dnsmasq
 2. Boot into Talos maintenance mode
 3. Wait for configuration to be applied
@@ -133,6 +149,7 @@ This will:
 .
 ├── deploy-dnsmasq.yml              # PXE server deployment playbook
 ├── generate-talos-configs.yml      # Generate Talos node configs
+├── pxe-boot-servers.yml            # Trigger PXE boot via iLO/iDRAC
 ├── deploy-talos-cluster.yml        # Bootstrap and deploy cluster
 ├── inventory.yml.example           # Example inventory file
 ├── inventory.yml                   # Your inventory (gitignored)
@@ -149,6 +166,7 @@ This will:
 │   ├── secrets.yaml                # Cluster secrets
 │   ├── talosconfig                 # Talos CLI config
 │   └── DEPLOYMENT.md               # Deployment guide
+├── pxe-boot-*.log                  # Boot trigger logs (gitignored)
 └── README.md                       # This file
 ```
 
@@ -218,6 +236,10 @@ Each machine needs:
 - **ip**: Static IP address
 - **role**: `controlplane` or `worker`
 - **install_disk**: Disk for Talos installation
+- **oob_type**: `ilo`, `idrac`, or `redfish` (optional, for automated PXE boot)
+- **oob_address**: OOB management IP (optional)
+- **oob_username**: OOB username (optional)
+- **oob_password**: OOB password (optional)
 
 ```yaml
 pxe_hosts:
@@ -226,13 +248,24 @@ pxe_hosts:
     ip: 192.168.1.10
     role: controlplane
     install_disk: /dev/sda
+    # Out-of-Band Management (optional)
+    oob_type: ilo
+    oob_address: 192.168.1.110
+    oob_username: Administrator
+    oob_password: your-ilo-password
 
   - name: worker-1.k8s.local
     mac: 52:54:00:dd:ee:ff
     ip: 192.168.1.20
     role: worker
     install_disk: /dev/sda
+    oob_type: idrac
+    oob_address: 192.168.1.120
+    oob_username: root
+    oob_password: your-idrac-password
 ```
+
+**Note:** OOB credentials are stored in `inventory.yml` which is gitignored for security.
 
 ## Complete Workflow
 
@@ -245,7 +278,8 @@ ansible-playbook -i inventory.yml deploy-dnsmasq.yml
 # 2. Generate Talos configurations
 ansible-playbook -i inventory.yml generate-talos-configs.yml
 
-# 3. PXE boot all nodes (manual step)
+# 3. PXE boot all nodes (automated via OOB)
+ansible-playbook -i inventory.yml pxe-boot-servers.yml
 
 # 4. Deploy the cluster
 ansible-playbook -i inventory.yml deploy-talos-cluster.yml
