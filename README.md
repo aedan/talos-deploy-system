@@ -57,7 +57,7 @@ dhcp_range:
   end: 192.168.1.150
 
 # Talos Image Factory configuration
-talos_version: v1.8.3                   # Talos version
+talos_version: v1.11.3                  # Talos version
 talos_arch: amd64                       # Architecture
 talos_extensions:                       # System extensions
   - siderolabs/iscsi-tools
@@ -168,7 +168,7 @@ lease_time: "12h"                   # DHCP lease duration
 ### Talos Image Factory
 
 ```yaml
-talos_version: v1.8.3               # Talos Linux version
+talos_version: v1.11.3              # Talos Linux version
 talos_arch: amd64                   # Architecture (amd64, arm64)
 talos_extensions:                   # System extensions to include
   - siderolabs/iscsi-tools
@@ -401,10 +401,10 @@ Large initramfs files may timeout on slow connections:
 ```bash
 # Manual download as fallback
 sudo curl -L -o /var/lib/tftpboot/kernel-amd64 \
-  https://factory.talos.dev/image/{schematic-id}/v1.8.3/kernel-amd64
+  https://factory.talos.dev/image/{schematic-id}/v1.11.3/kernel-amd64
 
 sudo curl -L -o /var/lib/tftpboot/initramfs-amd64.xz \
-  https://factory.talos.dev/image/{schematic-id}/v1.8.3/initramfs-amd64.xz
+  https://factory.talos.dev/image/{schematic-id}/v1.11.3/initramfs-amd64.xz
 ```
 
 The playbook retries downloads up to 3 times with 10-minute timeout.

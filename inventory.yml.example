@@ -16,7 +16,7 @@ all:
       lease_time: "12h"
 
       # Talos Image Factory configuration
-      talos_version: v1.8.3                      # Talos Linux version
+      talos_version: v1.11.3                     # Talos Linux version
       talos_arch: amd64                          # Architecture (amd64, arm64)
       talos_extensions:                          # System extensions to include
         - siderolabs/iscsi-tools
