@@ -294,7 +294,7 @@ talosctl apply-config --insecure --nodes <new-node-ip> --file talos-configs/<nod
 
 Edit `inventory.yml`:
 ```yaml
-talos_version: v1.9.0
+talos_version: v1.12.0
 ```
 
 Re-run playbooks:
