@@ -37,24 +37,51 @@ all:
       # DNS settings (optional)
       dns_enabled: true  # Set to false to disable DNS functions
 
+      # Talos Cluster Configuration
+      talos_cluster_name: cluster.local
+      talos_cluster_endpoint: https://talos-api.example.com:6443
+      talos_kubernetes_version: v1.34.1
+
+      # Network configuration (detected from deployer node)
+      network_gateway: 192.168.1.1              # Default gateway
+      network_netmask: 24                        # CIDR netmask
+      network_nameservers:                       # DNS servers
+        - 8.8.8.8
+        - 1.1.1.1
+      network_mtu: 1500                          # MTU for interfaces
+      network_primary_interface: eno1            # Primary network interface name
+
+      # Longhorn configuration
+      longhorn_mount_path: /var/lib/longhorn
+
       # Static host reservations - only these machines will get DHCP leases
       pxe_hosts:
         - name: node01.pxe.local
           mac: 52:54:00:12:34:56
           ip: 192.168.1.101
+          role: controlplane                     # controlplane or worker
+          install_disk: /dev/sda                 # Disk for Talos installation
 
         - name: node02.pxe.local
           mac: 52:54:00:12:34:57
           ip: 192.168.1.102
+          role: controlplane
+          install_disk: /dev/sda
 
         - name: node03.pxe.local
           mac: 52:54:00:12:34:58
           ip: 192.168.1.103
+          role: controlplane
+          install_disk: /dev/sda
 
         - name: node04.pxe.local
           mac: 52:54:00:12:34:59
           ip: 192.168.1.104
+          role: worker
+          install_disk: /dev/sda
 
         - name: node05.pxe.local
           mac: 52:54:00:12:34:5a
           ip: 192.168.1.105
+          role: worker
+          install_disk: /dev/sda

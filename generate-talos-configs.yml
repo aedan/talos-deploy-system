@@ -1,0 +1,284 @@
+---
+- name: Generate Talos Linux configurations
+  hosts: localhost
+  gather_facts: yes
+  vars:
+    talos_config_dir: "{{ playbook_dir }}/talos-configs"
+    talos_secrets_file: "{{ talos_config_dir }}/secrets.yaml"
+
+  tasks:
+    - name: Check if talosctl is installed
+      command: which talosctl
+      register: talosctl_check
+      failed_when: false
+      changed_when: false
+
+    - name: Get current talosctl version if installed
+      command: talosctl version --client --short
+      register: talosctl_current_version
+      failed_when: false
+      changed_when: false
+      when: talosctl_check.rc == 0
+
+    - name: Set talosctl binary path
+      set_fact:
+        talosctl_bin_path: /usr/local/bin/talosctl
+        talosctl_download_url: "https://factory.talos.dev/talosctl/{{ talos_version }}/talosctl-linux-amd64"
+
+    - name: Download talosctl if not installed or version mismatch
+      get_url:
+        url: "{{ talosctl_download_url }}"
+        dest: "{{ talosctl_bin_path }}"
+        mode: '0755'
+        force: yes
+      become: yes
+      when: >
+        talosctl_check.rc != 0 or
+        (talosctl_current_version.stdout is defined and talos_version not in talosctl_current_version.stdout)
+
+    - name: Verify talosctl installation
+      command: talosctl version --client --short
+      register: talosctl_verify
+      changed_when: false
+
+    - name: Display talosctl version
+      debug:
+        msg: "Using talosctl version: {{ talosctl_verify.stdout }}"
+
+    - name: Create Talos config directory
+      file:
+        path: "{{ talos_config_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Check if secrets file already exists
+      stat:
+        path: "{{ talos_secrets_file }}"
+      register: secrets_file_stat
+
+    - name: Generate Talos secrets
+      command: >
+        talosctl gen secrets
+        --output-file {{ talos_secrets_file }}
+      when: not secrets_file_stat.stat.exists
+
+    - name: Load Talos secrets
+      slurp:
+        src: "{{ talos_secrets_file }}"
+      register: secrets_content
+
+    - name: Parse Talos secrets
+      set_fact:
+        talos_secrets: "{{ secrets_content.content | b64decode | from_yaml }}"
+
+    - name: Extract certificate SANs from endpoint
+      set_fact:
+        talos_cert_sans:
+          - "{{ talos_cluster_endpoint | regex_replace('^https?://([^:]+).*', '\\1') }}"
+
+    - name: Debug secrets structure
+      debug:
+        var: talos_secrets
+      when: lookup('env', 'DEBUG') | default('false') == 'true'
+
+    - name: Set Talos cluster variables from secrets
+      set_fact:
+        talos_cluster_id: "{{ talos_secrets.cluster.id }}"
+        talos_cluster_secret: "{{ talos_secrets.cluster.secret }}"
+        talos_bootstrap_token: "{{ talos_secrets.secrets.bootstraptoken }}"
+        talos_secretbox_secret: "{{ talos_secrets.secrets.secretboxencryptionsecret }}"
+        talos_machine_token: "{{ talos_secrets.trustdinfo.token }}"
+        talos_cluster_ca_crt: "{{ talos_secrets.certs.k8s.crt }}"
+        talos_cluster_ca_key: "{{ talos_secrets.certs.k8s.key }}"
+        talos_aggregator_ca_crt: "{{ talos_secrets.certs.k8saggregator.crt }}"
+        talos_aggregator_ca_key: "{{ talos_secrets.certs.k8saggregator.key }}"
+        talos_service_account_key: "{{ talos_secrets.certs.k8sserviceaccount.key }}"
+        talos_etcd_ca_crt: "{{ talos_secrets.certs.etcd.crt }}"
+        talos_etcd_ca_key: "{{ talos_secrets.certs.etcd.key }}"
+        talos_machine_ca_crt: "{{ talos_secrets.certs.os.crt }}"
+        talos_machine_ca_key: "{{ talos_secrets.certs.os.key }}"
+
+    - name: Set inventory variables as facts
+      set_fact:
+        pxe_hosts: "{{ hostvars[inventory_hostname]['pxe_hosts'] }}"
+        talos_cluster_name: "{{ hostvars[inventory_hostname]['talos_cluster_name'] }}"
+        talos_cluster_endpoint: "{{ hostvars[inventory_hostname]['talos_cluster_endpoint'] }}"
+        talos_kubernetes_version: "{{ hostvars[inventory_hostname]['talos_kubernetes_version'] }}"
+        talos_version: "{{ hostvars[inventory_hostname]['talos_version'] }}"
+        network_gateway: "{{ hostvars[inventory_hostname]['network_gateway'] }}"
+        network_netmask: "{{ hostvars[inventory_hostname]['network_netmask'] }}"
+        network_nameservers: "{{ hostvars[inventory_hostname]['network_nameservers'] }}"
+        network_mtu: "{{ hostvars[inventory_hostname]['network_mtu'] }}"
+        network_primary_interface: "{{ hostvars[inventory_hostname]['network_primary_interface'] }}"
+        longhorn_mount_path: "{{ hostvars[inventory_hostname]['longhorn_mount_path'] }}"
+
+    - name: Filter control plane nodes
+      set_fact:
+        controlplane_hosts: "{{ pxe_hosts | default([]) | selectattr('role', 'defined') | selectattr('role', 'equalto', 'controlplane') | list }}"
+        worker_hosts: "{{ pxe_hosts | default([]) | selectattr('role', 'defined') | selectattr('role', 'equalto', 'worker') | list }}"
+
+    - name: Display node distribution
+      debug:
+        msg:
+          - "Control Plane nodes: {{ controlplane_hosts | length }}"
+          - "Worker nodes: {{ worker_hosts | length }}"
+          - "Total nodes: {{ pxe_hosts | length }}"
+
+    - name: Check for existing control plane configurations
+      stat:
+        path: "{{ talos_config_dir }}/{{ host.name.split('.')[0] }}.yaml"
+      register: existing_controlplane_configs
+      loop: "{{ controlplane_hosts }}"
+      loop_control:
+        loop_var: host
+
+    - name: Check for existing worker configurations
+      stat:
+        path: "{{ talos_config_dir }}/{{ host.name.split('.')[0] }}.yaml"
+      register: existing_worker_configs
+      loop: "{{ worker_hosts }}"
+      loop_control:
+        loop_var: host
+
+    - name: Warn about existing configurations
+      debug:
+        msg:
+          - "WARNING: Some machine configurations already exist!"
+          - "These will NOT be overwritten to prevent cluster breakage."
+          - "To regenerate configs, delete the talos-configs directory first."
+      when: >
+        (existing_controlplane_configs.results | selectattr('stat.exists', 'equalto', true) | list | length > 0) or
+        (existing_worker_configs.results | selectattr('stat.exists', 'equalto', true) | list | length > 0)
+
+    - name: Generate control plane configurations
+      template:
+        src: templates/talos-controlplane.yaml.j2
+        dest: "{{ talos_config_dir }}/{{ host.name.split('.')[0] }}.yaml"
+        mode: '0600'
+        force: no
+      loop: "{{ controlplane_hosts }}"
+      loop_control:
+        loop_var: host
+
+    - name: Generate worker configurations
+      template:
+        src: templates/talos-worker.yaml.j2
+        dest: "{{ talos_config_dir }}/{{ host.name.split('.')[0] }}.yaml"
+        mode: '0600'
+        force: no
+      loop: "{{ worker_hosts }}"
+      loop_control:
+        loop_var: host
+
+    - name: Generate talosconfig
+      command: >
+        talosctl gen config
+        {{ talos_cluster_name }}
+        {{ talos_cluster_endpoint }}
+        --with-secrets {{ talos_secrets_file }}
+        --output-types talosconfig
+        --output {{ talos_config_dir }}/talosconfig
+      args:
+        creates: "{{ talos_config_dir }}/talosconfig"
+
+    - name: Create deployment summary
+      copy:
+        content: |
+          # Talos Configuration Summary
+
+          Generated: {{ ansible_date_time.iso8601 }}
+
+          ## Cluster Information
+          - Cluster Name: {{ talos_cluster_name }}
+          - Endpoint: {{ talos_cluster_endpoint }}
+          - Kubernetes Version: {{ talos_kubernetes_version }}
+          - Talos Version: {{ talos_version }}
+
+          ## Node Distribution
+          - Control Plane: {{ controlplane_hosts | length }} node(s)
+          - Workers: {{ worker_hosts | length }} node(s)
+          - Total: {{ pxe_hosts | length }} node(s)
+
+          ## Control Plane Nodes
+          {% for host in controlplane_hosts %}
+          - {{ host.name }} ({{ host.ip }})
+          {% endfor %}
+
+          ## Worker Nodes
+          {% for host in worker_hosts %}
+          - {{ host.name }} ({{ host.ip }})
+          {% endfor %}
+
+          ## Network Configuration
+          - Gateway: {{ network_gateway }}
+          - Netmask: /{{ network_netmask }}
+          - DNS Servers: {{ network_nameservers | join(', ') }}
+          - MTU: {{ network_mtu }}
+          - Primary Interface: {{ network_primary_interface }}
+
+          ## CNI
+          - CNI: none (will deploy separately)
+
+          ## Storage
+          - Longhorn mount path: {{ longhorn_mount_path }}
+
+          ## Generated Files
+          - Secrets: {{ talos_secrets_file }}
+          - Talosconfig: {{ talos_config_dir }}/talosconfig
+          {% for host in pxe_hosts %}
+          - {{ host.name.split('.')[0] }}.yaml
+          {% endfor %}
+
+          ## Next Steps
+
+          1. Apply configurations to nodes:
+             ```bash
+             # For each control plane node
+             talosctl apply-config --insecure --nodes {{ controlplane_hosts[0].ip }} --file {{ talos_config_dir }}/{{ controlplane_hosts[0].name.split('.')[0] }}.yaml
+
+             # For each worker node
+             talosctl apply-config --insecure --nodes {{ worker_hosts[0].ip if worker_hosts else 'N/A' }} --file {{ talos_config_dir }}/{{ worker_hosts[0].name.split('.')[0] if worker_hosts else 'N/A' }}.yaml
+             ```
+
+          2. Bootstrap the cluster (run once on first control plane node):
+             ```bash
+             talosctl bootstrap --nodes {{ controlplane_hosts[0].ip }} --talosconfig {{ talos_config_dir }}/talosconfig
+             ```
+
+          3. Get kubeconfig:
+             ```bash
+             talosctl kubeconfig --nodes {{ controlplane_hosts[0].ip }} --talosconfig {{ talos_config_dir }}/talosconfig
+             ```
+
+          4. Deploy CNI (Cilium recommended):
+             ```bash
+             helm install cilium cilium/cilium --version 1.16.5 \
+               --namespace kube-system \
+               --set ipam.mode=kubernetes \
+               --set kubeProxyReplacement=true
+             ```
+
+          5. Deploy Longhorn for storage:
+             ```bash
+             kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.2/deploy/longhorn.yaml
+             ```
+        dest: "{{ talos_config_dir }}/README.md"
+        mode: '0644'
+
+    - name: Display completion message
+      debug:
+        msg:
+          - "==================================================================="
+          - "Talos configurations generated successfully!"
+          - "==================================================================="
+          - ""
+          - "Configuration directory: {{ talos_config_dir }}"
+          - ""
+          - "Control Plane nodes ({{ controlplane_hosts | length }}):"
+          - "{{ controlplane_hosts | map(attribute='name') | join(', ') }}"
+          - ""
+          - "Worker nodes ({{ worker_hosts | length }}):"
+          - "{{ worker_hosts | map(attribute='name') | join(', ') if worker_hosts else 'None' }}"
+          - ""
+          - "See {{ talos_config_dir }}/README.md for deployment instructions"
+          - "==================================================================="

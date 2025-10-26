@@ -1,0 +1,90 @@
+version: v1alpha1
+debug: false
+persist: true
+
+machine:
+    type: worker
+    token: {{ talos_machine_token }}
+    ca:
+        crt: {{ talos_machine_ca_crt }}
+        key: {{ talos_machine_ca_key }}
+    certSANs: []
+
+    kubelet:
+        extraMounts:
+            - destination: {{ longhorn_mount_path }}
+              type: bind
+              source: {{ longhorn_mount_path }}
+              options:
+                  - bind
+                  - rshared
+                  - rw
+        image: ghcr.io/siderolabs/kubelet:{{ talos_kubernetes_version }}
+        defaultRuntimeSeccompProfileEnabled: true
+        disableManifestsDirectory: true
+
+    network:
+      hostname: {{ host.name.split('.')[0] }}
+      interfaces:
+        - interface: {{ network_primary_interface }}
+          addresses:
+            - {{ host.ip }}/{{ network_netmask }}
+          mtu: {{ network_mtu }}
+          routes:
+            - network: 0.0.0.0/0
+              gateway: {{ network_gateway }}
+      nameservers:
+{% for ns in network_nameservers %}
+        - {{ ns }}
+{% endfor %}
+
+    time:
+      servers:
+        - time.cloudflare.com
+
+    install:
+        disk: {{ host.install_disk }}
+        image: ghcr.io/siderolabs/installer:v{{ talos_version | replace('v', '') }}
+        wipe: false
+
+    registries: {}
+
+    features:
+        rbac: true
+        stableHostname: true
+        apidCheckExtKeyUsage: true
+        diskQuotaSupport: true
+        kubePrism:
+            enabled: true
+            port: 7445
+        hostDNS:
+            enabled: true
+            forwardKubeDNSToHost: true
+
+cluster:
+    id: {{ talos_cluster_id }}
+    secret: {{ talos_cluster_secret }}
+    controlPlane:
+        endpoint: {{ talos_cluster_endpoint }}
+    clusterName: {{ talos_cluster_name }}
+    network:
+        dnsDomain: {{ talos_cluster_name }}
+        podSubnets:
+            - 10.244.0.0/16
+        serviceSubnets:
+            - 10.96.0.0/12
+        cni:
+          name: none
+
+    token: {{ talos_bootstrap_token }}
+    secretboxEncryptionSecret: {{ talos_secretbox_secret }}
+    ca:
+        crt: {{ talos_cluster_ca_crt }}
+        key: {{ talos_cluster_ca_key }}
+
+    discovery:
+        enabled: true
+        registries:
+            kubernetes:
+                disabled: true
+            service: {}
