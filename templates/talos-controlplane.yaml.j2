@@ -70,6 +70,7 @@ cluster:
     controlPlane:
         endpoint: {{ talos_cluster_endpoint }}
     clusterName: {{ talos_cluster_name }}
+    allowSchedulingOnControlPlanes: true
     network:
         dnsDomain: {{ talos_cluster_name }}
         podSubnets:
