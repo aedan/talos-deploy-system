@@ -6,6 +6,10 @@ crds:
   enabled: true
   keep: true
 
+# Enable Gateway API support
+config:
+  enableGatewayAPI: true
+
 # Global settings
 global:
   leaderElection:
