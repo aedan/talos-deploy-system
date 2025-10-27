@@ -19,11 +19,7 @@ talos-configs/
 *.yaml
 !templates/*.yaml.j2
 !inventory.yml.example
-!deploy-dnsmasq.yml
-!generate-talos-configs.yml
-!deploy-talos-cluster.yml
-!pxe-boot-servers.yml
-!reset-to-maintenance.yml
+!playbooks/*.yml
 
 # PXE boot logs
 pxe-boot-*.log
