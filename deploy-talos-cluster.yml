@@ -107,9 +107,9 @@
     - name: Bootstrap the cluster
       command: >
         talosctl bootstrap
-        --nodes {{ first_controlplane.ip }}
-        --endpoints {{ first_controlplane.ip }}
+        -e {{ first_controlplane.ip }}
         --talosconfig {{ talosconfig_file }}
+        --nodes {{ first_controlplane.ip }}
       when: bootstrap_check.rc != 0
       register: bootstrap_result
       async: "{{ bootstrap_timeout }}"
