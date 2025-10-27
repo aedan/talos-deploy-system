@@ -104,7 +104,7 @@
 
     - name: Generate Talos schematic file
       template:
-        src: templates/talos-schematic.yaml.j2
+        src: "{{ playbook_dir }}/../templates/talos-schematic.yaml.j2"
         dest: /tmp/talos-schematic.yaml
         mode: '0644'
       when: talos_version is defined
@@ -166,7 +166,7 @@
 
     - name: Deploy main dnsmasq configuration
       template:
-        src: templates/dnsmasq.conf.j2
+        src: "{{ playbook_dir }}/../templates/dnsmasq.conf.j2"
         dest: /etc/dnsmasq.conf
         mode: '0644'
         backup: yes
@@ -174,14 +174,14 @@
 
     - name: Deploy PXE-specific dnsmasq configuration
       template:
-        src: templates/dnsmasq-pxe.conf.j2
+        src: "{{ playbook_dir }}/../templates/dnsmasq-pxe.conf.j2"
         dest: "{{ dnsmasq_conf_dir }}/pxe.conf"
         mode: '0644'
       notify: restart dnsmasq
 
     - name: Generate static host reservations
       template:
-        src: templates/dnsmasq-hosts.conf.j2
+        src: "{{ playbook_dir }}/../templates/dnsmasq-hosts.conf.j2"
         dest: "{{ dnsmasq_conf_dir }}/hosts.conf"
         mode: '0644'
       notify: restart dnsmasq
@@ -195,7 +195,7 @@
 
     - name: Generate PXE boot menu configuration
       template:
-        src: templates/pxelinux.cfg.default.j2
+        src: "{{ playbook_dir }}/../templates/pxelinux.cfg.default.j2"
         dest: "{{ dnsmasq_tftp_root }}/pxelinux.cfg/default"
         mode: '0644'
 

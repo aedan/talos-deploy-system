@@ -33,7 +33,7 @@
 
     - name: Set boot device to PXE (one-time boot override)
       command: >
-        {{ playbook_dir }}/scripts/redfish_pxe_boot.py
+        {{ playbook_dir }}/../scripts/redfish_pxe_boot.py
         {{ host.oob_address }}
         {{ host.oob_username }}
         {{ host.oob_password }}
@@ -48,7 +48,7 @@
 
     - name: Power cycle servers to trigger PXE boot
       command: >
-        {{ playbook_dir }}/scripts/redfish_pxe_boot.py
+        {{ playbook_dir }}/../scripts/redfish_pxe_boot.py
         {{ host.oob_address }}
         {{ host.oob_username }}
         {{ host.oob_password }}
@@ -104,8 +104,8 @@
           - ""
           - "Next steps:"
           - "  1. Wait for all nodes to PXE boot (2-5 minutes)"
-          - "  2. Generate Talos configs: ansible-playbook -i inventory.yml generate-talos-configs.yml"
-          - "  3. Deploy cluster: ansible-playbook -i inventory.yml deploy-talos-cluster.yml"
+          - "  2. Generate Talos configs: ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml"
+          - "  3. Deploy cluster: ansible-playbook -i inventory.yml playbooks/deploy-talos-cluster.yml"
           - "========================================="
 
     - name: Create boot log
@@ -160,10 +160,10 @@
 
           ```bash
           # 1. Generate Talos configurations
-          ansible-playbook -i inventory.yml generate-talos-configs.yml
+          ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
 
           # 2. Deploy the cluster
-          ansible-playbook -i inventory.yml deploy-talos-cluster.yml
+          ansible-playbook -i inventory.yml playbooks/deploy-talos-cluster.yml
           ```
-        dest: "{{ playbook_dir }}/pxe-boot-{{ ansible_date_time.epoch }}.log"
+        dest: "{{ playbook_dir }}/../pxe-boot-{{ ansible_date_time.epoch }}.log"
         mode: '0644'

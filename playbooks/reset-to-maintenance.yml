@@ -3,7 +3,7 @@
   hosts: localhost
   gather_facts: yes
   vars:
-    talos_config_dir: "{{ playbook_dir }}/talos-configs"
+    talos_config_dir: "{{ playbook_dir }}/../talos-configs"
 
   tasks:
     - name: Set inventory variables as facts
@@ -148,8 +148,8 @@
           - ""
           - "Next steps to rebuild cluster:"
           - "  1. (Optional) Update talos_version in inventory.yml if upgrading"
-          - "  2. Generate new configs: ansible-playbook -i inventory.yml generate-talos-configs.yml"
-          - "  3. Deploy new cluster: ansible-playbook -i inventory.yml deploy-talos-cluster.yml"
+          - "  2. Generate new configs: ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml"
+          - "  3. Deploy new cluster: ansible-playbook -i inventory.yml playbooks/deploy-talos-cluster.yml"
           - ""
           - "NOTE: This will be a FRESH cluster with new secrets."
           - "      Previous kubeconfig and cluster data are lost."
@@ -184,7 +184,7 @@
 
           Fallback option:
           ```bash
-          ansible-playbook -i inventory.yml pxe-boot-servers.yml
+          ansible-playbook -i inventory.yml playbooks/pxe-boot-servers.yml
           ```
           {% endif %}
 
@@ -197,13 +197,13 @@
           1. (Optional) Update talos_version in inventory.yml
           2. Generate new configurations:
              ```bash
-             ansible-playbook -i inventory.yml generate-talos-configs.yml
+             ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
              ```
           3. Deploy new cluster:
              ```bash
-             ansible-playbook -i inventory.yml deploy-talos-cluster.yml
+             ansible-playbook -i inventory.yml playbooks/deploy-talos-cluster.yml
              ```
 
           NOTE: This is a FRESH cluster with new secrets and cluster ID.
-        dest: "{{ playbook_dir }}/maintenance-reset-{{ ansible_date_time.epoch }}.log"
+        dest: "{{ playbook_dir }}/../maintenance-reset-{{ ansible_date_time.epoch }}.log"
         mode: '0644'

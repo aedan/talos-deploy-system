@@ -3,7 +3,7 @@
   hosts: localhost
   gather_facts: yes
   vars:
-    talos_config_dir: "{{ playbook_dir }}/talos-configs"
+    talos_config_dir: "{{ playbook_dir }}/../talos-configs"
     talos_secrets_file: "{{ talos_config_dir }}/secrets.yaml"
 
   tasks:
@@ -152,7 +152,7 @@
 
     - name: Generate control plane configurations
       template:
-        src: templates/talos-controlplane.yaml.j2
+        src: "{{ playbook_dir }}/../templates/talos-controlplane.yaml.j2"
         dest: "{{ talos_config_dir }}/{{ host.name.split('.')[0] }}.yaml"
         mode: '0600'
         force: no
@@ -162,7 +162,7 @@
 
     - name: Generate worker configurations
       template:
-        src: templates/talos-worker.yaml.j2
+        src: "{{ playbook_dir }}/../templates/talos-worker.yaml.j2"
         dest: "{{ talos_config_dir }}/{{ host.name.split('.')[0] }}.yaml"
         mode: '0600'
         force: no

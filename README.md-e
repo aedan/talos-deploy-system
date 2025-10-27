@@ -322,7 +322,7 @@ ls -la /var/lib/tftpboot/
 
 Useful for reprovisioning, upgrading, or troubleshooting:
 ```bash
-ansible-playbook -i inventory.yml playbooks/reset-to-maintenance.yml
+ansible-playbook -i inventory.yml reset-to-maintenance.yml
 ```
 
 This will:
@@ -335,8 +335,8 @@ This will:
 After reset, regenerate configs and redeploy:
 ```bash
 # Optionally update Talos version in inventory.yml
-ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
-ansible-playbook -i inventory.yml playbooks/deploy-talos-cluster.yml
+ansible-playbook -i inventory.yml generate-talos-configs.yml
+ansible-playbook -i inventory.yml deploy-talos-cluster.yml
 ```
 
 ### Regenerate configs for new nodes
@@ -344,7 +344,7 @@ ansible-playbook -i inventory.yml playbooks/deploy-talos-cluster.yml
 Add nodes to inventory, then:
 ```bash
 # Generate new node configs (existing configs won't be overwritten)
-ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
+ansible-playbook -i inventory.yml generate-talos-configs.yml
 
 # Apply to new nodes
 talosctl apply-config --insecure --nodes <new-node-ip> --file talos-configs/<node>.yaml
@@ -360,11 +360,11 @@ talos_version: v1.12.0
 Re-run playbooks:
 ```bash
 # Download new PXE images
-ansible-playbook -i inventory.yml playbooks/deploy-dnsmasq.yml
+ansible-playbook -i inventory.yml deploy-dnsmasq.yml
 
 # Regenerate configs (delete talos-configs/ first!)
 rm -rf talos-configs/
-ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
+ansible-playbook -i inventory.yml generate-talos-configs.yml
 ```
 
 ## How It Works
@@ -451,7 +451,7 @@ The playbook automatically installs syslinux files. If you see this error:
 ls -la /var/lib/tftpboot/*.c32
 
 # Re-run playbook to copy files
-ansible-playbook -i inventory.yml playbooks/deploy-dnsmasq.yml
+ansible-playbook -i inventory.yml deploy-dnsmasq.yml
 ```
 
 ### Image Factory download timeouts

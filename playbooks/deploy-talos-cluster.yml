@@ -3,7 +3,7 @@
   hosts: localhost
   gather_facts: yes
   vars:
-    talos_config_dir: "{{ playbook_dir }}/talos-configs"
+    talos_config_dir: "{{ playbook_dir }}/../talos-configs"
     talos_secrets_file: "{{ talos_config_dir }}/secrets.yaml"
     talosconfig_file: "{{ talos_config_dir }}/talosconfig"
     kubeconfig_dest: "{{ ansible_env.HOME }}/.kube/config"
