@@ -43,7 +43,7 @@ machine:
 
     install:
         disk: {{ host.install_disk }}
-        image: ghcr.io/siderolabs/installer:v{{ talos_version | replace('v', '') }}
+        image: factory.talos.dev/installer/{{ talos_schematic_id }}:{{ talos_version }}
         wipe: false
 
     registries: {}
