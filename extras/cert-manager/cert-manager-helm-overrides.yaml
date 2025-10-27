@@ -1,0 +1,20 @@
+# Cert-Manager Helm Chart Overrides
+# Base configuration for cert-manager installation
+
+# Install CRDs with the chart
+crds:
+  enabled: true
+  keep: true
+
+# Global settings
+global:
+  leaderElection:
+    namespace: cert-manager
+
+# Resource requests and limits
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 128Mi

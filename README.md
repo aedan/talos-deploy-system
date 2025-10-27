@@ -143,6 +143,17 @@ This will:
 
 **Note:** Nodes will show `NotReady` until CNI (kube-ovn) is installed - this is expected!
 
+### 7. Install Additional Services (Optional)
+
+After the cluster is deployed, you can install additional services like cert-manager:
+
+```bash
+cd extras/cert-manager
+./install-cert-manager.sh
+```
+
+See the [extras/README.md](extras/README.md) for more information on available services and customization options.
+
 ## File Structure
 
 ```
@@ -165,6 +176,16 @@ This will:
 │   ├── talos-schematic.yaml.j2     # Talos Image Factory schematic
 │   ├── talos-controlplane.yaml.j2  # Control plane node template
 │   └── talos-worker.yaml.j2        # Worker node template
+├── extras/                         # Additional service installation scripts
+│   ├── cert-manager/               # Cert-manager installation
+│   │   ├── install-cert-manager.sh
+│   │   └── cert-manager-helm-overrides.yaml
+│   └── README.md                   # Extras documentation
+├── etc/                            # Configuration files
+│   ├── helm-chart-versions.yaml    # Centralized Helm chart versions
+│   └── helm-configs/               # Helm override configurations
+│       ├── global_overrides/       # Global overrides for all charts
+│       └── cert-manager/           # Cert-manager specific overrides
 ├── talos-configs/                  # Generated configs (gitignored)
 │   ├── *.yaml                      # Individual node configs
 │   ├── secrets.yaml                # Cluster secrets
