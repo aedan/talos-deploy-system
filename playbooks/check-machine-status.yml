@@ -105,12 +105,14 @@
             }}
           insecure_version: >-
             {{
-              insecure_ver.stdout.split('\n')[0] | trim if (insecure_ver.stdout is defined and insecure_ver.stdout != '')
+              (insecure_ver.stdout | regex_search('Server:.*', multiline=True) | default('') | regex_replace('^Server:\s*', '') | trim)
+              if (insecure_ver.stdout is defined and 'Server:' in insecure_ver.stdout)
               else 'UNKNOWN'
             }}
           authenticated_version: >-
             {{
-              auth_ver.stdout.split('\n')[0] | trim if (auth_ver.stdout is defined and auth_ver.stdout != '')
+              (auth_ver.stdout | regex_search('Server:.*', multiline=True) | default('') | regex_replace('^Server:\s*', '') | trim)
+              if (auth_ver.stdout is defined and 'Server:' in auth_ver.stdout)
               else ('UNKNOWN' if talosconfig_stat.stat.exists else 'N/A')
             }}
 
@@ -146,6 +148,8 @@
           │   Version:                 {{ item.authenticated_version }}
           └─────────────────────────────────────────────────────────────────────────────┘
       loop: "{{ status_results }}"
+      loop_control:
+        label: "{{ item.hostname }}"
 
     - name: Generate summary statistics
       ansible.builtin.set_fact:
