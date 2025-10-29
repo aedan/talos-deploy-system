@@ -116,41 +116,6 @@
               else ('UNKNOWN' if talosconfig_stat.stat.exists else 'N/A')
             }}
 
-    - name: Display Machine Status Report Header
-      ansible.builtin.debug:
-        msg: |
-
-          ═══════════════════════════════════════════════════════════════════════════════
-          TALOS MACHINE STATUS REPORT
-          ═══════════════════════════════════════════════════════════════════════════════
-          Generated: {{ now(utc=true).isoformat() }}
-          Total Hosts: {{ pxe_hosts | length }}
-          ═══════════════════════════════════════════════════════════════════════════════
-
-    - name: Display status for each machine
-      ansible.builtin.debug:
-        msg: |
-
-          ┌─────────────────────────────────────────────────────────────────────────────┐
-          │ Host: {{ item.hostname }}
-          │ IP Address: {{ item.ip }}
-          │ Role: {{ item.role }}
-          ├─────────────────────────────────────────────────────────────────────────────┤
-          │ Network Status:
-          │   Ping:                    {{ item.ping }}
-          │
-          │ Insecure Connection (no auth):
-          │   Health:                  {{ item.insecure_health }}
-          │   Version:                 {{ item.insecure_version }}
-          │
-          │ Authenticated Connection (with talosconfig):
-          │   Health:                  {{ item.authenticated_health }}
-          │   Version:                 {{ item.authenticated_version }}
-          └─────────────────────────────────────────────────────────────────────────────┘
-      loop: "{{ status_results }}"
-      loop_control:
-        label: "{{ item.hostname }}"
-
     - name: Generate summary statistics
       ansible.builtin.set_fact:
         ping_up: "{{ status_results | selectattr('ping', 'equalto', 'UP') | list | length }}"
@@ -158,13 +123,31 @@
         insecure_healthy: "{{ status_results | selectattr('insecure_health', 'equalto', 'HEALTHY') | list | length }}"
         auth_healthy: "{{ status_results | selectattr('authenticated_health', 'equalto', 'HEALTHY') | list | length }}"
 
-    - name: Display Summary
-      ansible.builtin.debug:
-        msg: |
+    - name: Create status report file
+      ansible.builtin.copy:
+        dest: "/tmp/talos-status-report.txt"
+        content: |
+          ================================================================================
+          TALOS MACHINE STATUS REPORT
+          ================================================================================
+          Generated: {{ now(utc=true).isoformat() }}
+          Total Hosts: {{ pxe_hosts | length }}
+          ================================================================================
 
-          ═══════════════════════════════════════════════════════════════════════════════
+          {% for host in status_results %}
+          Host: {{ host.hostname }}
+            IP:                {{ host.ip }}
+            Role:              {{ host.role }}
+            Ping:              {{ host.ping }}
+            Insecure Health:   {{ host.insecure_health }}
+            Insecure Version:  {{ host.insecure_version if host.insecure_version else 'N/A' }}
+            Auth Health:       {{ host.authenticated_health }}
+            Auth Version:      {{ host.authenticated_version if host.authenticated_version else 'N/A' }}
+
+          {% endfor %}
+          ================================================================================
           SUMMARY
-          ═══════════════════════════════════════════════════════════════════════════════
+          ================================================================================
           Network Connectivity:
             Reachable (ping):        {{ ping_up }}/{{ pxe_hosts | length }}
             Unreachable:             {{ ping_down }}/{{ pxe_hosts | length }}
@@ -174,4 +157,13 @@
 
           Talos Health (Authenticated):
             Healthy:                 {{ auth_healthy }}/{{ pxe_hosts | length }}
-          ═══════════════════════════════════════════════════════════════════════════════
+          ================================================================================
+
+    - name: Display status report
+      ansible.builtin.command: cat /tmp/talos-status-report.txt
+      register: report_output
+      changed_when: false
+
+    - name: Show report
+      ansible.builtin.debug:
+        msg: "{{ report_output.stdout_lines }}"
