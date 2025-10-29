@@ -115,41 +115,28 @@
       failed_when: false
       timeout: 300
 
-    - name: Wait after first bootstrap attempt
+    - name: Wait after first bootstrap
       pause:
-        seconds: 30
-        prompt: "Waiting for bootstrap to take effect..."
+        seconds: 90
+        prompt: "Waiting for initial bootstrap to start etcd..."
       when: bootstrap_result.changed | default(false)
 
-    - name: Check if bootstrap succeeded
-      command: >
-        talosctl get members
-        --nodes {{ first_controlplane.ip }}
-        --endpoints {{ first_controlplane.ip }}
-        --talosconfig {{ talosconfig_file }}
-      register: bootstrap_verify
-      failed_when: false
-      changed_when: false
-      when: bootstrap_result.changed | default(false)
-
-    - name: Bootstrap the cluster (retry if first attempt failed)
+    - name: Bootstrap the cluster (second time - helps etcd stabilize)
       command: >
         talosctl bootstrap
         -e {{ first_controlplane.ip }}
         --talosconfig {{ talosconfig_file }}
         --nodes {{ first_controlplane.ip }}
-      when:
-        - bootstrap_result.changed | default(false)
-        - bootstrap_verify.rc != 0
+      when: bootstrap_result.changed | default(false)
       register: bootstrap_retry
       failed_when: false
       timeout: 300
 
     - name: Wait for bootstrap to complete
       pause:
-        seconds: 120
-        prompt: "Waiting for cluster bootstrap to complete..."
-      when: bootstrap_result.changed | default(false) or bootstrap_retry.changed | default(false)
+        seconds: 90
+        prompt: "Waiting for bootstrap to complete and etcd to stabilize..."
+      when: bootstrap_result.changed | default(false)
 
     - name: Wait for etcd to be healthy (first attempt - 5 minutes)
       command: >
