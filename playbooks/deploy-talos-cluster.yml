@@ -93,10 +93,10 @@
         seconds: 120
         prompt: "Waiting for all nodes to apply configuration and stabilize..."
 
-    # Check if cluster is already bootstrapped
-    - name: Check if cluster is already bootstrapped
+    # Check if etcd is already healthy (better check than member existence)
+    - name: Check if etcd is already bootstrapped and healthy
       command: >
-        talosctl get members
+        talosctl etcd members
         --nodes {{ first_controlplane.ip }}
         --endpoints {{ first_controlplane.ip }}
         --talosconfig {{ talosconfig_file }}
@@ -115,74 +115,57 @@
       failed_when: false
       timeout: 300
 
-    - name: Wait after first bootstrap
+    - name: Wait for etcd to initialize
       pause:
-        seconds: 90
-        prompt: "Waiting for initial bootstrap to start etcd..."
+        seconds: 120
+        prompt: "Waiting for etcd to begin initializing..."
       when: bootstrap_result.changed | default(false)
 
-    - name: Bootstrap the cluster (second time - helps etcd stabilize)
-      command: >
-        talosctl bootstrap
-        -e {{ first_controlplane.ip }}
-        --talosconfig {{ talosconfig_file }}
-        --nodes {{ first_controlplane.ip }}
-      when: bootstrap_result.changed | default(false)
-      register: bootstrap_retry
-      failed_when: false
-      timeout: 300
-
-    - name: Wait for bootstrap to complete
-      pause:
-        seconds: 90
-        prompt: "Waiting for bootstrap to complete and etcd to stabilize..."
-      when: bootstrap_result.changed | default(false)
-
-    - name: Wait for etcd to be healthy (first attempt - 5 minutes)
+    - name: Check etcd health (initial check - 3 minutes)
       command: >
         talosctl etcd members
         --nodes {{ first_controlplane.ip }}
         --endpoints {{ first_controlplane.ip }}
         --talosconfig {{ talosconfig_file }}
-      register: etcd_check
-      retries: 10
+      register: etcd_initial_check
+      retries: 6
       delay: 30
-      until: etcd_check.rc == 0
+      until: etcd_initial_check.rc == 0
       failed_when: false
 
-    - name: Bootstrap retry if etcd is not healthy
+    - name: Run bootstrap again if etcd not responding (matches manual intervention pattern)
       block:
-        - name: Display etcd failure message
+        - name: Display bootstrap retry message
           debug:
-            msg: "etcd not healthy after 5 minutes, retrying bootstrap..."
+            msg: "etcd not responding after 3 minutes, running bootstrap again..."
 
-        - name: Force bootstrap retry
+        - name: Bootstrap second time (while etcd is initializing)
           command: >
             talosctl bootstrap
             -e {{ first_controlplane.ip }}
             --talosconfig {{ talosconfig_file }}
             --nodes {{ first_controlplane.ip }}
-          register: bootstrap_force_retry
+          register: bootstrap_retry
           failed_when: false
           timeout: 300
 
-        - name: Wait after forced bootstrap
+        - name: Wait for etcd to stabilize after second bootstrap
           pause:
             seconds: 60
-            prompt: "Waiting for forced bootstrap to take effect..."
+            prompt: "Waiting for etcd to stabilize after second bootstrap..."
 
-        - name: Wait for etcd to be healthy (second attempt - 5 minutes)
+        - name: Check etcd health again (5 minutes)
           command: >
             talosctl etcd members
             --nodes {{ first_controlplane.ip }}
             --endpoints {{ first_controlplane.ip }}
             --talosconfig {{ talosconfig_file }}
-          register: etcd_check_retry
+          register: etcd_retry_check
           retries: 10
           delay: 30
-          until: etcd_check_retry.rc == 0
-          failed_when: etcd_check_retry.rc != 0
-      when: etcd_check.rc != 0
+          until: etcd_retry_check.rc == 0
+          failed_when: etcd_retry_check.rc != 0
+      when: etcd_initial_check.rc != 0
 
     - name: Wait for Kubernetes API to respond
       command: >
