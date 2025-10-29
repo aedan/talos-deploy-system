@@ -151,16 +151,51 @@
         prompt: "Waiting for cluster bootstrap to complete..."
       when: bootstrap_result.changed | default(false) or bootstrap_retry.changed | default(false)
 
-    - name: Wait for etcd to be healthy
+    - name: Wait for etcd to be healthy (first attempt - 5 minutes)
       command: >
         talosctl etcd members
         --nodes {{ first_controlplane.ip }}
         --endpoints {{ first_controlplane.ip }}
         --talosconfig {{ talosconfig_file }}
       register: etcd_check
-      retries: 20
+      retries: 10
       delay: 30
       until: etcd_check.rc == 0
+      failed_when: false
+
+    - name: Bootstrap retry if etcd is not healthy
+      block:
+        - name: Display etcd failure message
+          debug:
+            msg: "etcd not healthy after 5 minutes, retrying bootstrap..."
+
+        - name: Force bootstrap retry
+          command: >
+            talosctl bootstrap
+            -e {{ first_controlplane.ip }}
+            --talosconfig {{ talosconfig_file }}
+            --nodes {{ first_controlplane.ip }}
+          register: bootstrap_force_retry
+          failed_when: false
+          timeout: 300
+
+        - name: Wait after forced bootstrap
+          pause:
+            seconds: 60
+            prompt: "Waiting for forced bootstrap to take effect..."
+
+        - name: Wait for etcd to be healthy (second attempt - 5 minutes)
+          command: >
+            talosctl etcd members
+            --nodes {{ first_controlplane.ip }}
+            --endpoints {{ first_controlplane.ip }}
+            --talosconfig {{ talosconfig_file }}
+          register: etcd_check_retry
+          retries: 10
+          delay: 30
+          until: etcd_check_retry.rc == 0
+          failed_when: etcd_check_retry.rc != 0
+      when: etcd_check.rc != 0
 
     - name: Wait for Kubernetes API to respond
       command: >
