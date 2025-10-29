@@ -216,7 +216,7 @@
             }}
           extensions: >-
             {{
-              (extensions_output.split('\n') | map('regex_search', '^runtime\\s+ExtensionStatus\\s+\\S+\\s+\\S+\\s+(\\S+)', '\\1') | select | map('first') | list)
+              (extensions_output.split('\n') | map('regex_search', '^runtime\\s+ExtensionStatus\\s+\\S+\\s+\\S+\\s+(\\S+)', '\\1') | reject('none') | map('first') | list)
               if (extensions_output is defined and extensions_output != '' and 'ExtensionStatus' in extensions_output)
               else []
             }}
