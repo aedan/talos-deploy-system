@@ -33,9 +33,9 @@
         msg: "No talosconfig found - will only attempt insecure checks"
       when: not talosconfig_stat.stat.exists
 
-    - name: Check status for each host (insecure)
+    - name: Check status for each host (without auth)
       ansible.builtin.shell: |
-        timeout 10 talosctl health --insecure --nodes {{ item.ip }} 2>&1 || true
+        timeout 10 talosctl health --nodes {{ item.ip }} 2>&1 || true
       register: insecure_status
       loop: "{{ pxe_hosts }}"
       changed_when: false
@@ -74,17 +74,17 @@
       changed_when: false
       failed_when: false
 
-    - name: Check machine config status (insecure)
+    - name: Check machine config status (without auth)
       ansible.builtin.shell: |
-        timeout 5 talosctl get machineconfig --insecure --nodes {{ item.ip }} 2>&1 || true
+        timeout 5 talosctl get machineconfig --nodes {{ item.ip }} 2>&1 || true
       register: machineconfig_status
       loop: "{{ pxe_hosts }}"
       changed_when: false
       failed_when: false
 
-    - name: Check services status (insecure)
+    - name: Check services status (without auth)
       ansible.builtin.shell: |
-        timeout 5 talosctl services --insecure --nodes {{ item.ip }} 2>&1 || true
+        timeout 5 talosctl services --nodes {{ item.ip }} 2>&1 || true
       register: services_status
       loop: "{{ pxe_hosts }}"
       changed_when: false
