@@ -44,7 +44,7 @@ machine:
 
     install:
         disk: {{ host.install_disk }}
-        image: ghcr.io/siderolabs/installer:v{{ talos_version | replace('v', '') }}
+        image: factory.talos.dev/installer/{{ talos_schematic_id }}:{{ talos_version }}
         wipe: false
 
     registries: {}
@@ -70,6 +70,7 @@ cluster:
     controlPlane:
         endpoint: {{ talos_cluster_endpoint }}
     clusterName: {{ talos_cluster_name }}
+    allowSchedulingOnControlPlanes: true
     network:
         dnsDomain: {{ talos_cluster_name }}
         podSubnets:
