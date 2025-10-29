@@ -111,12 +111,16 @@
           ping: "{{ 'UP' if ping_result.rc == 0 else 'DOWN' }}"
           stage: >-
             {{
-              'MAINTENANCE' if (
+              'RUNNING_CONFIGURED' if (
+                (auth_health.stdout is defined and 'is healthy' in auth_health.stdout) or
+                (auth_ver.stdout is defined and 'Talos' in auth_ver.stdout) or
+                (insecure_ver.stdout is defined and ('certificate required' in insecure_ver.stdout.lower() or 'tls:' in insecure_ver.stdout.lower()))
+              )
+              else ('MAINTENANCE' if (
                 (insecure_health.stdout is defined and 'maintenance mode' in insecure_health.stdout.lower()) or
                 (insecure_ver.stdout is defined and 'maintenance mode' in insecure_ver.stdout.lower()) or
                 (mconfig.stdout is defined and 'maintenance mode' in mconfig.stdout.lower())
               )
-              else ('RUNNING_CONFIGURED' if (mconfig.stdout is defined and 'v1alpha1.MachineConfig' in mconfig.stdout)
               else ('RUNNING_UNCONFIGURED' if (insecure_ver.stdout is defined and 'Talos' in insecure_ver.stdout and 'maintenance mode' not in insecure_ver.stdout.lower())
               else ('BOOTING' if (services.stdout is defined and services.stdout != '' and 'apid' not in services.stdout)
               else ('UNREACHABLE' if ping_result.rc == 0 else 'DOWN'))))
