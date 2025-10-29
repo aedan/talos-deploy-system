@@ -91,11 +91,19 @@
           ip: "{{ item.ip }}"
           role: "{{ item.role }}"
           ping: "{{ 'UP' if ping_result.rc == 0 else 'DOWN' }}"
+          mode: >-
+            {{
+              'MAINTENANCE' if (insecure_health.stdout is defined and 'maintenance mode' in insecure_health.stdout.lower())
+              else ('CONFIGURED' if (auth_health.stdout is defined and 'is healthy' in auth_health.stdout)
+              else ('UNCONFIGURED' if (insecure_health.stdout is defined and 'is healthy' in insecure_health.stdout)
+              else 'UNREACHABLE'))
+            }}
           insecure_health: >-
             {{
               'HEALTHY' if (insecure_health.stdout is defined and 'is healthy' in insecure_health.stdout)
+              else ('MAINTENANCE' if (insecure_health.stdout is defined and 'maintenance mode' in insecure_health.stdout.lower())
               else ('UNHEALTHY' if (insecure_health.stdout is defined and insecure_health.stdout != '')
-              else 'NO_RESPONSE')
+              else 'NO_RESPONSE'))
             }}
           authenticated_health: >-
             {{
@@ -103,17 +111,29 @@
               else ('UNHEALTHY' if (auth_health.stdout is defined and auth_health.stdout != '')
               else ('NO_RESPONSE' if talosconfig_stat.stat.exists else 'N/A'))
             }}
+          insecure_error: >-
+            {{
+              insecure_health.stderr | trim if (insecure_health.stderr is defined and insecure_health.stderr)
+              else (insecure_health.stdout | trim if (insecure_health.stdout is defined and 'error' in insecure_health.stdout.lower())
+              else '')
+            }}
+          auth_error: >-
+            {{
+              auth_health.stderr | trim if (auth_health.stderr is defined and auth_health.stderr)
+              else (auth_health.stdout | trim if (auth_health.stdout is defined and 'error' in auth_health.stdout.lower())
+              else ('N/A' if not talosconfig_stat.stat.exists else ''))
+            }}
           insecure_version: >-
             {{
               (insecure_ver.stdout | regex_search('Server:.*', multiline=True) | default('') | regex_replace('^Server:\s*', '') | trim)
               if (insecure_ver.stdout is defined and 'Server:' in insecure_ver.stdout)
-              else 'UNKNOWN'
+              else ''
             }}
           authenticated_version: >-
             {{
               (auth_ver.stdout | regex_search('Server:.*', multiline=True) | default('') | regex_replace('^Server:\s*', '') | trim)
               if (auth_ver.stdout is defined and 'Server:' in auth_ver.stdout)
-              else ('UNKNOWN' if talosconfig_stat.stat.exists else 'N/A')
+              else ('' if talosconfig_stat.stat.exists else 'N/A')
             }}
 
     - name: Generate summary statistics
@@ -139,10 +159,21 @@
             IP:                {{ host.ip }}
             Role:              {{ host.role }}
             Ping:              {{ host.ping }}
+            Mode:              {{ host.mode }}
             Insecure Health:   {{ host.insecure_health }}
-            Insecure Version:  {{ host.insecure_version if host.insecure_version else 'N/A' }}
+            {% if host.insecure_version %}
+            Insecure Version:  {{ host.insecure_version }}
+            {% endif %}
+            {% if host.insecure_error %}
+            Insecure Error:    {{ host.insecure_error }}
+            {% endif %}
             Auth Health:       {{ host.authenticated_health }}
-            Auth Version:      {{ host.authenticated_version if host.authenticated_version else 'N/A' }}
+            {% if host.authenticated_version and host.authenticated_version != 'N/A' %}
+            Auth Version:      {{ host.authenticated_version }}
+            {% endif %}
+            {% if host.auth_error and host.auth_error != 'N/A' %}
+            Auth Error:        {{ host.auth_error }}
+            {% endif %}
 
           {% endfor %}
           ================================================================================
@@ -157,6 +188,12 @@
 
           Talos Health (Authenticated):
             Healthy:                 {{ auth_healthy }}/{{ pxe_hosts | length }}
+
+          Node Modes:
+            Maintenance:             {{ status_results | selectattr('mode', 'equalto', 'MAINTENANCE') | list | length }}
+            Configured:              {{ status_results | selectattr('mode', 'equalto', 'CONFIGURED') | list | length }}
+            Unconfigured:            {{ status_results | selectattr('mode', 'equalto', 'UNCONFIGURED') | list | length }}
+            Unreachable:             {{ status_results | selectattr('mode', 'equalto', 'UNREACHABLE') | list | length }}
           ================================================================================
 
     - name: Display status report
