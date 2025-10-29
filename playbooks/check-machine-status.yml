@@ -33,13 +33,6 @@
         msg: "No talosconfig found - will only attempt insecure checks"
       when: not talosconfig_stat.stat.exists
 
-    - name: Check basic connectivity (ping)
-      ansible.builtin.command: ping -c 2 -W 2 {{ item.ip }}
-      register: ping_status
-      loop: "{{ pxe_hosts }}"
-      changed_when: false
-      failed_when: false
-
     - name: Detect mode for each host (check insecure version first)
       ansible.builtin.shell: |
         timeout 10 talosctl version --insecure --nodes {{ item.ip }} --short 2>&1 || true
@@ -96,6 +89,18 @@
         - item.stdout is defined
         - "'certificate required' in item.stdout.lower() or 'tls:' in item.stdout.lower()"
 
+    - name: Check extensions for secured hosts (authenticated)
+      ansible.builtin.shell: |
+        timeout 5 talosctl get extensions --nodes {{ item.item.ip }} --endpoints {{ item.item.ip }} --talosconfig {{ talosconfig_path }} 2>&1 || true
+      register: authenticated_extensions
+      loop: "{{ mode_detection.results }}"
+      changed_when: false
+      failed_when: false
+      when:
+        - talosconfig_stat.stat.exists
+        - item.stdout is defined
+        - "'certificate required' in item.stdout.lower() or 'tls:' in item.stdout.lower()"
+
     - name: Check health for insecure hosts (maintenance mode)
       ansible.builtin.shell: |
         timeout 10 talosctl health --nodes {{ item.item.ip }} 2>&1 || true
@@ -139,7 +144,6 @@
       loop_control:
         index_var: idx
       vars:
-        ping_result: "{{ ping_status.results[idx] }}"
         mode_check: "{{ mode_detection.results[idx] }}"
         is_secured: "{{ mode_check.stdout is defined and ('certificate required' in mode_check.stdout.lower() or 'tls:' in mode_check.stdout.lower()) }}"
         # Find matching results from sparse arrays
@@ -147,6 +151,7 @@
         auth_health_result: "{{ authenticated_health.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
         auth_services_result: "{{ authenticated_services.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
         auth_mconfig_result: "{{ authenticated_machineconfig.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
+        auth_extensions_result: "{{ authenticated_extensions.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
         insec_health_result: "{{ insecure_health.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
         insec_services_result: "{{ insecure_services.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
         insec_mconfig_result: "{{ insecure_machineconfig.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
@@ -155,12 +160,12 @@
         health_output: "{{ auth_health_result.stdout if is_secured else insec_health_result.stdout }}"
         services_output: "{{ auth_services_result.stdout if is_secured else insec_services_result.stdout }}"
         mconfig_output: "{{ auth_mconfig_result.stdout if is_secured else insec_mconfig_result.stdout }}"
+        extensions_output: "{{ auth_extensions_result.stdout if is_secured else '' }}"
         result:
           hostname: "{{ item.name }}"
           ip: "{{ item.ip }}"
           role: "{{ item.role }}"
           mode: "{{ 'SECURED' if is_secured else 'INSECURE' }}"
-          ping: "{{ 'UP' if ping_result.rc == 0 else 'DOWN' }}"
           stage: >-
             {{
               'RUNNING_CONFIGURED' if (
@@ -173,7 +178,7 @@
                 (mconfig_output is defined and 'maintenance mode' in mconfig_output.lower())
               )
               else ('RUNNING_UNCONFIGURED' if (version_output is defined and 'Talos' in version_output and 'maintenance mode' not in version_output.lower())
-              else ('UNREACHABLE' if ping_result.rc == 0 else 'DOWN')))
+              else 'UNREACHABLE'))
             }}
           has_config: >-
             {{
@@ -209,11 +214,15 @@
               if (services_output is defined and services_output != '')
               else 0
             }}
+          extensions: >-
+            {{
+              (extensions_output.split('\n') | map('regex_search', '^runtime\\s+ExtensionStatus\\s+\\S+\\s+\\S+\\s+(\\S+)', '\\1') | select | map('first') | list)
+              if (extensions_output is defined and extensions_output != '' and 'ExtensionStatus' in extensions_output)
+              else []
+            }}
 
     - name: Generate summary statistics
       ansible.builtin.set_fact:
-        ping_up: "{{ status_results | selectattr('ping', 'equalto', 'UP') | list | length }}"
-        ping_down: "{{ status_results | selectattr('ping', 'equalto', 'DOWN') | list | length }}"
         hosts_healthy: "{{ status_results | selectattr('health_status', 'equalto', 'HEALTHY') | list | length }}"
         secured_hosts: "{{ status_results | selectattr('mode', 'equalto', 'SECURED') | list | length }}"
         insecure_hosts: "{{ status_results | selectattr('mode', 'equalto', 'INSECURE') | list | length }}"
@@ -243,6 +252,9 @@
 
           Services:
           {{ (authenticated_services.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first).stdout | default('N/A') }}
+
+          Extensions:
+          {{ (authenticated_extensions.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first).stdout | default('N/A') }}
           {% else %}
           INSECURE CHECKS:
 
@@ -265,10 +277,11 @@
         msg:
           - "================================================================================"
           - "Host: {{ item.hostname }}"
-          - "  IP: {{ item.ip }} | Role: {{ item.role }} | Network: {{ item.ping }}"
+          - "  IP: {{ item.ip }} | Role: {{ item.role }}"
           - "  Mode: {{ item.mode }} | Stage: {{ item.stage }} | Has Config: {{ item.has_config }}"
           - "  Version: {{ item.version if item.version else 'N/A' }}"
           - "  Health: {{ item.health_status }}"
+          - "{% if item.extensions | length > 0 %}  Extensions: {{ item.extensions | join(', ') }}{% endif %}"
           - "{% if item.error_summary %}  Error: {{ item.error_summary }}{% endif %}"
           - "  Raw output saved to: /tmp/talos-raw-output-{{ item.hostname | regex_replace('\\..*', '') }}.txt"
           - "================================================================================"
@@ -283,8 +296,6 @@
           - "================================================================================"
           - "SUMMARY - {{ pxe_hosts | length }} Total Hosts"
           - "================================================================================"
-          - "Network: {{ ping_up }} UP / {{ ping_down }} DOWN"
-          - ""
           - "Mode:"
           - "  Secured (TLS):  {{ secured_hosts }}"
           - "  Insecure:       {{ insecure_hosts }}"
@@ -297,7 +308,6 @@
           - "  Running (Configured): {{ status_results | selectattr('stage', 'equalto', 'RUNNING_CONFIGURED') | list | length }}"
           - "  Running (No Config):  {{ status_results | selectattr('stage', 'equalto', 'RUNNING_UNCONFIGURED') | list | length }}"
           - "  Unreachable:          {{ status_results | selectattr('stage', 'equalto', 'UNREACHABLE') | list | length }}"
-          - "  Down:                 {{ status_results | selectattr('stage', 'equalto', 'DOWN') | list | length }}"
           - ""
           - "Machine Config:"
           - "  Has Config: {{ status_results | selectattr('has_config', 'equalto', 'YES') | list | length }}"
