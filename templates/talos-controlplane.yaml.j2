@@ -62,8 +62,7 @@ machine:
             forwardKubeDNSToHost: true
 
     nodeLabels:
-        node.kubernetes.io/exclude-from-external-load-balancers:
-            $patch: delete
+        node.kubernetes.io/exclude-from-external-load-balancers: ""
 
 cluster:
     id: {{ talos_cluster_id }}
