@@ -165,62 +165,67 @@
         insecure_healthy: "{{ status_results | selectattr('insecure_health', 'equalto', 'HEALTHY') | list | length }}"
         auth_healthy: "{{ status_results | selectattr('authenticated_health', 'equalto', 'HEALTHY') | list | length }}"
 
-    - name: Create status report file
+    - name: Save raw outputs to file for debugging
       ansible.builtin.copy:
-        dest: "/tmp/talos-status-report.txt"
+        dest: "/tmp/talos-raw-output-{{ item.name | regex_replace('\\..*', '') }}.txt"
         content: |
-          ================================================================================
-          TALOS MACHINE STATUS REPORT
-          ================================================================================
-          Generated: {{ now(utc=true).isoformat() }}
-          Total Hosts: {{ pxe_hosts | length }}
+          Host: {{ item.name }} ({{ item.ip }})
           ================================================================================
 
-          {% for host in status_results %}
-          Host: {{ host.hostname }}
-            IP:                 {{ host.ip }}
-            Role:               {{ host.role }}
-            Network:            {{ host.ping }}
-            Stage:              {{ host.stage }}
-            Has Config:         {{ host.has_config }}
-            {% if host.version %}
-            Version:            {{ host.version }}
-            {% endif %}
-            {% if host.services_running > 0 %}
-            Services Running:   {{ host.services_running }}
-            {% endif %}
-            Insecure Health:    {{ host.insecure_health }}
-            Auth Health:        {{ host.authenticated_health }}
-            {% if host.error_summary %}
-            Error:              {{ host.error_summary }}
-            {% endif %}
+          HEALTH CHECK (INSECURE):
+          {{ insecure_status.results[idx].stdout }}
+          {{ insecure_status.results[idx].stderr }}
 
-          {% endfor %}
-          ================================================================================
-          SUMMARY
-          ================================================================================
-          Network Connectivity:
-            Reachable (ping):           {{ ping_up }}/{{ pxe_hosts | length }}
-            Unreachable:                {{ ping_down }}/{{ pxe_hosts | length }}
+          VERSION CHECK (INSECURE):
+          {{ insecure_version.results[idx].stdout }}
+          {{ insecure_version.results[idx].stderr }}
 
-          Node Stages:
-            Maintenance Mode:           {{ status_results | selectattr('stage', 'equalto', 'MAINTENANCE') | list | length }}
-            Running (Configured):       {{ status_results | selectattr('stage', 'equalto', 'RUNNING_CONFIGURED') | list | length }}
-            Running (Unconfigured):     {{ status_results | selectattr('stage', 'equalto', 'RUNNING_UNCONFIGURED') | list | length }}
-            Booting:                    {{ status_results | selectattr('stage', 'equalto', 'BOOTING') | list | length }}
-            Unreachable:                {{ status_results | selectattr('stage', 'equalto', 'UNREACHABLE') | list | length }}
-            Down:                       {{ status_results | selectattr('stage', 'equalto', 'DOWN') | list | length }}
+          MACHINE CONFIG STATUS:
+          {{ machineconfig_status.results[idx].stdout }}
+          {{ machineconfig_status.results[idx].stderr }}
 
-          Machine Config Status:
-            Has Config:                 {{ status_results | selectattr('has_config', 'equalto', 'YES') | list | length }}
-            No Config:                  {{ status_results | selectattr('has_config', 'equalto', 'NO') | list | length }}
-          ================================================================================
+          SERVICES STATUS:
+          {{ services_status.results[idx].stdout }}
+          {{ services_status.results[idx].stderr }}
+      loop: "{{ pxe_hosts }}"
+      loop_control:
+        index_var: idx
+        label: "{{ item.name }}"
 
-    - name: Display status report
-      ansible.builtin.command: cat /tmp/talos-status-report.txt
-      register: report_output
-      changed_when: false
-
-    - name: Show report
+    - name: Display detailed status for each host
       ansible.builtin.debug:
-        msg: "{{ report_output.stdout_lines }}"
+        msg:
+          - "================================================================================"
+          - "Host: {{ item.hostname }}"
+          - "  IP: {{ item.ip }} | Role: {{ item.role }} | Network: {{ item.ping }}"
+          - "  Stage: {{ item.stage }} | Has Config: {{ item.has_config }}"
+          - "  Version: {{ item.version if item.version else 'N/A' }}"
+          - "  Insecure Health: {{ item.insecure_health }} | Auth Health: {{ item.authenticated_health }}"
+          - "{% if item.error_summary %}  Error: {{ item.error_summary }}{% endif %}"
+          - "  Raw output saved to: /tmp/talos-raw-output-{{ item.hostname | regex_replace('\\..*', '') }}.txt"
+          - "================================================================================"
+      loop: "{{ status_results }}"
+      loop_control:
+        label: "{{ item.hostname }}"
+
+    - name: Display summary
+      ansible.builtin.debug:
+        msg:
+          - ""
+          - "================================================================================"
+          - "SUMMARY - {{ pxe_hosts | length }} Total Hosts"
+          - "================================================================================"
+          - "Network: {{ ping_up }} UP / {{ ping_down }} DOWN"
+          - ""
+          - "Stages:"
+          - "  Maintenance:          {{ status_results | selectattr('stage', 'equalto', 'MAINTENANCE') | list | length }}"
+          - "  Running (Configured): {{ status_results | selectattr('stage', 'equalto', 'RUNNING_CONFIGURED') | list | length }}"
+          - "  Running (No Config):  {{ status_results | selectattr('stage', 'equalto', 'RUNNING_UNCONFIGURED') | list | length }}"
+          - "  Booting:              {{ status_results | selectattr('stage', 'equalto', 'BOOTING') | list | length }}"
+          - "  Unreachable:          {{ status_results | selectattr('stage', 'equalto', 'UNREACHABLE') | list | length }}"
+          - "  Down:                 {{ status_results | selectattr('stage', 'equalto', 'DOWN') | list | length }}"
+          - ""
+          - "Machine Config:"
+          - "  Has Config: {{ status_results | selectattr('has_config', 'equalto', 'YES') | list | length }}"
+          - "  No Config:  {{ status_results | selectattr('has_config', 'equalto', 'NO') | list | length }}"
+          - "================================================================================"
