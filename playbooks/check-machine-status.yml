@@ -1,0 +1,173 @@
+---
+- name: Check Status of All Machines in Inventory
+  hosts: localhost
+  gather_facts: false
+  vars:
+    talosconfig_path: "{{ playbook_dir }}/../talos-configs/talosconfig"
+    status_results: []
+
+  tasks:
+    - name: Check if talosctl is available
+      ansible.builtin.command: which talosctl
+      register: talosctl_check
+      failed_when: false
+      changed_when: false
+
+    - name: Fail if talosctl is not installed
+      ansible.builtin.fail:
+        msg: "talosctl is not installed or not in PATH. Please install it first."
+      when: talosctl_check.rc != 0
+
+    - name: Check if talosconfig exists
+      ansible.builtin.stat:
+        path: "{{ talosconfig_path }}"
+      register: talosconfig_stat
+
+    - name: Display talosconfig status
+      ansible.builtin.debug:
+        msg: "Talosconfig found at {{ talosconfig_path }}"
+      when: talosconfig_stat.stat.exists
+
+    - name: Display warning if no talosconfig
+      ansible.builtin.debug:
+        msg: "No talosconfig found - will only attempt insecure checks"
+      when: not talosconfig_stat.stat.exists
+
+    - name: Check status for each host (insecure)
+      ansible.builtin.shell: |
+        timeout 10 talosctl health --insecure --nodes {{ hostvars[item].ansible_host }} 2>&1 || true
+      register: insecure_status
+      loop: "{{ groups['all'] }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Check status for each host (authenticated)
+      ansible.builtin.shell: |
+        timeout 10 talosctl health --nodes {{ hostvars[item].ansible_host }} --talosconfig {{ talosconfig_path }} 2>&1 || true
+      register: authenticated_status
+      loop: "{{ groups['all'] }}"
+      changed_when: false
+      failed_when: false
+      when: talosconfig_stat.stat.exists
+
+    - name: Check version for each host (insecure)
+      ansible.builtin.shell: |
+        timeout 10 talosctl version --insecure --nodes {{ hostvars[item].ansible_host }} --short 2>&1 || true
+      register: insecure_version
+      loop: "{{ groups['all'] }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Check version for each host (authenticated)
+      ansible.builtin.shell: |
+        timeout 10 talosctl version --nodes {{ hostvars[item].ansible_host }} --talosconfig {{ talosconfig_path }} --short 2>&1 || true
+      register: authenticated_version
+      loop: "{{ groups['all'] }}"
+      changed_when: false
+      failed_when: false
+      when: talosconfig_stat.stat.exists
+
+    - name: Check basic connectivity (ping)
+      ansible.builtin.command: ping -c 2 -W 2 {{ hostvars[item].ansible_host }}
+      register: ping_status
+      loop: "{{ groups['all'] }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Build status summary
+      ansible.builtin.set_fact:
+        status_results: "{{ status_results + [result] }}"
+      loop: "{{ groups['all'] }}"
+      loop_control:
+        index_var: idx
+      vars:
+        ping_result: "{{ ping_status.results[idx] }}"
+        insecure_health: "{{ insecure_status.results[idx] }}"
+        auth_health: "{{ authenticated_status.results[idx] if talosconfig_stat.stat.exists else {} }}"
+        insecure_ver: "{{ insecure_version.results[idx] }}"
+        auth_ver: "{{ authenticated_version.results[idx] if talosconfig_stat.stat.exists else {} }}"
+        result:
+          hostname: "{{ item }}"
+          ip: "{{ hostvars[item].ansible_host }}"
+          role: "{{ hostvars[item].role }}"
+          ping: "{{ 'UP' if ping_result.rc == 0 else 'DOWN' }}"
+          insecure_health: >-
+            {{
+              'HEALTHY' if (insecure_health.stdout is defined and 'is healthy' in insecure_health.stdout)
+              else ('UNHEALTHY' if (insecure_health.stdout is defined and insecure_health.stdout != '')
+              else 'NO_RESPONSE')
+            }}
+          authenticated_health: >-
+            {{
+              'HEALTHY' if (auth_health.stdout is defined and 'is healthy' in auth_health.stdout)
+              else ('UNHEALTHY' if (auth_health.stdout is defined and auth_health.stdout != '')
+              else ('NO_RESPONSE' if talosconfig_stat.stat.exists else 'N/A'))
+            }}
+          insecure_version: >-
+            {{
+              insecure_ver.stdout.split('\n')[0] | trim if (insecure_ver.stdout is defined and insecure_ver.stdout != '')
+              else 'UNKNOWN'
+            }}
+          authenticated_version: >-
+            {{
+              auth_ver.stdout.split('\n')[0] | trim if (auth_ver.stdout is defined and auth_ver.stdout != '')
+              else ('UNKNOWN' if talosconfig_stat.stat.exists else 'N/A')
+            }}
+
+    - name: Display Machine Status Report Header
+      ansible.builtin.debug:
+        msg: |
+
+          ═══════════════════════════════════════════════════════════════════════════════
+          TALOS MACHINE STATUS REPORT
+          ═══════════════════════════════════════════════════════════════════════════════
+          Generated: {{ ansible_date_time.iso8601 }}
+          Total Hosts: {{ groups['all'] | length }}
+          ═══════════════════════════════════════════════════════════════════════════════
+
+    - name: Display status for each machine
+      ansible.builtin.debug:
+        msg: |
+
+          ┌─────────────────────────────────────────────────────────────────────────────┐
+          │ Host: {{ item.hostname }}
+          │ IP Address: {{ item.ip }}
+          │ Role: {{ item.role }}
+          ├─────────────────────────────────────────────────────────────────────────────┤
+          │ Network Status:
+          │   Ping:                    {{ item.ping }}
+          │
+          │ Insecure Connection (no auth):
+          │   Health:                  {{ item.insecure_health }}
+          │   Version:                 {{ item.insecure_version }}
+          │
+          │ Authenticated Connection (with talosconfig):
+          │   Health:                  {{ item.authenticated_health }}
+          │   Version:                 {{ item.authenticated_version }}
+          └─────────────────────────────────────────────────────────────────────────────┘
+      loop: "{{ status_results }}"
+
+    - name: Generate summary statistics
+      ansible.builtin.set_fact:
+        ping_up: "{{ status_results | selectattr('ping', 'equalto', 'UP') | list | length }}"
+        ping_down: "{{ status_results | selectattr('ping', 'equalto', 'DOWN') | list | length }}"
+        insecure_healthy: "{{ status_results | selectattr('insecure_health', 'equalto', 'HEALTHY') | list | length }}"
+        auth_healthy: "{{ status_results | selectattr('authenticated_health', 'equalto', 'HEALTHY') | list | length }}"
+
+    - name: Display Summary
+      ansible.builtin.debug:
+        msg: |
+
+          ═══════════════════════════════════════════════════════════════════════════════
+          SUMMARY
+          ═══════════════════════════════════════════════════════════════════════════════
+          Network Connectivity:
+            Reachable (ping):        {{ ping_up }}/{{ groups['all'] | length }}
+            Unreachable:             {{ ping_down }}/{{ groups['all'] | length }}
+
+          Talos Health (Insecure):
+            Healthy:                 {{ insecure_healthy }}/{{ groups['all'] | length }}
+
+          Talos Health (Authenticated):
+            Healthy:                 {{ auth_healthy }}/{{ groups['all'] | length }}
+          ═══════════════════════════════════════════════════════════════════════════════
