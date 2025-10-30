@@ -59,7 +59,7 @@
         talosctl --talosconfig {{ talos_config_dir }}/talosconfig
         --nodes {{ host.ip }}
         --endpoints {{ first_controlplane_ip }}
-        reset --graceful=false --wipe-mode=all --reboot
+        reset --graceful=false --wipe-mode=all --reboot --wait=false
       loop: "{{ worker_hosts }}"
       loop_control:
         loop_var: host
@@ -72,7 +72,7 @@
         talosctl --talosconfig {{ talos_config_dir }}/talosconfig
         --nodes {{ host.ip }}
         --endpoints {{ host.ip }}
-        reset --graceful=false --wipe-mode=all --reboot
+        reset --graceful=false --wipe-mode=all --reboot --wait=false
       loop: "{{ controlplane_hosts }}"
       loop_control:
         loop_var: host
