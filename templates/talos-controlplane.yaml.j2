@@ -156,6 +156,10 @@ cluster:
         ca:
             crt: {{ talos_etcd_ca_crt }}
             key: {{ talos_etcd_ca_key }}
+        advertisedSubnets:
+            - {{ management_subnet }}
+        listenSubnets:
+            - {{ management_subnet }}
 
     extraManifests: []
     inlineManifests: []
