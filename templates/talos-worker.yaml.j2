@@ -18,6 +18,11 @@ machine:
                   - bind
                   - rshared
                   - rw
+        nodeIP:
+            validSubnets:
+                - {{ management_subnet }}
+                - "!100.64.0.0/10"
+                - "!10.64.0.0/16"
         image: ghcr.io/siderolabs/kubelet:{{ talos_kubernetes_version }}
         defaultRuntimeSeccompProfileEnabled: true
         disableManifestsDirectory: true

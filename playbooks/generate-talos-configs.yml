@@ -115,6 +115,10 @@
         talos_extensions: "{{ hostvars[inventory_hostname]['talos_extensions'] | default([]) }}"
         talos_extra_kernel_args: "{{ hostvars[inventory_hostname]['talos_extra_kernel_args'] | default([]) }}"
 
+    - name: Calculate management subnet
+      set_fact:
+        management_subnet: "{{ network_gateway | ansible.utils.ipaddr('network') }}/{{ network_netmask }}"
+
     - name: Generate Talos schematic file
       template:
         src: "{{ playbook_dir }}/../templates/talos-schematic.yaml.j2"
