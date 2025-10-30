@@ -41,6 +41,7 @@ all:
       talos_cluster_name: cluster.local
       talos_cluster_endpoint: https://talos-api.example.com:6443
       talos_kubernetes_version: v1.34.1
+      kubespan_enabled: false                    # Enable KubeSpan for multi-site or cross-network deployments
 
       # Network configuration
       network_gateway: 192.168.1.1              # Default gateway

@@ -22,7 +22,9 @@ machine:
         nodeIP:
             validSubnets:
                 - {{ management_subnet }}
+{% if not kubespan_enabled %}
                 - "!100.64.0.0/10"
+{% endif %}
                 - "!10.64.0.0/16"
         image: ghcr.io/siderolabs/kubelet:{{ talos_kubernetes_version }}
         defaultRuntimeSeccompProfileEnabled: true
@@ -42,6 +44,10 @@ machine:
 {% for ns in network_nameservers %}
         - {{ ns }}
 {% endfor %}
+{% if kubespan_enabled %}
+      kubespan:
+        enabled: true
+{% endif %}
 
     time:
       servers:

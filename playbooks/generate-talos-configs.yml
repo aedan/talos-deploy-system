@@ -114,6 +114,7 @@
         talos_arch: "{{ hostvars[inventory_hostname]['talos_arch'] }}"
         talos_extensions: "{{ hostvars[inventory_hostname]['talos_extensions'] | default([]) }}"
         talos_extra_kernel_args: "{{ hostvars[inventory_hostname]['talos_extra_kernel_args'] | default([]) }}"
+        kubespan_enabled: "{{ hostvars[inventory_hostname]['kubespan_enabled'] | default(false) }}"
 
     - name: Calculate management subnet
       set_fact:
