@@ -40,6 +40,10 @@ machine:
           routes:
             - network: 0.0.0.0/0
               gateway: {{ network_gateway }}
+{% for iface in host.ignored_interfaces | default(network_ignored_interfaces) %}
+        - interface: {{ iface }}
+          ignore: true
+{% endfor %}
       nameservers:
 {% for ns in network_nameservers %}
         - {{ ns }}
