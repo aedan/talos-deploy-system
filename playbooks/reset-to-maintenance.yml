@@ -65,7 +65,6 @@
         loop_var: host
       register: worker_reset_result
       ignore_errors: yes
-      no_log: true
 
     - name: Reset control plane nodes (using their own endpoint)
       command: >
@@ -78,7 +77,6 @@
         loop_var: host
       register: controlplane_reset_result
       ignore_errors: yes
-      no_log: true
 
     - name: Combine reset results
       set_fact:

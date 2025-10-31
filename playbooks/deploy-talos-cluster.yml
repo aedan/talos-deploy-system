@@ -71,7 +71,6 @@
       ignore_errors: yes
       async: "{{ apply_timeout }}"
       poll: 10
-      no_log: true
 
     - name: Apply configuration to already-configured nodes (authenticated mode)
       command: >
@@ -86,7 +85,6 @@
       ignore_errors: yes
       async: "{{ apply_timeout }}"
       poll: 10
-      no_log: true
 
     - name: Wait for all nodes to apply configuration and reboot
       pause:
