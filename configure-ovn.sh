@@ -60,18 +60,25 @@ log ""
 log "Discovering nodes with external bridge annotations..."
 
 ANNOTATED_NODES=$(kubectl get nodes -o json | jq -r '.items[] |
-  select(.metadata.annotations["ovn.openstack.org/bridges"] != null) |
+  select(.metadata.annotations["ovn.openstack.org/mappings"] != null) |
   .metadata.name')
 
 if [ -z "$ANNOTATED_NODES" ]; then
-  error "No nodes found with ovn.openstack.org/bridges annotation"
+  error "No nodes found with ovn.openstack.org/mappings annotation"
   echo ""
   echo "To configure external bridges on nodes:"
   echo ""
+  echo "Single provider network:"
   echo "  kubectl annotate nodes -l openstack-network-node=enabled \\"
-  echo "    ovn.openstack.org/bridges='br-ex' \\"
-  echo "    ovn.openstack.org/ports='br-ex:eno2' \\"
-  echo "    ovn.openstack.org/mappings='physnet1:br-ex'"
+  echo "    ovn.openstack.org/mappings='physnet1:br-ex' \\"
+  echo "    ovn.openstack.org/ports='br-ex:eno2'"
+  echo ""
+  echo "Multiple provider networks:"
+  echo "  kubectl annotate nodes -l openstack-network-node=enabled \\"
+  echo "    ovn.openstack.org/mappings='physnet1:br-ex,physnet2:br-ex1' \\"
+  echo "    ovn.openstack.org/ports='br-ex:eno2,br-ex1:eno3'"
+  echo ""
+  echo "Note: The 'bridges' annotation is optional and will be derived from mappings if not specified."
   echo ""
   exit 1
 fi
@@ -100,33 +107,43 @@ for NODE in $ANNOTATED_NODES; do
   log "    ports: $PORTS"
   log "    mappings: $MAPPINGS"
 
-  if [ "$BRIDGES" = "null" ] || [ -z "$BRIDGES" ]; then
-    warn "    No bridges defined, skipping"
-    continue
-  fi
-
   if [ "$MAPPINGS" = "null" ] || [ -z "$MAPPINGS" ]; then
     error "    No mappings defined - required to determine provider network names"
-    error "    Example: ovn.openstack.org/mappings='physnet1:br-ex'"
+    error "    Example: ovn.openstack.org/mappings='physnet1:br-ex,physnet2:br-ex1'"
     PROCESSING_ERRORS=$((PROCESSING_ERRORS + 1))
     continue
   fi
 
-  # Parse comma-separated bridges
-  IFS=',' read -r -a BRIDGE_ARRAY <<< "$BRIDGES"
-  log "    Found ${#BRIDGE_ARRAY[@]} bridge(s) to process"
-
-  # Build mapping lookup (bridge -> provider network name)
+  # Build mapping lookup (bridge -> provider network name) and extract bridge list
   declare -A BRIDGE_TO_PHYSNET
+  declare -a BRIDGES_FROM_MAPPINGS
   IFS=',' read -r -a MAPPING_ARRAY <<< "$MAPPINGS"
   log "    Parsing ${#MAPPING_ARRAY[@]} mapping(s)..."
 
   for MAPPING in "${MAPPING_ARRAY[@]}"; do
     MAPPING=$(echo "$MAPPING" | xargs)
     IFS=':' read -r PHYSNET BRIDGE <<< "$MAPPING"
+
+    if [ -z "$PHYSNET" ] || [ -z "$BRIDGE" ]; then
+      error "      Invalid mapping format: '$MAPPING' (expected 'physnet:bridge')"
+      PROCESSING_ERRORS=$((PROCESSING_ERRORS + 1))
+      continue
+    fi
+
     BRIDGE_TO_PHYSNET["$BRIDGE"]="$PHYSNET"
+    BRIDGES_FROM_MAPPINGS+=("$BRIDGE")
     log "      Mapped: $BRIDGE -> provider network '$PHYSNET'"
   done
+
+  # Determine which bridges to process
+  # If bridges annotation is set, use it; otherwise use bridges from mappings
+  if [ "$BRIDGES" != "null" ] && [ -n "$BRIDGES" ]; then
+    IFS=',' read -r -a BRIDGE_ARRAY <<< "$BRIDGES"
+    log "    Using ${#BRIDGE_ARRAY[@]} bridge(s) from 'bridges' annotation"
+  else
+    BRIDGE_ARRAY=("${BRIDGES_FROM_MAPPINGS[@]}")
+    log "    Using ${#BRIDGE_ARRAY[@]} bridge(s) derived from 'mappings' annotation"
+  fi
 
   # Build port mapping lookup (bridge -> interface)
   declare -A PORT_MAP
@@ -155,8 +172,8 @@ for NODE in $ANNOTATED_NODES; do
 
     if [ -z "$PROVIDER_NET_NAME" ]; then
       error "      Bridge $FULL_BRIDGE has no mapping in mappings annotation"
-      error "      Each bridge in 'bridges' must have a corresponding entry in 'mappings'"
-      error "      Example: bridges='br-ex' mappings='physnet1:br-ex'"
+      error "      Each bridge must have a corresponding entry in 'mappings'"
+      error "      Example: mappings='physnet1:br-ex,physnet2:br-ex1'"
       PROCESSING_ERRORS=$((PROCESSING_ERRORS + 1))
       continue
     fi
@@ -168,8 +185,8 @@ for NODE in $ANNOTATED_NODES; do
 
     if [ -z "$INTERFACE" ]; then
       error "      Bridge $FULL_BRIDGE has no interface mapping in ports annotation"
-      error "      Each bridge in 'bridges' must have a corresponding entry in 'ports'"
-      error "      Example: bridges='br-ex' ports='br-ex:eno2'"
+      error "      Each bridge in 'mappings' must have a corresponding entry in 'ports'"
+      error "      Example: mappings='physnet1:br-ex,physnet2:br-ex1' ports='br-ex:eno2,br-ex1:eno3'"
       PROCESSING_ERRORS=$((PROCESSING_ERRORS + 1))
       continue
     fi
@@ -204,7 +221,11 @@ fi
 
 log ""
 log "✓ Successfully processed all nodes"
-log "✓ Will configure ${#PROVIDER_NETWORKS[@]} ProviderNetwork(s)"
+log "✓ Will configure ${#PROVIDER_NETWORKS[@]} ProviderNetwork(s):"
+for PN_KEY in "${!PROVIDER_NETWORKS[@]}"; do
+  IFS='|' read -r PROVIDER_NET_NAME INTERFACE BRIDGE <<< "$PN_KEY"
+  log "    - $PROVIDER_NET_NAME ($BRIDGE → $INTERFACE)"
+done
 
 # Create/Update ProviderNetworks
 log ""
@@ -290,9 +311,22 @@ log "  • Updated: $UPDATED ProviderNetwork(s)"
 log "  • Failed: $FAILED ProviderNetwork(s)"
 log "  • Configured: $NODE_COUNT node(s)"
 log ""
-log "Verification:"
+log "Verification commands:"
+log "  # List all provider networks"
 log "  kubectl get provider-networks"
-log "  kubectl describe provider-networks $PROVIDER_NET_NAME"
+log ""
+
+# Generate describe commands for each provider network
+UNIQUE_PROVIDER_NETS=$(for PN_KEY in "${!PROVIDER_NETWORKS[@]}"; do
+  IFS='|' read -r PROVIDER_NET_NAME _ _ <<< "$PN_KEY"
+  echo "$PROVIDER_NET_NAME"
+done | sort -u)
+
+for PN_NAME in $UNIQUE_PROVIDER_NETS; do
+  log "  # View details for $PN_NAME"
+  log "  kubectl describe provider-network $PN_NAME"
+done
+
 log ""
 log "Full log: $LOG_FILE"
 
