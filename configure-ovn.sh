@@ -193,8 +193,15 @@ for NODE in $ANNOTATED_NODES; do
 
     log "      Physical interface: $INTERFACE (from ports)"
 
-    # Use bridge name as ProviderNetwork name (KubeOVN creates bridge from ProviderNetwork name)
-    PN_KEY="${FULL_BRIDGE}|${INTERFACE}|${PROVIDER_NET_NAME}"
+    # Strip br- prefix from bridge name for ProviderNetwork (KubeOVN adds br- automatically)
+    # br-ex → ex, br-ex1 → ex1
+    PROVIDER_NETWORK_NAME="${FULL_BRIDGE#br-}"
+
+    if [ "$PROVIDER_NETWORK_NAME" = "$FULL_BRIDGE" ]; then
+      warn "      Bridge $FULL_BRIDGE doesn't start with 'br-' - using as-is"
+    fi
+
+    PN_KEY="${PROVIDER_NETWORK_NAME}|${INTERFACE}|${FULL_BRIDGE}|${PROVIDER_NET_NAME}"
 
     if [ -z "${PROVIDER_NETWORKS[$PN_KEY]}" ]; then
       PROVIDER_NETWORKS[$PN_KEY]="$NODE"
@@ -202,7 +209,7 @@ for NODE in $ANNOTATED_NODES; do
       PROVIDER_NETWORKS[$PN_KEY]="${PROVIDER_NETWORKS[$PN_KEY]} $NODE"
     fi
 
-    log "      ✓ Will create ProviderNetwork: $FULL_BRIDGE (physnet: $PROVIDER_NET_NAME, interface: $INTERFACE)"
+    log "      ✓ Will create ProviderNetwork: $PROVIDER_NETWORK_NAME (bridge: $FULL_BRIDGE, physnet: $PROVIDER_NET_NAME, interface: $INTERFACE)"
   done
 
   # Clear the associative arrays for next iteration
@@ -224,8 +231,8 @@ log ""
 log "✓ Successfully processed all nodes"
 log "✓ Will configure ${#PROVIDER_NETWORKS[@]} ProviderNetwork(s):"
 for PN_KEY in "${!PROVIDER_NETWORKS[@]}"; do
-  IFS='|' read -r BRIDGE INTERFACE PHYSNET <<< "$PN_KEY"
-  log "    - $BRIDGE (physnet: $PHYSNET, interface: $INTERFACE)"
+  IFS='|' read -r PN_NAME INTERFACE BRIDGE PHYSNET <<< "$PN_KEY"
+  log "    - $PN_NAME → bridge: $BRIDGE, physnet: $PHYSNET, interface: $INTERFACE"
 done
 
 # Create/Update ProviderNetworks
@@ -237,17 +244,18 @@ UPDATED=0
 FAILED=0
 
 for PN_KEY in "${!PROVIDER_NETWORKS[@]}"; do
-  IFS='|' read -r BRIDGE INTERFACE PHYSNET <<< "$PN_KEY"
+  IFS='|' read -r PN_NAME INTERFACE BRIDGE PHYSNET <<< "$PN_KEY"
   NODES=${PROVIDER_NETWORKS[$PN_KEY]}
   NODE_LIST=$(echo "$NODES" | tr ' ' '\n' | sed 's/^/        - /')
 
   log ""
-  log "ProviderNetwork: $BRIDGE"
+  log "ProviderNetwork: $PN_NAME"
+  log "  Bridge (will create): $BRIDGE"
   log "  Physical Network: $PHYSNET"
   log "  Interface: $INTERFACE"
   log "  Nodes: $NODES"
 
-  if kubectl get provider-networks "$BRIDGE" &>/dev/null; then
+  if kubectl get provider-networks "$PN_NAME" &>/dev/null; then
     ACTION="updated"
     UPDATED=$((UPDATED + 1))
   else
@@ -259,14 +267,16 @@ for PN_KEY in "${!PROVIDER_NETWORKS[@]}"; do
 apiVersion: kubeovn.io/v1
 kind: ProviderNetwork
 metadata:
-  name: $BRIDGE
+  name: $PN_NAME
   labels:
     managed-by: ovn-annotation-script
     openstack-physnet: "$PHYSNET"
+    bridge-name: "$BRIDGE"
   annotations:
     configured-by: configure-ovn.sh
     configured-at: "$(date -Iseconds)"
     openstack-physnet: "$PHYSNET"
+    bridge-name: "$BRIDGE"
 spec:
   defaultInterface: $INTERFACE
   customInterfaces:
@@ -278,9 +288,9 @@ EOF
 
   log "  Applying ProviderNetwork..."
   if echo "$YAML_CONTENT" | kubectl apply -f - >> "$LOG_FILE" 2>&1; then
-    log "  ✓ ProviderNetwork '$BRIDGE' $ACTION (physnet: $PHYSNET)"
+    log "  ✓ ProviderNetwork '$PN_NAME' $ACTION (bridge: $BRIDGE, physnet: $PHYSNET)"
   else
-    error "  ✗ Failed to configure ProviderNetwork '$BRIDGE'"
+    error "  ✗ Failed to configure ProviderNetwork '$PN_NAME'"
     echo ""
     echo "YAML that failed:"
     echo "$YAML_CONTENT"
@@ -319,14 +329,14 @@ log "  kubectl get provider-networks"
 log ""
 
 # Generate describe commands for each provider network
-UNIQUE_BRIDGES=$(for PN_KEY in "${!PROVIDER_NETWORKS[@]}"; do
-  IFS='|' read -r BRIDGE _ _ <<< "$PN_KEY"
-  echo "$BRIDGE"
+UNIQUE_PN_NAMES=$(for PN_KEY in "${!PROVIDER_NETWORKS[@]}"; do
+  IFS='|' read -r PN_NAME _ _ _ <<< "$PN_KEY"
+  echo "$PN_NAME"
 done | sort -u)
 
-for BRIDGE_NAME in $UNIQUE_BRIDGES; do
-  log "  # View details for $BRIDGE_NAME"
-  log "  kubectl describe provider-network $BRIDGE_NAME"
+for PN in $UNIQUE_PN_NAMES; do
+  log "  # View details for $PN"
+  log "  kubectl describe provider-network $PN"
 done
 
 log ""
