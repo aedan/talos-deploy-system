@@ -193,7 +193,8 @@ for NODE in $ANNOTATED_NODES; do
 
     log "      Physical interface: $INTERFACE (from ports)"
 
-    PN_KEY="${PROVIDER_NET_NAME}|${INTERFACE}|${FULL_BRIDGE}"
+    # Use bridge name as ProviderNetwork name (KubeOVN creates bridge from ProviderNetwork name)
+    PN_KEY="${FULL_BRIDGE}|${INTERFACE}|${PROVIDER_NET_NAME}"
 
     if [ -z "${PROVIDER_NETWORKS[$PN_KEY]}" ]; then
       PROVIDER_NETWORKS[$PN_KEY]="$NODE"
@@ -201,7 +202,7 @@ for NODE in $ANNOTATED_NODES; do
       PROVIDER_NETWORKS[$PN_KEY]="${PROVIDER_NETWORKS[$PN_KEY]} $NODE"
     fi
 
-    log "      ✓ Will create ProviderNetwork: $PROVIDER_NET_NAME (bridge: $FULL_BRIDGE, interface: $INTERFACE)"
+    log "      ✓ Will create ProviderNetwork: $FULL_BRIDGE (physnet: $PROVIDER_NET_NAME, interface: $INTERFACE)"
   done
 
   # Clear the associative arrays for next iteration
@@ -223,8 +224,8 @@ log ""
 log "✓ Successfully processed all nodes"
 log "✓ Will configure ${#PROVIDER_NETWORKS[@]} ProviderNetwork(s):"
 for PN_KEY in "${!PROVIDER_NETWORKS[@]}"; do
-  IFS='|' read -r PROVIDER_NET_NAME INTERFACE BRIDGE <<< "$PN_KEY"
-  log "    - $PROVIDER_NET_NAME ($BRIDGE → $INTERFACE)"
+  IFS='|' read -r BRIDGE INTERFACE PHYSNET <<< "$PN_KEY"
+  log "    - $BRIDGE (physnet: $PHYSNET, interface: $INTERFACE)"
 done
 
 # Create/Update ProviderNetworks
@@ -236,17 +237,17 @@ UPDATED=0
 FAILED=0
 
 for PN_KEY in "${!PROVIDER_NETWORKS[@]}"; do
-  IFS='|' read -r PROVIDER_NET_NAME INTERFACE BRIDGE <<< "$PN_KEY"
+  IFS='|' read -r BRIDGE INTERFACE PHYSNET <<< "$PN_KEY"
   NODES=${PROVIDER_NETWORKS[$PN_KEY]}
   NODE_LIST=$(echo "$NODES" | tr ' ' '\n' | sed 's/^/        - /')
 
   log ""
-  log "ProviderNetwork: $PROVIDER_NET_NAME"
-  log "  Bridge: $BRIDGE"
+  log "ProviderNetwork: $BRIDGE"
+  log "  Physical Network: $PHYSNET"
   log "  Interface: $INTERFACE"
   log "  Nodes: $NODES"
 
-  if kubectl get provider-networks "$PROVIDER_NET_NAME" &>/dev/null; then
+  if kubectl get provider-networks "$BRIDGE" &>/dev/null; then
     ACTION="updated"
     UPDATED=$((UPDATED + 1))
   else
@@ -258,13 +259,14 @@ for PN_KEY in "${!PROVIDER_NETWORKS[@]}"; do
 apiVersion: kubeovn.io/v1
 kind: ProviderNetwork
 metadata:
-  name: $PROVIDER_NET_NAME
+  name: $BRIDGE
   labels:
     managed-by: ovn-annotation-script
+    openstack-physnet: "$PHYSNET"
   annotations:
     configured-by: configure-ovn.sh
     configured-at: "$(date -Iseconds)"
-    openstack-bridge: "$BRIDGE"
+    openstack-physnet: "$PHYSNET"
 spec:
   defaultInterface: $INTERFACE
   customInterfaces:
@@ -276,9 +278,9 @@ EOF
 
   log "  Applying ProviderNetwork..."
   if echo "$YAML_CONTENT" | kubectl apply -f - >> "$LOG_FILE" 2>&1; then
-    log "  ✓ ProviderNetwork '$PROVIDER_NET_NAME' $ACTION"
+    log "  ✓ ProviderNetwork '$BRIDGE' $ACTION (physnet: $PHYSNET)"
   else
-    error "  ✗ Failed to configure ProviderNetwork '$PROVIDER_NET_NAME'"
+    error "  ✗ Failed to configure ProviderNetwork '$BRIDGE'"
     echo ""
     echo "YAML that failed:"
     echo "$YAML_CONTENT"
@@ -317,14 +319,14 @@ log "  kubectl get provider-networks"
 log ""
 
 # Generate describe commands for each provider network
-UNIQUE_PROVIDER_NETS=$(for PN_KEY in "${!PROVIDER_NETWORKS[@]}"; do
-  IFS='|' read -r PROVIDER_NET_NAME _ _ <<< "$PN_KEY"
-  echo "$PROVIDER_NET_NAME"
+UNIQUE_BRIDGES=$(for PN_KEY in "${!PROVIDER_NETWORKS[@]}"; do
+  IFS='|' read -r BRIDGE _ _ <<< "$PN_KEY"
+  echo "$BRIDGE"
 done | sort -u)
 
-for PN_NAME in $UNIQUE_PROVIDER_NETS; do
-  log "  # View details for $PN_NAME"
-  log "  kubectl describe provider-network $PN_NAME"
+for BRIDGE_NAME in $UNIQUE_BRIDGES; do
+  log "  # View details for $BRIDGE_NAME"
+  log "  kubectl describe provider-network $BRIDGE_NAME"
 done
 
 log ""
