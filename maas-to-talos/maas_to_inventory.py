@@ -18,50 +18,100 @@ from collections import Counter
 
 
 class MAASClient:
-    """Client for interacting with MAAS API"""
-    
+    """Client for interacting with MAAS"""
+
     def __init__(self, maas_url: str, api_key: str):
         """
         Initialize MAAS client
-        
+
         Args:
             maas_url: MAAS server URL (e.g., http://maas.example.com:5240/MAAS)
             api_key: MAAS API key
         """
         self.maas_url = maas_url.rstrip('/')
         self.api_key = api_key
-        self.session = requests.Session()
-        self.session.headers.update({
-            'Authorization': f'OAuth oauth_version=1.0, oauth_signature_method=PLAINTEXT, oauth_consumer_key={api_key.split(":")[0]}, oauth_token={api_key.split(":")[1]}, oauth_signature=&{api_key.split(":")[2]}'
-        })
-    
+        self.use_cli = shutil.which('maas') is not None
+        self.profile_name = 'talos-deploy'
+
+        # If CLI is available, create/update login profile
+        if self.use_cli:
+            self._setup_cli_profile()
+        else:
+            # Fallback to HTTP API
+            self.session = requests.Session()
+            self.session.headers.update({
+                'Authorization': f'OAuth oauth_version=1.0, oauth_signature_method=PLAINTEXT, oauth_consumer_key={api_key.split(":")[0]}, oauth_token={api_key.split(":")[1]}, oauth_signature=&{api_key.split(":")[2]}'
+            })
+
+    def _setup_cli_profile(self):
+        """Setup MAAS CLI profile for authentication"""
+        try:
+            # Login/update profile
+            result = subprocess.run(
+                ['maas', 'login', self.profile_name, self.maas_url, self.api_key],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            if result.returncode != 0:
+                print(f"Warning: Failed to setup MAAS CLI profile: {result.stderr}")
+                print("Falling back to HTTP API")
+                self.use_cli = False
+        except Exception as e:
+            print(f"Warning: Failed to setup MAAS CLI: {e}")
+            print("Falling back to HTTP API")
+            self.use_cli = False
+
+    def _run_cli_command(self, resource: str) -> Any:
+        """Run a MAAS CLI command and return JSON result"""
+        try:
+            result = subprocess.run(
+                ['maas', self.profile_name, resource, 'read'],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return yaml.safe_load(result.stdout)
+        except subprocess.CalledProcessError as e:
+            print(f"Error running MAAS CLI command: {e}", file=sys.stderr)
+            print(f"stderr: {e.stderr}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
     def _make_request(self, endpoint: str, method: str = 'GET', params: Dict = None) -> Any:
-        """Make an API request to MAAS"""
-        # Construct URL by appending to base (urljoin doesn't work correctly with /MAAS prefix)
+        """Make an API request to MAAS via HTTP"""
         url = f"{self.maas_url}/api/2.0/{endpoint}"
-        
+
         try:
             if method == 'GET':
                 response = self.session.get(url, params=params)
             else:
                 response = self.session.request(method, url, data=params)
-            
+
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
             print(f"Error making request to MAAS: {e}", file=sys.stderr)
             sys.exit(1)
-    
+
     def get_machines(self) -> List[Dict]:
         """Fetch all machines from MAAS"""
+        if self.use_cli:
+            return self._run_cli_command('machines')
         return self._make_request('machines/')
-    
+
     def get_machine_details(self, system_id: str) -> Dict:
         """Fetch detailed information for a specific machine"""
+        if self.use_cli:
+            return self._run_cli_command(f'machine {system_id}')
         return self._make_request(f'machines/{system_id}/')
 
     def get_subnets(self) -> List[Dict]:
         """Fetch all subnets from MAAS"""
+        if self.use_cli:
+            return self._run_cli_command('subnets')
         return self._make_request('subnets/')
 
 
@@ -696,6 +746,11 @@ def main():
     # Initialize MAAS client
     print(f"Connecting to MAAS at {maas_url}...")
     maas_client = MAASClient(maas_url, api_key)
+
+    if maas_client.use_cli:
+        print("✓ Using MAAS CLI for data extraction")
+    else:
+        print("✓ Using MAAS HTTP API for data extraction")
     
     # Convert and generate inventory
     convert_maas_to_inventory(
