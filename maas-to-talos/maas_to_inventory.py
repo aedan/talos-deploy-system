@@ -13,7 +13,6 @@ import getpass
 import subprocess
 import shutil
 from typing import Dict, List, Any
-from urllib.parse import urljoin
 from configparser import ConfigParser
 from collections import Counter
 
@@ -38,7 +37,8 @@ class MAASClient:
     
     def _make_request(self, endpoint: str, method: str = 'GET', params: Dict = None) -> Any:
         """Make an API request to MAAS"""
-        url = urljoin(self.maas_url, f'/api/2.0/{endpoint}')
+        # Construct URL by appending to base (urljoin doesn't work correctly with /MAAS prefix)
+        url = f"{self.maas_url}/api/2.0/{endpoint}"
         
         try:
             if method == 'GET':
