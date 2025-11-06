@@ -1,0 +1,24 @@
+# MAAS Configuration File
+# Copy this to maas_config.ini and fill in your details
+# Keep this file secure - it contains credentials!
+
+[maas]
+# MAAS server URL (include /MAAS at the end)
+url = http://192.168.1.5:5240/MAAS
+
+# MAAS API key (format: consumer_key:token_key:token_secret)
+# Get this from MAAS UI -> Username -> API keys
+api_key = your:api:key
+
+[inventory]
+# Domain name to use for hosts
+domain = pxe.local
+
+# Output file path
+output = inventory.yml
+
+# Optional: Template file to preserve custom settings
+# template = inventory_template.yml
+
+# MAAS tag to identify controlplane nodes
+controlplane_tag = controller
