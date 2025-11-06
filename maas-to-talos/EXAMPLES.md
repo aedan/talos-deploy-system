@@ -1,30 +1,61 @@
 # Usage Examples
 
-## Example 1: Basic Usage with Config File
+## Example 1: Interactive Setup (Recommended)
 
-1. **Setup configuration:**
+### On MAAS Server
+
+1. **Run interactive setup:**
 ```bash
-cp maas_config.ini.example maas_config.ini
-nano maas_config.ini
+python3 maas_to_inventory.py --setup
 ```
 
-Edit `maas_config.ini`:
-```ini
-[maas]
-url = http://192.168.1.5:5240/MAAS
-api_key = QNsZ8KPvwX:hG9kL3nM5p:xY4zB6cD8f
+2. **Interactive prompts:**
+```
+============================================================
+MAAS Configuration Setup
+============================================================
 
-[inventory]
-domain = pxe.local
-output = inventory.yml
+✓ MAAS CLI detected - can automatically retrieve API key
+
+MAAS Server URL
+  Default: http://localhost:5240/MAAS (running on MAAS server)
+  Or enter custom URL (e.g., http://192.168.1.5:5240/MAAS)
+  Enter MAAS URL [http://localhost:5240/MAAS]:
+
+MAAS Authentication
+  Enter your MAAS username to retrieve/generate API key
+  MAAS Username: admin
+
+Retrieving API key for user 'admin'...
+(This will run: sudo maas apikey --username=admin)
+✓ API key retrieved successfully
+
+Inventory Settings
+  Domain name for hosts [pxe.local]:
+  Output inventory file [inventory.yml]:
+  Template file (optional, press Enter to skip):
+  MAAS tag for controlplane nodes [controller]:
+
+Configuration Summary:
+  MAAS URL: http://localhost:5240/MAAS
+  API Key: ******************** (hidden)
+  Domain: pxe.local
+  Output: inventory.yml
+  Template: (none)
+  Controlplane Tag: controller
+
+Save this configuration? [Y/n]: y
+
+✓ Configuration saved to maas_config.ini
+  File permissions set to 600 (owner read/write only)
 ```
 
-2. **Run the script:**
+3. **Run the script:**
 ```bash
 python3 maas_to_inventory.py
 ```
 
-3. **Output:**
+4. **Output:**
 ```
 Connecting to MAAS at http://192.168.1.5:5240/MAAS...
 Fetching machines from MAAS...
@@ -77,22 +108,37 @@ python3 maas_to_inventory.py \
 
 ---
 
-## Example 4: Using the Convenience Wrapper
+## Example 4: Manual Configuration (Alternative to Interactive Setup)
+
+If you prefer to manually edit the config file:
 
 ```bash
-# First time setup
+# Copy example config
 cp maas_config.ini.example maas_config.ini
-nano maas_config.ini
 
-# Run
-./run.sh
+# Get your API key
+sudo maas apikey --username=admin
+
+# Edit config file
+nano maas_config.ini
 ```
 
-The wrapper will:
-- Check Python installation
-- Install dependencies if needed
-- Create config from example if missing
-- Run the script
+Edit `maas_config.ini`:
+```ini
+[maas]
+url = http://192.168.1.5:5240/MAAS
+api_key = QNsZ8KPvwX:hG9kL3nM5p:xY4zB6cD8f
+
+[inventory]
+domain = pxe.local
+output = inventory.yml
+controlplane_tag = controller
+```
+
+Then run:
+```bash
+python3 maas_to_inventory.py
+```
 
 ---
 
@@ -225,11 +271,26 @@ def determine_role(machine: Dict, tags: List[str]) -> str:
 
 ### Multiple Network Interfaces
 
-The script currently extracts the boot interface. To handle multiple interfaces, you'll need to:
+The script automatically handles multiple interfaces:
 
-1. List available interfaces (shown as comment in output)
-2. Add custom logic in `get_network_interfaces()` function
-3. Manually add `ignored_interfaces` per host after generation
+1. **Boot interface** - Automatically detected and used as primary interface
+2. **Ignored interfaces** - All other physical interfaces are automatically added to `ignored_interfaces` list per-host
+3. **Network settings** - Extracted from DHCP-enabled PXE subnet in MAAS
+
+Generated hosts will include:
+```yaml
+- name: node01.pxe.local
+  mac: 52:54:00:aa:bb:01
+  ip: 192.168.1.101
+  role: controlplane
+  install_disk: /dev/sda
+  ignored_interfaces:
+    - eno2
+    - eno3
+    - eno4
+```
+
+The boot interface (e.g., `eno1`) is used as `network_primary_interface` globally.
 
 ---
 

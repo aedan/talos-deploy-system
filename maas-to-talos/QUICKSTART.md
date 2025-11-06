@@ -1,39 +1,33 @@
 # Quick Start Guide
 
-## 1. Get Your MAAS API Key
+## 1. Run Interactive Setup
 
-### Option A: Web UI
-1. Log into MAAS: `http://your-maas-server:5240/MAAS`
-2. Click your username (top right) → "API keys"
-3. Copy the key (format: `xxxxx:xxxxx:xxxxx`)
+The easiest way to get started:
 
-### Option B: Command Line (on MAAS server)
+### On MAAS Server (Recommended)
 ```bash
-sudo maas apikey --username=admin
+python3 maas_to_inventory.py --setup
 ```
 
-## 2. Configure the Script
+This will:
+- Detect you're on the MAAS server
+- Prompt for your MAAS username
+- Automatically retrieve your API key using `sudo maas apikey --username=<user>`
+- Ask for inventory settings
+- Create `maas_config.ini` with secure permissions
 
+### On Remote Machine
 ```bash
-# Copy example config
-cp maas_config.ini.example maas_config.ini
-
-# Edit with your details
-nano maas_config.ini
+python3 maas_to_inventory.py --setup
 ```
 
-Update these fields:
-```ini
-[maas]
-url = http://192.168.1.5:5240/MAAS
-api_key = your:api:key
+This will:
+- Prompt for MAAS URL
+- Ask you to enter API key manually (get from MAAS UI or run `sudo maas apikey --username=<user>` on MAAS server)
+- Ask for inventory settings
+- Create `maas_config.ini`
 
-[inventory]
-domain = pxe.local
-output = inventory.yml
-```
-
-## 3. Tag Your MAAS Machines (Optional but Recommended)
+## 2. Tag Your MAAS Machines (Optional but Recommended)
 
 Tag control plane nodes in MAAS:
 
@@ -46,19 +40,21 @@ maas admin tag update-nodes controlplane add=node02
 maas admin tag update-nodes controlplane add=node03
 ```
 
-## 4. Run the Script
+## 3. Run the Script
 
-### Using the convenience wrapper:
-```bash
-./run.sh
-```
+After setup is complete, simply run:
 
-### Or directly with Python:
 ```bash
 python3 maas_to_inventory.py
 ```
 
-### Or with command line arguments (no config file):
+This will:
+- Read configuration from `maas_config.ini`
+- Connect to MAAS and fetch machine data
+- Extract network settings from PXE subnet
+- Generate `inventory.yml`
+
+### Alternative: Run with command line arguments (skip config file):
 ```bash
 python3 maas_to_inventory.py \
   --maas-url http://192.168.1.5:5240/MAAS \
@@ -66,7 +62,7 @@ python3 maas_to_inventory.py \
   --output inventory.yml
 ```
 
-## 5. Verify the Output
+## 4. Verify the Output
 
 ```bash
 cat inventory.yml
@@ -74,13 +70,12 @@ cat inventory.yml
 
 Look for the `pxe_hosts` section with your machines.
 
-## 6. Secure Your Files
+## 5. Secure Your Files
 
+The setup script automatically sets secure permissions (600) on `maas_config.ini`.
+
+You should also protect the generated inventory file:
 ```bash
-# Protect config file
-chmod 600 maas_config.ini
-
-# Protect inventory file
 chmod 600 inventory.yml
 ```
 
