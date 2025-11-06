@@ -10,6 +10,8 @@ import argparse
 import sys
 import os
 import getpass
+import subprocess
+import shutil
 from typing import Dict, List, Any
 from urllib.parse import urljoin
 from configparser import ConfigParser
@@ -438,13 +440,27 @@ def create_config_interactive(config_file: str) -> None:
     print(f"Configuration will be saved to: {config_file}")
     print()
 
+    # Check if maas command is available
+    maas_cmd_available = shutil.which('maas') is not None
+
+    if maas_cmd_available:
+        print("✓ MAAS CLI detected - can automatically retrieve API key")
+        print()
+
     # Get MAAS URL
     print("MAAS Server URL")
-    print("  Example: http://192.168.1.5:5240/MAAS")
-    maas_url = input("  Enter MAAS URL: ").strip()
-    if not maas_url:
-        print("Error: MAAS URL is required")
-        sys.exit(1)
+    if maas_cmd_available:
+        print("  Default: http://localhost:5240/MAAS (running on MAAS server)")
+        print("  Or enter custom URL (e.g., http://192.168.1.5:5240/MAAS)")
+        maas_url = input("  Enter MAAS URL [http://localhost:5240/MAAS]: ").strip()
+        if not maas_url:
+            maas_url = "http://localhost:5240/MAAS"
+    else:
+        print("  Example: http://192.168.1.5:5240/MAAS")
+        maas_url = input("  Enter MAAS URL: ").strip()
+        if not maas_url:
+            print("Error: MAAS URL is required")
+            sys.exit(1)
 
     # Ensure URL ends with /MAAS
     if not maas_url.endswith('/MAAS'):
@@ -454,20 +470,65 @@ def create_config_interactive(config_file: str) -> None:
             maas_url += '/MAAS'
 
     print()
-    print("MAAS API Key")
-    print("  Get this from: MAAS UI -> Click your username -> API keys")
-    print("  Format: consumer_key:token_key:token_secret")
-    api_key = getpass.getpass("  Enter MAAS API key (hidden): ").strip()
-    if not api_key:
-        print("Error: API key is required")
-        sys.exit(1)
 
-    # Validate API key format
-    if api_key.count(':') != 2:
-        print("Warning: API key should have format consumer_key:token_key:token_secret")
-        response = input("Continue anyway? [y/N]: ").strip().lower()
-        if response != 'y':
+    # Get API key
+    api_key = None
+
+    if maas_cmd_available:
+        # Use maas CLI to get/generate API key
+        print("MAAS Authentication")
+        print("  Enter your MAAS username to retrieve/generate API key")
+        username = input("  MAAS Username: ").strip()
+
+        if not username:
+            print("Error: Username is required")
             sys.exit(1)
+
+        print()
+        print(f"Retrieving API key for user '{username}'...")
+        print("(This will run: sudo maas apikey --username={username})")
+
+        try:
+            result = subprocess.run(
+                ['sudo', 'maas', 'apikey', f'--username={username}'],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            api_key = result.stdout.strip()
+
+            if api_key and api_key.count(':') == 2:
+                print(f"✓ API key retrieved successfully")
+            else:
+                print(f"Error: Invalid API key format received: {api_key}")
+                sys.exit(1)
+
+        except subprocess.CalledProcessError as e:
+            print(f"Error running maas command: {e}")
+            print(f"stderr: {e.stderr}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+    else:
+        # Manual API key entry
+        print("MAAS API Key")
+        print("  MAAS CLI not detected - manual API key entry required")
+        print("  Get this from: MAAS UI -> Click your username -> API keys")
+        print("  Or run on MAAS server: sudo maas apikey --username=<your-username>")
+        print("  Format: consumer_key:token_key:token_secret")
+        api_key = getpass.getpass("  Enter MAAS API key (hidden): ").strip()
+
+        if not api_key:
+            print("Error: API key is required")
+            sys.exit(1)
+
+        # Validate API key format
+        if api_key.count(':') != 2:
+            print("Warning: API key should have format consumer_key:token_key:token_secret")
+            response = input("Continue anyway? [y/N]: ").strip().lower()
+            if response != 'y':
+                sys.exit(1)
 
     print()
     print("Inventory Settings")

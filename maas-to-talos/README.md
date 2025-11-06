@@ -56,11 +56,18 @@ The easiest way to get started is with the interactive setup:
 python3 maas_to_inventory.py --setup
 ```
 
-This will:
-1. Prompt you for your MAAS URL and API key
-2. Ask for inventory settings (domain, output file, etc.)
-3. Create a `maas_config.ini` file with secure permissions (600)
-4. Save your configuration for future runs
+**When running on the MAAS server itself:**
+1. Prompts for your MAAS URL (defaults to localhost)
+2. Prompts for your MAAS username
+3. Automatically retrieves/generates API key using `sudo maas apikey --username=<user>`
+4. Asks for inventory settings (domain, output file, etc.)
+5. Creates a `maas_config.ini` file with secure permissions (600)
+
+**When running on a remote machine:**
+1. Prompts for your MAAS URL
+2. Prompts you to manually enter an API key
+3. Asks for inventory settings
+4. Creates the configuration file
 
 After setup, simply run without arguments:
 ```bash
