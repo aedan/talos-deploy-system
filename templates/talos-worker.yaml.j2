@@ -22,18 +22,19 @@ machine:
             validSubnets:
 {% if host.network_config is defined %}
 {# Find the primary IP with its CIDR from network_config #}
-{% set primary_cidr = namespace(value=none) %}
+{% set primary_cidr = namespace(found=false, value='') %}
 {% for iface_config in host.network_config %}
-{% if iface_config.addresses is defined %}
+{% if iface_config.addresses is defined and not primary_cidr.found %}
 {% for addr in iface_config.addresses %}
-{% if addr.split('/')[0] == host.ip %}
-{% set primary_cidr.value = addr %}
+{% if (addr | ansible.utils.ipaddr('address')) == host.ip %}
+{% set primary_cidr.found = true %}
+{% set primary_cidr.value = addr | ansible.utils.ipaddr('network/prefix') %}
 {% endif %}
 {% endfor %}
 {% endif %}
 {% endfor %}
-{% if primary_cidr.value %}
-                - {{ primary_cidr.value | ansible.utils.ipaddr('network/prefix') }}
+{% if primary_cidr.found %}
+                - {{ primary_cidr.value }}
 {% else %}
                 - {{ (host.ip + '/' + network_netmask|string) | ansible.utils.ipaddr('network/prefix') }}
 {% endif %}
@@ -67,9 +68,6 @@ machine:
 {% if iface_config.vlan is defined %}
           vlan:
             vlanId: {{ iface_config.vlan.vlanId }}
-{% if iface_config.vlan.vlanProtocol is defined %}
-            vlanProtocol: {{ iface_config.vlan.vlanProtocol }}
-{% endif %}
 {% endif %}
 {% if iface_config.bond is defined %}
           bond:
