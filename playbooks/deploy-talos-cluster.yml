@@ -29,11 +29,46 @@
       register: talosconfig_stat
       failed_when: not talosconfig_stat.stat.exists
 
+    - name: Read dnsmasq leases file
+      slurp:
+        src: /var/lib/misc/dnsmasq.leases
+      register: dnsmasq_leases_raw
+      become: yes
+
+    - name: Parse dnsmasq leases to get current IP assignments
+      set_fact:
+        dnsmasq_lease_map: >-
+          {{
+            dnsmasq_lease_map | default({}) |
+            combine({
+              item.split()[1] | lower: item.split()[2]
+            })
+          }}
+      loop: "{{ (dnsmasq_leases_raw.content | b64decode).split('\n') }}"
+      when: item | length > 0
+
+    - name: Add current dynamic IPs to hosts
+      set_fact:
+        pxe_hosts_with_current_ip: >-
+          {{
+            pxe_hosts_with_current_ip | default([]) +
+            [{
+              'name': item.name,
+              'mac': item.mac,
+              'static_ip': item.ip,
+              'current_ip': dnsmasq_lease_map[item.mac | lower] | default(item.ip),
+              'role': item.role,
+              'install_disk': item.install_disk
+            } | combine(item)]
+          }}
+      loop: "{{ pxe_hosts }}"
+
     - name: Filter control plane and worker nodes
       set_fact:
-        controlplane_hosts: "{{ pxe_hosts | selectattr('role', 'equalto', 'controlplane') | list }}"
-        worker_hosts: "{{ pxe_hosts | selectattr('role', 'equalto', 'worker') | list }}"
-        first_controlplane: "{{ (pxe_hosts | selectattr('role', 'equalto', 'controlplane') | list)[0] }}"
+        controlplane_hosts: "{{ pxe_hosts_with_current_ip | selectattr('role', 'equalto', 'controlplane') | list }}"
+        worker_hosts: "{{ pxe_hosts_with_current_ip | selectattr('role', 'equalto', 'worker') | list }}"
+        first_controlplane: "{{ (pxe_hosts_with_current_ip | selectattr('role', 'equalto', 'controlplane') | list)[0] }}"
+        all_hosts: "{{ pxe_hosts_with_current_ip }}"
 
     - name: Display deployment plan
       debug:
@@ -42,10 +77,16 @@
           - "Talos Cluster Deployment Plan"
           - "========================================="
           - "Control Plane Nodes: {{ controlplane_hosts | length }}"
-          - "{% for host in controlplane_hosts %}  - {{ host.name }} ({{ host.ip }})\n{% endfor %}"
+          - "{% for host in controlplane_hosts %}  - {{ host.name }}\n    Current IP (PXE): {{ host.current_ip }}\n    Static IP (final): {{ host.static_ip }}\n{% endfor %}"
           - "Worker Nodes: {{ worker_hosts | length }}"
-          - "{% for host in worker_hosts %}  - {{ host.name }} ({{ host.ip }})\n{% endfor %}"
-          - "Bootstrap Node: {{ first_controlplane.name }} ({{ first_controlplane.ip }})"
+          - "{% for host in worker_hosts %}  - {{ host.name }}\n    Current IP (PXE): {{ host.current_ip }}\n    Static IP (final): {{ host.static_ip }}\n{% endfor %}"
+          - "Bootstrap Node: {{ first_controlplane.name }}"
+          - "  Current IP: {{ first_controlplane.current_ip }}"
+          - "  Static IP: {{ first_controlplane.static_ip }}"
+          - "========================================="
+          - ""
+          - "NOTE: Configs will be applied to current PXE IPs."
+          - "After reboot, nodes will use their static IPs."
           - "========================================="
 
     - name: Pause for user confirmation
@@ -62,9 +103,9 @@
       command: >
         talosctl apply-config
         --insecure
-        --nodes {{ host.ip }}
+        --nodes {{ host.current_ip }}
         --file {{ talos_config_dir }}/{{ host.name.split('.')[0] }}.yaml
-      loop: "{{ pxe_hosts }}"
+      loop: "{{ all_hosts }}"
       loop_control:
         loop_var: host
       register: apply_all_insecure
@@ -75,8 +116,8 @@
     - name: Apply configuration to already-configured nodes (authenticated mode)
       command: >
         talosctl apply-config
-        --nodes {{ item.host.ip }}
-        --endpoints {{ item.host.ip }}
+        --nodes {{ item.host.current_ip }}
+        --endpoints {{ item.host.current_ip }}
         --file {{ talos_config_dir }}/{{ item.host.name.split('.')[0] }}.yaml
         --talosconfig {{ talosconfig_file }}
       loop: "{{ apply_all_insecure.results }}"
@@ -92,11 +133,12 @@
         prompt: "Waiting for all nodes to apply configuration and stabilize..."
 
     # Check if etcd is already healthy (better check than member existence)
+    # After reboot, nodes will have their static IPs configured
     - name: Check if etcd is already bootstrapped and healthy
       command: >
         talosctl etcd members
-        --nodes {{ first_controlplane.ip }}
-        --endpoints {{ first_controlplane.ip }}
+        --nodes {{ first_controlplane.static_ip }}
+        --endpoints {{ first_controlplane.static_ip }}
         --talosconfig {{ talosconfig_file }}
       register: bootstrap_check
       failed_when: false
@@ -105,9 +147,9 @@
     - name: Bootstrap the cluster (first attempt)
       command: >
         talosctl bootstrap
-        -e {{ first_controlplane.ip }}
+        -e {{ first_controlplane.static_ip }}
         --talosconfig {{ talosconfig_file }}
-        --nodes {{ first_controlplane.ip }}
+        --nodes {{ first_controlplane.static_ip }}
       when: bootstrap_check.rc != 0
       register: bootstrap_result
       failed_when: false
@@ -122,8 +164,8 @@
     - name: Check etcd health (initial check - 3 minutes)
       command: >
         talosctl etcd members
-        --nodes {{ first_controlplane.ip }}
-        --endpoints {{ first_controlplane.ip }}
+        --nodes {{ first_controlplane.static_ip }}
+        --endpoints {{ first_controlplane.static_ip }}
         --talosconfig {{ talosconfig_file }}
       register: etcd_initial_check
       retries: 6
@@ -140,9 +182,9 @@
         - name: Bootstrap second time (while etcd is initializing)
           command: >
             talosctl bootstrap
-            -e {{ first_controlplane.ip }}
+            -e {{ first_controlplane.static_ip }}
             --talosconfig {{ talosconfig_file }}
-            --nodes {{ first_controlplane.ip }}
+            --nodes {{ first_controlplane.static_ip }}
           register: bootstrap_retry
           failed_when: false
           timeout: 300
@@ -155,8 +197,8 @@
         - name: Check etcd health again (5 minutes)
           command: >
             talosctl etcd members
-            --nodes {{ first_controlplane.ip }}
-            --endpoints {{ first_controlplane.ip }}
+            --nodes {{ first_controlplane.static_ip }}
+            --endpoints {{ first_controlplane.static_ip }}
             --talosconfig {{ talosconfig_file }}
           register: etcd_retry_check
           retries: 10
@@ -168,8 +210,8 @@
     - name: Wait for Kubernetes API to respond
       command: >
         talosctl get members
-        --nodes {{ first_controlplane.ip }}
-        --endpoints {{ first_controlplane.ip }}
+        --nodes {{ first_controlplane.static_ip }}
+        --endpoints {{ first_controlplane.static_ip }}
         --talosconfig {{ talosconfig_file }}
       register: api_check
       retries: 15
@@ -198,8 +240,8 @@
     - name: Extract kubeconfig from cluster
       command: >
         talosctl kubeconfig
-        --nodes {{ first_controlplane.ip }}
-        --endpoints {{ first_controlplane.ip }}
+        --nodes {{ first_controlplane.static_ip }}
+        --endpoints {{ first_controlplane.static_ip }}
         --talosconfig {{ talosconfig_file }}
         --force
         {{ kubeconfig_dest }}
@@ -248,12 +290,12 @@
 
           ### Control Plane Nodes
           {% for host in controlplane_hosts %}
-          - {{ host.name }} ({{ host.ip }})
+          - {{ host.name }} ({{ host.static_ip }})
           {% endfor %}
 
           ### Worker Nodes
           {% for host in worker_hosts %}
-          - {{ host.name }} ({{ host.ip }})
+          - {{ host.name }} ({{ host.static_ip }})
           {% endfor %}
 
           ## Access Information
@@ -269,7 +311,7 @@
           ### Quick Access Commands
           ```bash
           # Check Talos nodes
-          talosctl --talosconfig {{ talosconfig_file }} --nodes {{ first_controlplane.ip }} get members
+          talosctl --talosconfig {{ talosconfig_file }} --nodes {{ first_controlplane.static_ip }} get members
 
           # Check Kubernetes nodes
           kubectl get nodes -o wide
@@ -278,7 +320,7 @@
           kubectl get pods -A
 
           # Talos dashboard (if available)
-          talosctl dashboard --nodes {{ first_controlplane.ip }} --talosconfig {{ talosconfig_file }}
+          talosctl dashboard --nodes {{ first_controlplane.static_ip }} --talosconfig {{ talosconfig_file }}
           ```
 
           ## Current Cluster Status
@@ -342,21 +384,21 @@
 
           ### Check Talos Service Status
           ```bash
-          talosctl --nodes {{ first_controlplane.ip }} services
+          talosctl --nodes {{ first_controlplane.static_ip }} services
           ```
 
           ### View Talos Logs
           ```bash
           # Kubelet logs
-          talosctl --nodes {{ first_controlplane.ip }} logs kubelet
+          talosctl --nodes {{ first_controlplane.static_ip }} logs kubelet
 
           # API server logs
-          talosctl --nodes {{ first_controlplane.ip }} logs controller-runtime
+          talosctl --nodes {{ first_controlplane.static_ip }} logs controller-runtime
           ```
 
           ### Check etcd Health
           ```bash
-          talosctl --nodes {{ first_controlplane.ip }} etcd members
+          talosctl --nodes {{ first_controlplane.static_ip }} etcd members
           ```
 
           ### Reset a Node (DANGER!)
@@ -391,7 +433,7 @@
           - "Quick start:"
           - "  kubectl get nodes  # Will show NotReady until CNI installed"
           - "  kubectl get pods -A"
-          - "  talosctl --nodes {{ first_controlplane.ip }} etcd members"
+          - "  talosctl --nodes {{ first_controlplane.static_ip }} etcd members"
           - ""
           - "IMPORTANT: Nodes will be NotReady until kube-ovn CNI is installed!"
           - "  This is expected. etcd and Kubernetes API are running."
