@@ -112,11 +112,37 @@ class MAASClient:
                     text=True,
                     check=True
                 )
-                return yaml.safe_load(result.stdout)
+                machine_data = yaml.safe_load(result.stdout)
+
+                # Try to fetch power parameters separately if empty
+                if machine_data and (not machine_data.get('power_parameters') or not machine_data['power_parameters']):
+                    power_params = self.get_power_parameters(system_id)
+                    if power_params:
+                        machine_data['power_parameters'] = power_params
+
+                return machine_data
             except subprocess.CalledProcessError as e:
                 print(f"Error fetching machine {system_id}: {e.stderr}", file=sys.stderr)
                 return {}
         return self._make_request(f'machines/{system_id}/')
+
+    def get_power_parameters(self, system_id: str) -> Dict:
+        """Fetch power parameters for a machine"""
+        if self.use_cli:
+            try:
+                result = subprocess.run(
+                    ['maas', self.profile_name, 'machine', 'power-parameters', system_id],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                return yaml.safe_load(result.stdout)
+            except subprocess.CalledProcessError as e:
+                if os.environ.get('DEBUG'):
+                    print(f"Debug: Could not fetch power parameters for {system_id}: {e.stderr}", file=sys.stderr)
+                return {}
+        # HTTP API includes power_parameters in machine details
+        return {}
 
     def get_subnets(self) -> List[Dict]:
         """Fetch all subnets from MAAS"""
