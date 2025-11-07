@@ -54,9 +54,24 @@ machine:
       interfaces:
 {% if host.network_config is defined %}
 {# Advanced networking configuration from per-host network_config #}
+{# First, identify parent interfaces and group VLANs under them #}
+{% set processed = namespace(interfaces=[]) %}
 {% for iface_config in host.network_config %}
+{% if iface_config.vlan is not defined %}
+{# This is a parent interface (physical, bond, etc.) #}
+{% set parent_name = iface_config.interface %}
+{# Find all VLANs that belong to this parent #}
+{% set vlans = [] %}
+{% for vlan_config in host.network_config %}
+{% if vlan_config.vlan is defined and vlan_config.interface.startswith(parent_name + '.') %}
+{% set _ = vlans.append(vlan_config) %}
+{% endif %}
+{% endfor %}
         - interface: {{ iface_config.interface }}
-{% if iface_config.addresses is defined %}
+{% if iface_config.dhcp is defined %}
+          dhcp: {{ iface_config.dhcp | lower }}
+{% endif %}
+{% if iface_config.addresses is defined and iface_config.addresses | length > 0 %}
           addresses:
 {% for addr in iface_config.addresses %}
             - {{ addr }}
@@ -64,10 +79,6 @@ machine:
 {% endif %}
 {% if iface_config.mtu is defined %}
           mtu: {{ iface_config.mtu }}
-{% endif %}
-{% if iface_config.vlan is defined %}
-          vlan:
-            vlanId: {{ iface_config.vlan.vlanId }}
 {% endif %}
 {% if iface_config.bond is defined %}
           bond:
@@ -102,8 +113,34 @@ machine:
 {% endif %}
 {% endfor %}
 {% endif %}
-{% if iface_config.dhcp is defined %}
-          dhcp: {{ iface_config.dhcp | lower }}
+{% if vlans | length > 0 %}
+          vlans:
+{% for vlan_config in vlans %}
+            - vlanId: {{ vlan_config.vlan.vlanId }}
+{% if vlan_config.addresses is defined %}
+              addresses:
+{% for addr in vlan_config.addresses %}
+                - {{ addr }}
+{% endfor %}
+{% endif %}
+{% if vlan_config.mtu is defined %}
+              mtu: {{ vlan_config.mtu }}
+{% endif %}
+{% if vlan_config.routes is defined %}
+              routes:
+{% for route in vlan_config.routes %}
+                - network: {{ route.network }}
+                  gateway: {{ route.gateway }}
+{% if route.metric is defined %}
+                  metric: {{ route.metric }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if vlan_config.dhcp is defined %}
+              dhcp: {{ vlan_config.dhcp | lower }}
+{% endif %}
+{% endfor %}
+{% endif %}
 {% endif %}
 {% endfor %}
 {% else %}
