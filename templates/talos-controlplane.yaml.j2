@@ -21,7 +21,26 @@ machine:
                   - rw
         nodeIP:
             validSubnets:
-                - {{ host.ip | ansible.utils.ipaddr('network') }}/{{ network_netmask }}
+{% if host.network_config is defined %}
+{# Find the primary IP with its CIDR from network_config #}
+{% set primary_cidr = namespace(value=none) %}
+{% for iface_config in host.network_config %}
+{% if iface_config.addresses is defined %}
+{% for addr in iface_config.addresses %}
+{% if addr.split('/')[0] == host.ip %}
+{% set primary_cidr.value = addr %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% if primary_cidr.value %}
+                - {{ primary_cidr.value | ansible.utils.ipaddr('network/prefix') }}
+{% else %}
+                - {{ (host.ip + '/' + network_netmask|string) | ansible.utils.ipaddr('network/prefix') }}
+{% endif %}
+{% else %}
+                - {{ (host.ip + '/' + network_netmask|string) | ansible.utils.ipaddr('network/prefix') }}
+{% endif %}
 {% if not kubespan_enabled %}
                 - "!100.64.0.0/10"
 {% endif %}
@@ -217,9 +236,47 @@ cluster:
             crt: {{ talos_etcd_ca_crt }}
             key: {{ talos_etcd_ca_key }}
         advertisedSubnets:
-            - {{ host.ip | ansible.utils.ipaddr('network') }}/{{ network_netmask }}
+{% if host.network_config is defined %}
+{# Find the primary IP with its CIDR from network_config #}
+{% set primary_cidr = namespace(value=none) %}
+{% for iface_config in host.network_config %}
+{% if iface_config.addresses is defined %}
+{% for addr in iface_config.addresses %}
+{% if addr.split('/')[0] == host.ip %}
+{% set primary_cidr.value = addr %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% if primary_cidr.value %}
+            - {{ primary_cidr.value | ansible.utils.ipaddr('network/prefix') }}
+{% else %}
+            - {{ (host.ip + '/' + network_netmask|string) | ansible.utils.ipaddr('network/prefix') }}
+{% endif %}
+{% else %}
+            - {{ (host.ip + '/' + network_netmask|string) | ansible.utils.ipaddr('network/prefix') }}
+{% endif %}
         listenSubnets:
-            - {{ host.ip | ansible.utils.ipaddr('network') }}/{{ network_netmask }}
+{% if host.network_config is defined %}
+{# Find the primary IP with its CIDR from network_config #}
+{% set primary_cidr = namespace(value=none) %}
+{% for iface_config in host.network_config %}
+{% if iface_config.addresses is defined %}
+{% for addr in iface_config.addresses %}
+{% if addr.split('/')[0] == host.ip %}
+{% set primary_cidr.value = addr %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% endfor %}
+{% if primary_cidr.value %}
+            - {{ primary_cidr.value | ansible.utils.ipaddr('network/prefix') }}
+{% else %}
+            - {{ (host.ip + '/' + network_netmask|string) | ansible.utils.ipaddr('network/prefix') }}
+{% endif %}
+{% else %}
+            - {{ (host.ip + '/' + network_netmask|string) | ansible.utils.ipaddr('network/prefix') }}
+{% endif %}
 
     extraManifests: []
     inlineManifests: []
