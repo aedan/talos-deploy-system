@@ -3,14 +3,18 @@ all:
   hosts:
     localhost:
       ansible_connection: local
+
       # Network configuration
       dhcp_interface: eth0                       # Change to your network interface (e.g., eno1, ens192)
       domain: pxe.local                          # Your internal domain name
+
       # DHCP range (for fallback, actual IPs come from static assignments)
       dhcp_range:
         start: 192.168.1.100
         end: 192.168.1.150
+
       lease_time: "12h"
+
       # Talos Image Factory configuration
       talos_version: v1.11.3                     # Talos Linux version
       talos_arch: amd64                          # Architecture (amd64, arm64)
@@ -19,6 +23,7 @@ all:
         - siderolabs/util-linux-tools
       talos_extra_kernel_args: []                # Optional extra kernel arguments
       # talos_download_iso: true                 # Uncomment to download ISO file
+
       # PXE boot configuration
       pxe_boot_image: /var/lib/tftpboot/pxelinux.0
       pxe_kernel: kernel-amd64                   # Relative to tftp_root
@@ -28,13 +33,16 @@ all:
       pxe_boot_params: talos.platform=metal console=tty0 init_on_alloc=1 slab_nomerge pti=on consoleblank=0 nvme_core.io_timeout=4294967295 printk.devkmsg=on selinux=1
       pxe_timeout: 30                             # Timeout in deciseconds (30 = 3 seconds)
       pxe_default_label: talos-install            # Auto-boot this label on timeout
+
       # DNS settings (optional)
       dns_enabled: true  # Set to false to disable DNS functions
+
       # Talos Cluster Configuration
       talos_cluster_name: cluster.local
       talos_cluster_endpoint: https://talos-api.example.com:6443
       talos_kubernetes_version: v1.34.1
       kubespan_enabled: false                    # Enable KubeSpan for multi-site or cross-network deployments
+
       # Network configuration
       network_gateway: 192.168.1.1              # Default gateway
       network_netmask: 24                        # CIDR netmask
@@ -47,6 +55,7 @@ all:
         # - eno2
         # - eno3
         # - eno4
+
       # Longhorn configuration
       longhorn_mount_path: /var/lib/longhorn
       # This section will be populated by the script

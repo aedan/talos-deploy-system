@@ -696,10 +696,16 @@ def convert_maas_to_inventory(
     if 'localhost' not in inventory['all']['hosts']:
         inventory['all']['hosts']['localhost'] = {
             'ansible_connection': 'local',
-            'dhcp_interface': 'eth0',
-            'domain': domain,
         }
-    
+
+    localhost = inventory['all']['hosts']['localhost']
+
+    # Set basic configuration if not already set by template
+    if 'dhcp_interface' not in localhost:
+        localhost['dhcp_interface'] = 'eth0'
+    if 'domain' not in localhost:
+        localhost['domain'] = domain
+
     # Fetch subnets from MAAS
     print("Fetching subnets from MAAS...")
     subnets = maas_client.get_subnets()
@@ -710,21 +716,110 @@ def convert_maas_to_inventory(
         network_settings = extract_network_settings(pxe_subnet)
 
         # Update localhost with network settings from MAAS
-        inventory['all']['hosts']['localhost'].update(network_settings)
-        inventory['all']['hosts']['localhost']['network_mtu'] = 1500  # default MTU
-        inventory['all']['hosts']['localhost']['network_ignored_interfaces'] = []  # Per-host overrides
+        localhost.update(network_settings)
 
-        # Add Talos/Kubernetes defaults if not in template
-        if 'longhorn_mount_path' not in inventory['all']['hosts']['localhost']:
-            inventory['all']['hosts']['localhost']['longhorn_mount_path'] = '/var/lib/longhorn'
-
-        if 'talos_extensions' not in inventory['all']['hosts']['localhost']:
-            inventory['all']['hosts']['localhost']['talos_extensions'] = [
-                'siderolabs/iscsi-tools',
-                'siderolabs/util-linux-tools'
-            ]
+        # Set DHCP range if not in template
+        if 'dhcp_range' not in localhost:
+            # Calculate reasonable DHCP range from subnet
+            cidr = pxe_subnet.get('cidr', '192.168.1.0/24')
+            if '/' in cidr:
+                network_base = cidr.split('/')[0]
+                base_parts = network_base.rsplit('.', 1)[0]
+                localhost['dhcp_range'] = {
+                    'start': f"{base_parts}.100",
+                    'end': f"{base_parts}.150"
+                }
+            else:
+                localhost['dhcp_range'] = {
+                    'start': '192.168.1.100',
+                    'end': '192.168.1.150'
+                }
     else:
         print("Warning: No PXE subnet found in MAAS")
+        # Set fallback network settings
+        if 'network_gateway' not in localhost:
+            localhost['network_gateway'] = '192.168.1.1'
+        if 'network_netmask' not in localhost:
+            localhost['network_netmask'] = 24
+        if 'network_nameservers' not in localhost:
+            localhost['network_nameservers'] = ['8.8.8.8', '1.1.1.1']
+        if 'dhcp_range' not in localhost:
+            localhost['dhcp_range'] = {
+                'start': '192.168.1.100',
+                'end': '192.168.1.150'
+            }
+
+    # Set all remaining defaults if not in template
+    if 'lease_time' not in localhost:
+        localhost['lease_time'] = '12h'
+
+    if 'network_mtu' not in localhost:
+        localhost['network_mtu'] = 1500
+
+    if 'network_ignored_interfaces' not in localhost:
+        localhost['network_ignored_interfaces'] = []
+
+    # Talos Image Factory configuration
+    if 'talos_version' not in localhost:
+        localhost['talos_version'] = 'v1.11.3'
+
+    if 'talos_arch' not in localhost:
+        localhost['talos_arch'] = 'amd64'
+
+    if 'talos_extensions' not in localhost:
+        localhost['talos_extensions'] = [
+            'siderolabs/iscsi-tools',
+            'siderolabs/util-linux-tools'
+        ]
+
+    if 'talos_extra_kernel_args' not in localhost:
+        localhost['talos_extra_kernel_args'] = []
+
+    # PXE boot configuration
+    if 'pxe_boot_image' not in localhost:
+        localhost['pxe_boot_image'] = '/var/lib/tftpboot/pxelinux.0'
+
+    if 'pxe_kernel' not in localhost:
+        localhost['pxe_kernel'] = 'kernel-amd64'
+
+    if 'pxe_initrd' not in localhost:
+        localhost['pxe_initrd'] = 'initramfs-amd64.xz'
+
+    if 'pxe_boot_label' not in localhost:
+        localhost['pxe_boot_label'] = 'talos-install'
+
+    if 'pxe_boot_menu_text' not in localhost:
+        localhost['pxe_boot_menu_text'] = 'Install Talos Linux'
+
+    if 'pxe_boot_params' not in localhost:
+        localhost['pxe_boot_params'] = 'talos.platform=metal console=tty0 init_on_alloc=1 slab_nomerge pti=on consoleblank=0 nvme_core.io_timeout=4294967295 printk.devkmsg=on selinux=1'
+
+    if 'pxe_timeout' not in localhost:
+        localhost['pxe_timeout'] = 30
+
+    if 'pxe_default_label' not in localhost:
+        localhost['pxe_default_label'] = 'talos-install'
+
+    # DNS settings
+    if 'dns_enabled' not in localhost:
+        localhost['dns_enabled'] = True
+
+    # Talos Cluster Configuration
+    if 'talos_cluster_name' not in localhost:
+        localhost['talos_cluster_name'] = 'cluster.local'
+
+    if 'talos_cluster_endpoint' not in localhost:
+        localhost['talos_cluster_endpoint'] = 'https://talos-api.example.com:6443'
+
+    if 'talos_kubernetes_version' not in localhost:
+        localhost['talos_kubernetes_version'] = 'v1.34.1'
+
+    if 'kubespan_enabled' not in localhost:
+        localhost['kubespan_enabled'] = False
+
+    # Longhorn configuration
+    if 'longhorn_mount_path' not in localhost:
+        localhost['longhorn_mount_path'] = '/var/lib/longhorn'
 
     # Fetch machines from MAAS
     print("Fetching machines from MAAS...")
