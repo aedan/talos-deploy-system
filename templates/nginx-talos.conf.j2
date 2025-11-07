@@ -1,5 +1,5 @@
 server {
-    listen {{ pxe_server_ip | default('0.0.0.0') }}:8080;
+    listen {{ pxe_server_address | default('0.0.0.0') }}:8080;
     server_name _;
 
     # Serve Talos installer images

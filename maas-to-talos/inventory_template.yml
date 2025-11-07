@@ -7,6 +7,7 @@ all:
       # Network configuration
       dhcp_interface: eth0                       # Change to your network interface (e.g., eno1, ens192)
       domain: pxe.local                          # Your internal domain name
+      pxe_server_address: 192.168.1.10           # PXE/HTTP server IP or hostname (for serving Talos installer images)
 
       # DHCP range (for fallback, actual IPs come from static assignments)
       dhcp_range:

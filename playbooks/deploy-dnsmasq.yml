@@ -324,11 +324,6 @@
         enabled: yes
         state: started
 
-    - name: Get server IP address
-      set_fact:
-        pxe_server_ip: "{{ hostvars[inventory_hostname]['ansible_' + dnsmasq_interface].ipv4.address }}"
-      when: hostvars[inventory_hostname]['ansible_' + dnsmasq_interface] is defined
-
     - name: Display deployment summary
       debug:
         msg:
@@ -344,7 +339,8 @@
           - "Initramfs downloaded: {{ 'Yes' if initramfs_download is succeeded else 'No/Skipped' }}"
           - "Installer image downloaded: {{ 'Yes' if installer_download is succeeded else 'No/Skipped' }}"
           - "HTTP server (nginx) enabled: Yes"
-          - "Installer image URL: http://{{ pxe_server_ip | default('SERVER_IP') }}:8080/talos-images/{{ talos_schematic_id | default('SCHEMATIC_ID') }}-{{ talos_version | default('VERSION') }}.raw.xz"
+          - "PXE server address: {{ pxe_server_address | default('not configured') }}"
+          - "Installer image URL: http://{{ pxe_server_address | default('SERVER_IP') }}:8080/talos-images/{{ talos_schematic_id | default('SCHEMATIC_ID') }}-{{ talos_version | default('VERSION') }}.raw.xz"
 
   handlers:
     - name: restart dnsmasq

@@ -753,6 +753,10 @@ def convert_maas_to_inventory(
     if 'lease_time' not in localhost:
         localhost['lease_time'] = '12h'
 
+    if 'pxe_server_address' not in localhost:
+        # Default to gateway IP or fallback
+        localhost['pxe_server_address'] = localhost.get('network_gateway', '192.168.1.10')
+
     if 'network_mtu' not in localhost:
         localhost['network_mtu'] = 1500
 

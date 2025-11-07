@@ -116,6 +116,7 @@
         talos_extensions: "{{ hostvars[inventory_hostname]['talos_extensions'] | default([]) }}"
         talos_extra_kernel_args: "{{ hostvars[inventory_hostname]['talos_extra_kernel_args'] | default([]) }}"
         kubespan_enabled: "{{ hostvars[inventory_hostname]['kubespan_enabled'] | default(false) }}"
+        pxe_server_address: "{{ hostvars[inventory_hostname]['pxe_server_address'] | default('') }}"
 
     - name: Generate Talos schematic file
       template:
@@ -141,15 +142,10 @@
       debug:
         msg: "Talos schematic ID: {{ talos_schematic_id }}"
 
-    - name: Get PXE server IP address
-      set_fact:
-        pxe_server_ip: "{{ hostvars[inventory_hostname]['ansible_' + dhcp_interface].ipv4.address }}"
-      when: hostvars[inventory_hostname]['ansible_' + dhcp_interface] is defined
-
     - name: Set installer image URL
       set_fact:
-        talos_installer_url: "http://{{ pxe_server_ip }}:8080/talos-images/{{ talos_schematic_id }}-{{ talos_version }}.raw.xz"
-      when: pxe_server_ip is defined
+        talos_installer_url: "http://{{ pxe_server_address }}:8080/talos-images/{{ talos_schematic_id }}-{{ talos_version }}.raw.xz"
+      when: pxe_server_address is defined
 
     - name: Display installer image URL
       debug:
