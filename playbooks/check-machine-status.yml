@@ -111,7 +111,7 @@
               'name': item.item.name,
               'static_ip': item.item.static_ip,
               'dynamic_ip': item.item.dynamic_ip,
-              'working_ip': (item.stdout | regex_search('IP_USED=([^\n]+)', '\\1'))[0] if item.stdout is defined and 'IP_USED=' in item.stdout else 'NONE',
+              'working_ip': item.stdout | regex_search('IP_USED=([^\n]+)', '\\1') if (item.stdout is defined and 'IP_USED=' in item.stdout) else 'NONE',
               'role': item.item.role,
               'mac': item.item.mac
             }]
