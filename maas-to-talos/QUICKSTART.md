@@ -52,7 +52,9 @@ This will:
 - Read configuration from `maas_config.ini`
 - Connect to MAAS and fetch machine data
 - Extract network settings from PXE subnet
-- Generate `inventory.yml`
+- **Extract detailed network configuration** (interfaces, VLANs, bonds, routes, MTU)
+- **Automatically unwrap bridges** into bonds or simple interfaces
+- Generate `inventory.yml` with complete network configuration
 
 ### Alternative: Run with command line arguments (skip config file):
 ```bash
@@ -104,6 +106,7 @@ After generating the inventory:
 
 ## Example Output
 
+### Simple Configuration
 ```yaml
 all:
   hosts:
@@ -114,10 +117,58 @@ all:
           ip: 192.168.1.101
           role: controlplane
           install_disk: /dev/sda
+          ignored_interfaces:
+            - eno2
+            - eno3
           oob_type: ilo
           oob_address: 192.168.1.201
           oob_username: Administrator
           oob_password: changeme
 ```
+
+### Advanced Configuration (with VLANs, Bonds, Multiple IPs)
+```yaml
+all:
+  hosts:
+    localhost:
+      pxe_hosts:
+        - name: node01.pxe.local
+          mac: 52:54:00:12:34:56
+          ip: 192.168.1.101
+          role: controlplane
+          install_disk: /dev/sda
+          network_config:
+            - interface: eno1
+              addresses:
+                - 192.168.1.101/24
+                - 192.168.1.102/24
+              mtu: 9000
+              routes:
+                - network: 0.0.0.0/0
+                  gateway: 192.168.1.1
+            - interface: eno1.100
+              vlan:
+                vlanId: 100
+                vlanProtocol: 802.1q
+              addresses:
+                - 172.16.0.101/24
+            - interface: bond0
+              bond:
+                mode: 802.3ad
+                lacpRate: fast
+                interfaces:
+                  - eno2
+                  - eno3
+              addresses:
+                - 10.0.0.101/24
+          ignored_interfaces:
+            - eno4
+          oob_type: ilo
+          oob_address: 192.168.1.201
+          oob_username: Administrator
+          oob_password: changeme
+```
+
+**Note**: The script automatically detects complex network configurations and generates the appropriate format. Bridges are automatically unwrapped into bonds or simple interfaces.
 
 For detailed documentation, see [README.md](README.md)

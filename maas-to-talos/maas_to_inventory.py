@@ -379,6 +379,287 @@ def get_ignored_interfaces(machine: Dict, boot_interface_name: str) -> List[str]
     return ignored
 
 
+def extract_network_config(machine: Dict, pxe_subnet: Dict) -> tuple[List[Dict], List[str]]:
+    """
+    Extract detailed network configuration from MAAS machine
+
+    This function extracts all network interfaces, addresses, VLANs, bonds, and routes.
+    It also handles bridge unwrapping - converting bridges to bonds if they contain
+    multiple interfaces, or to simple interfaces if they contain only one.
+
+    Args:
+        machine: Machine data from MAAS
+        pxe_subnet: PXE subnet data for extracting default gateway
+
+    Returns:
+        Tuple of (network_config list, ignored_interfaces list)
+    """
+    network_config = []
+    ignored_interfaces = []
+    processed_interfaces = set()  # Track which physical interfaces we've processed
+
+    interfaces = machine.get('interface_set', [])
+
+    # First pass: Process bridges and unwrap them
+    bridge_mappings = {}  # Map bridge name to underlying interfaces
+
+    for iface in interfaces:
+        iface_type = iface.get('type')
+        iface_name = iface.get('name')
+
+        if iface_type == 'bridge':
+            # Get interfaces that are part of this bridge
+            bridge_members = []
+            parents = iface.get('parents', [])
+
+            # Find physical interfaces in this bridge
+            for parent_name in parents:
+                for potential_member in interfaces:
+                    if potential_member.get('name') == parent_name:
+                        if potential_member.get('type') == 'physical':
+                            bridge_members.append(parent_name)
+                            processed_interfaces.add(parent_name)
+
+            if bridge_members:
+                bridge_mappings[iface_name] = {
+                    'members': bridge_members,
+                    'config': iface
+                }
+
+    # Second pass: Process all interfaces
+    for iface in interfaces:
+        iface_type = iface.get('type')
+        iface_name = iface.get('name')
+        iface_enabled = iface.get('enabled', True)
+
+        # Skip disabled interfaces
+        if not iface_enabled:
+            if iface_type == 'physical':
+                ignored_interfaces.append(iface_name)
+            continue
+
+        # Skip physical interfaces that are part of bridges (they'll be processed as bonds)
+        if iface_name in processed_interfaces:
+            continue
+
+        config_entry = None
+
+        if iface_type == 'bridge':
+            # Unwrap bridge into bond or simple interface
+            if iface_name in bridge_mappings:
+                bridge_info = bridge_mappings[iface_name]
+                members = bridge_info['members']
+                bridge_config = bridge_info['config']
+
+                if len(members) > 1:
+                    # Multiple interfaces -> create bond
+                    config_entry = {
+                        'interface': f"bond-{iface_name}",  # Give it a unique name
+                        'bond': {
+                            'mode': '802.3ad',  # Default to LACP
+                            'lacpRate': 'fast',
+                            'interfaces': members
+                        }
+                    }
+                elif len(members) == 1:
+                    # Single interface -> use the interface directly
+                    config_entry = {
+                        'interface': members[0]
+                    }
+
+                # Extract IPs from bridge and assign to the bond/interface
+                if config_entry:
+                    addresses = []
+                    routes = []
+
+                    for link in bridge_config.get('links', []):
+                        if link.get('mode') == 'static' and link.get('ip_address'):
+                            ip_addr = link['ip_address']
+                            subnet_id = link.get('subnet')
+
+                            # Find subnet to get CIDR
+                            cidr = None
+                            if subnet_id:
+                                # Try to match subnet from pxe_subnet or extract from link
+                                subnet_info = link.get('subnet_info', {})
+                                if subnet_info:
+                                    cidr = subnet_info.get('cidr', '')
+
+                            # Fallback: use pxe_subnet netmask
+                            if not cidr or '/' not in cidr:
+                                pxe_cidr = pxe_subnet.get('cidr', '0.0.0.0/24')
+                                netmask = pxe_cidr.split('/')[-1]
+                                ip_with_mask = f"{ip_addr}/{netmask}"
+                            else:
+                                netmask = cidr.split('/')[-1]
+                                ip_with_mask = f"{ip_addr}/{netmask}"
+
+                            addresses.append(ip_with_mask)
+
+                    if addresses:
+                        config_entry['addresses'] = addresses
+
+                    # Add default route if this has the primary IP
+                    if addresses and pxe_subnet.get('gateway_ip'):
+                        routes.append({
+                            'network': '0.0.0.0/0',
+                            'gateway': pxe_subnet['gateway_ip']
+                        })
+                        config_entry['routes'] = routes
+
+                    # Add MTU if specified
+                    if bridge_config.get('effective_mtu'):
+                        config_entry['mtu'] = bridge_config['effective_mtu']
+
+        elif iface_type == 'physical':
+            # Regular physical interface
+            links = iface.get('links', [])
+            addresses = []
+            routes = []
+
+            for link in links:
+                if link.get('mode') == 'static' and link.get('ip_address'):
+                    ip_addr = link['ip_address']
+
+                    # Get subnet CIDR
+                    subnet_info = link.get('subnet', {})
+                    if isinstance(subnet_info, dict):
+                        cidr = subnet_info.get('cidr', '')
+                    else:
+                        cidr = ''
+
+                    # Extract netmask
+                    if cidr and '/' in cidr:
+                        netmask = cidr.split('/')[-1]
+                    else:
+                        # Fallback to pxe_subnet
+                        pxe_cidr = pxe_subnet.get('cidr', '0.0.0.0/24')
+                        netmask = pxe_cidr.split('/')[-1]
+
+                    ip_with_mask = f"{ip_addr}/{netmask}"
+                    addresses.append(ip_with_mask)
+
+            if addresses:
+                config_entry = {
+                    'interface': iface_name,
+                    'addresses': addresses
+                }
+
+                # Add MTU if specified
+                if iface.get('effective_mtu'):
+                    config_entry['mtu'] = iface['effective_mtu']
+
+                # Add default route to the first interface with an IP
+                # (usually the boot interface)
+                if pxe_subnet.get('gateway_ip') and len(network_config) == 0:
+                    routes.append({
+                        'network': '0.0.0.0/0',
+                        'gateway': pxe_subnet['gateway_ip']
+                    })
+                    config_entry['routes'] = routes
+            else:
+                # No IP address -> add to ignored interfaces
+                ignored_interfaces.append(iface_name)
+
+        elif iface_type == 'vlan':
+            # VLAN interface
+            vlan_id = iface.get('vlan', {}).get('vid') if isinstance(iface.get('vlan'), dict) else None
+
+            if vlan_id:
+                addresses = []
+
+                for link in iface.get('links', []):
+                    if link.get('mode') == 'static' and link.get('ip_address'):
+                        ip_addr = link['ip_address']
+
+                        # Get subnet CIDR
+                        subnet_info = link.get('subnet', {})
+                        if isinstance(subnet_info, dict):
+                            cidr = subnet_info.get('cidr', '')
+                            netmask = cidr.split('/')[-1] if '/' in cidr else '24'
+                        else:
+                            netmask = '24'
+
+                        ip_with_mask = f"{ip_addr}/{netmask}"
+                        addresses.append(ip_with_mask)
+
+                if addresses:
+                    config_entry = {
+                        'interface': iface_name,
+                        'vlan': {
+                            'vlanId': vlan_id,
+                            'vlanProtocol': '802.1q'
+                        },
+                        'addresses': addresses
+                    }
+
+                    # Add MTU if specified
+                    if iface.get('effective_mtu'):
+                        config_entry['mtu'] = iface['effective_mtu']
+
+        elif iface_type == 'bond':
+            # Bond/LAG interface
+            bond_params = iface.get('params', {})
+            bond_mode = bond_params.get('bond_mode', '802.3ad')
+
+            # Get member interfaces
+            parents = iface.get('parents', [])
+            for parent in parents:
+                processed_interfaces.add(parent)
+
+            addresses = []
+            routes = []
+
+            for link in iface.get('links', []):
+                if link.get('mode') == 'static' and link.get('ip_address'):
+                    ip_addr = link['ip_address']
+
+                    # Get subnet CIDR
+                    subnet_info = link.get('subnet', {})
+                    if isinstance(subnet_info, dict):
+                        cidr = subnet_info.get('cidr', '')
+                        netmask = cidr.split('/')[-1] if '/' in cidr else '24'
+                    else:
+                        netmask = '24'
+
+                    ip_with_mask = f"{ip_addr}/{netmask}"
+                    addresses.append(ip_with_mask)
+
+            if addresses or parents:
+                config_entry = {
+                    'interface': iface_name,
+                    'bond': {
+                        'mode': bond_mode,
+                        'interfaces': parents
+                    }
+                }
+
+                if addresses:
+                    config_entry['addresses'] = addresses
+
+                # Add LACP rate if 802.3ad
+                if '802.3ad' in bond_mode:
+                    config_entry['bond']['lacpRate'] = 'fast'
+
+                # Add MTU if specified
+                if iface.get('effective_mtu'):
+                    config_entry['mtu'] = iface['effective_mtu']
+
+                # Add default route if this has addresses
+                if addresses and pxe_subnet.get('gateway_ip') and len(network_config) == 0:
+                    routes.append({
+                        'network': '0.0.0.0/0',
+                        'gateway': pxe_subnet['gateway_ip']
+                    })
+                    config_entry['routes'] = routes
+
+        # Add config entry to network_config if we created one
+        if config_entry:
+            network_config.append(config_entry)
+
+    return network_config, ignored_interfaces
+
+
 def convert_maas_to_inventory(
     maas_client: MAASClient,
     template_file: str = None,
@@ -489,21 +770,24 @@ def convert_maas_to_inventory(
         install_disk = extract_install_disk(machine)
         role = determine_role(machine, controlplane_tag)
         boot_interface_name = extract_boot_interface_name(machine)
-        
+
         if not mac:
             print(f"Warning: No MAC address found for {hostname}, skipping")
             continue
-        
+
         if not ip:
             print(f"Warning: No IP address found for {hostname}, skipping")
             continue
-        
+
         # Build hostname with domain
         if '.' not in hostname:
             full_hostname = f"{hostname}.{domain}"
         else:
             full_hostname = hostname
-        
+
+        # Extract detailed network configuration
+        network_config, ignored_ifaces = extract_network_config(machine, pxe_subnet)
+
         # Create host entry
         host_entry = {
             'name': full_hostname,
@@ -512,16 +796,25 @@ def convert_maas_to_inventory(
             'role': role,
             'install_disk': install_disk,
         }
-        
+
+        # Add network configuration if available
+        if network_config:
+            host_entry['network_config'] = network_config
+
+            # Also add ignored interfaces from detailed config
+            if ignored_ifaces:
+                host_entry['ignored_interfaces'] = ignored_ifaces
+        else:
+            # Fallback to simple network config (backward compatible)
+            # Add ignored interfaces (all physical interfaces except boot interface)
+            ignored_interfaces = get_ignored_interfaces(machine, boot_interface_name)
+            if ignored_interfaces:
+                host_entry['ignored_interfaces'] = ignored_interfaces
+
         # Add OOB information if available
         oob_info = extract_oob_info(machine)
         if oob_info:
             host_entry.update(oob_info)
-
-        # Add ignored interfaces (all physical interfaces except boot interface)
-        ignored_interfaces = get_ignored_interfaces(machine, boot_interface_name)
-        if ignored_interfaces:
-            host_entry['ignored_interfaces'] = ignored_interfaces
 
         # Track boot interface for determining common interface name
         boot_interfaces.append(boot_interface_name)

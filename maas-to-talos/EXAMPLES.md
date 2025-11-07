@@ -242,6 +242,166 @@ all:
 
 ---
 
+## Example 6: Advanced Networking - Multiple Interfaces and VLANs
+
+### MAAS Configuration
+
+Given MAAS machines with complex network setups:
+- **node01**: Primary interface `eno1` with 192.168.1.101, VLAN interface `eno1.100` with 172.16.0.101
+- **node02**: Bond interface `bond0` (containing `eno2` + `eno3`) with 10.0.0.102
+- **node03**: Bridge `br0` (containing `eno1` + `eno2`) with 192.168.1.103
+
+### Running the Script
+
+```bash
+python3 maas_to_inventory.py
+```
+
+### Generated Inventory with Advanced Networking
+
+```yaml
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+      domain: pxe.local
+      network_gateway: 192.168.1.1
+      network_netmask: 24
+      network_nameservers:
+        - 8.8.8.8
+        - 1.1.1.1
+      pxe_hosts:
+        # Node with VLAN
+        - name: node01.pxe.local
+          mac: 52:54:00:aa:bb:01
+          ip: 192.168.1.101
+          role: controlplane
+          install_disk: /dev/sda
+          network_config:
+            - interface: eno1
+              addresses:
+                - 192.168.1.101/24
+              mtu: 1500
+              routes:
+                - network: 0.0.0.0/0
+                  gateway: 192.168.1.1
+            - interface: eno1.100
+              vlan:
+                vlanId: 100
+                vlanProtocol: 802.1q
+              addresses:
+                - 172.16.0.101/24
+              mtu: 1500
+          ignored_interfaces:
+            - eno2
+            - eno3
+
+        # Node with Bond
+        - name: node02.pxe.local
+          mac: 52:54:00:aa:bb:02
+          ip: 10.0.0.102
+          role: controlplane
+          install_disk: /dev/sda
+          network_config:
+            - interface: eno1
+              addresses:
+                - 192.168.1.102/24
+              mtu: 1500
+              routes:
+                - network: 0.0.0.0/0
+                  gateway: 192.168.1.1
+            - interface: bond0
+              bond:
+                mode: 802.3ad
+                lacpRate: fast
+                interfaces:
+                  - eno2
+                  - eno3
+              addresses:
+                - 10.0.0.102/24
+              mtu: 1500
+
+        # Node with Bridge (automatically unwrapped to bond)
+        - name: node03.pxe.local
+          mac: 52:54:00:aa:bb:03
+          ip: 192.168.1.103
+          role: worker
+          install_disk: /dev/sda
+          network_config:
+            - interface: bond-br0  # Bridge converted to bond
+              bond:
+                mode: 802.3ad
+                lacpRate: fast
+                interfaces:
+                  - eno1
+                  - eno2
+              addresses:
+                - 192.168.1.103/24
+              mtu: 1500
+              routes:
+                - network: 0.0.0.0/0
+                  gateway: 192.168.1.1
+          ignored_interfaces:
+            - eno3
+            - eno4
+```
+
+**Key Points:**
+- VLAN interfaces are preserved with proper vlanId configuration
+- Bond interfaces maintain their mode and member configuration
+- **Bridges are automatically unwrapped**:
+  - `br0` with multiple members (`eno1`, `eno2`) → Converted to `bond-br0` with 802.3ad LACP
+  - IP address from bridge transferred to the bond
+- Interfaces without IPs are added to `ignored_interfaces`
+
+---
+
+## Example 7: Bridge Unwrapping Examples
+
+### Scenario 1: Bridge with Single Interface
+
+**MAAS Configuration:**
+- Bridge: `br0`
+- Members: `eno1` only
+- IP: 192.168.1.101/24
+
+**Generated Config:**
+```yaml
+network_config:
+  - interface: eno1  # Bridge unwrapped to simple interface
+    addresses:
+      - 192.168.1.101/24
+    routes:
+      - network: 0.0.0.0/0
+        gateway: 192.168.1.1
+```
+
+### Scenario 2: Bridge with Multiple Interfaces
+
+**MAAS Configuration:**
+- Bridge: `br0`
+- Members: `eno1`, `eno2`
+- IP: 192.168.1.101/24
+
+**Generated Config:**
+```yaml
+network_config:
+  - interface: bond-br0  # Bridge converted to bond
+    bond:
+      mode: 802.3ad
+      lacpRate: fast
+      interfaces:
+        - eno1
+        - eno2
+    addresses:
+      - 192.168.1.101/24
+    routes:
+      - network: 0.0.0.0/0
+        gateway: 192.168.1.1
+```
+
+---
+
 ## Filtering and Customization
 
 ### Only Include Specific Machines
@@ -271,13 +431,15 @@ def determine_role(machine: Dict, tags: List[str]) -> str:
 
 ### Multiple Network Interfaces
 
-The script automatically handles multiple interfaces:
+The script automatically handles multiple interfaces with advanced configuration:
 
-1. **Boot interface** - Automatically detected and used as primary interface
-2. **Ignored interfaces** - All other physical interfaces are automatically added to `ignored_interfaces` list per-host
-3. **Network settings** - Extracted from DHCP-enabled PXE subnet in MAAS
+1. **All configured interfaces** - Extracted with full configuration (IPs, MTU, routes)
+2. **VLANs** - Automatically detected and configured with proper VLAN ID
+3. **Bonds** - Extracted with mode and member interfaces
+4. **Bridges** - Automatically unwrapped to bonds or simple interfaces
+5. **Ignored interfaces** - Interfaces without IPs are added to `ignored_interfaces`
 
-Generated hosts will include:
+**Simple Configuration Example** (single interface with IP):
 ```yaml
 - name: node01.pxe.local
   mac: 52:54:00:aa:bb:01
@@ -290,7 +452,41 @@ Generated hosts will include:
     - eno4
 ```
 
-The boot interface (e.g., `eno1`) is used as `network_primary_interface` globally.
+**Advanced Configuration Example** (multiple interfaces, VLANs, bonds):
+```yaml
+- name: node02.pxe.local
+  mac: 52:54:00:aa:bb:02
+  ip: 192.168.1.102
+  role: controlplane
+  install_disk: /dev/sda
+  network_config:
+    - interface: eno1
+      addresses:
+        - 192.168.1.102/24
+      mtu: 1500
+      routes:
+        - network: 0.0.0.0/0
+          gateway: 192.168.1.1
+    - interface: eno1.100
+      vlan:
+        vlanId: 100
+        vlanProtocol: 802.1q
+      addresses:
+        - 172.16.0.102/24
+    - interface: bond0
+      bond:
+        mode: 802.3ad
+        lacpRate: fast
+        interfaces:
+          - eno2
+          - eno3
+      addresses:
+        - 10.0.0.102/24
+  ignored_interfaces:
+    - eno4
+```
+
+The script automatically chooses the appropriate format based on network complexity.
 
 ---
 

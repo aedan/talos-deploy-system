@@ -33,6 +33,65 @@ machine:
     network:
       hostname: {{ host.name.split('.')[0] }}
       interfaces:
+{% if host.network_config is defined %}
+{# Advanced networking configuration from per-host network_config #}
+{% for iface_config in host.network_config %}
+        - interface: {{ iface_config.interface }}
+{% if iface_config.addresses is defined %}
+          addresses:
+{% for addr in iface_config.addresses %}
+            - {{ addr }}
+{% endfor %}
+{% endif %}
+{% if iface_config.mtu is defined %}
+          mtu: {{ iface_config.mtu }}
+{% endif %}
+{% if iface_config.vlan is defined %}
+          vlan:
+            vlanId: {{ iface_config.vlan.vlanId }}
+{% if iface_config.vlan.vlanProtocol is defined %}
+            vlanProtocol: {{ iface_config.vlan.vlanProtocol }}
+{% endif %}
+{% endif %}
+{% if iface_config.bond is defined %}
+          bond:
+            mode: {{ iface_config.bond.mode }}
+{% if iface_config.bond.lacpRate is defined %}
+            lacpRate: {{ iface_config.bond.lacpRate }}
+{% endif %}
+{% if iface_config.bond.miimon is defined %}
+            miimon: {{ iface_config.bond.miimon }}
+{% endif %}
+{% if iface_config.bond.updelay is defined %}
+            updelay: {{ iface_config.bond.updelay }}
+{% endif %}
+{% if iface_config.bond.downdelay is defined %}
+            downdelay: {{ iface_config.bond.downdelay }}
+{% endif %}
+{% if iface_config.bond.xmitHashPolicy is defined %}
+            xmitHashPolicy: {{ iface_config.bond.xmitHashPolicy }}
+{% endif %}
+            interfaces:
+{% for bond_iface in iface_config.bond.interfaces %}
+              - {{ bond_iface }}
+{% endfor %}
+{% endif %}
+{% if iface_config.routes is defined %}
+          routes:
+{% for route in iface_config.routes %}
+            - network: {{ route.network }}
+              gateway: {{ route.gateway }}
+{% if route.metric is defined %}
+              metric: {{ route.metric }}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if iface_config.dhcp is defined %}
+          dhcp: {{ iface_config.dhcp | lower }}
+{% endif %}
+{% endfor %}
+{% else %}
+{# Simple networking configuration (backward compatible) #}
         - interface: {{ network_primary_interface }}
           addresses:
             - {{ host.ip }}/{{ network_netmask }}
@@ -40,6 +99,7 @@ machine:
           routes:
             - network: 0.0.0.0/0
               gateway: {{ network_gateway }}
+{% endif %}
 {% for iface in host.ignored_interfaces | default(network_ignored_interfaces) %}
         - interface: {{ iface }}
           ignore: true

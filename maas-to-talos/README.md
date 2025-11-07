@@ -6,11 +6,18 @@ This script pulls machine data from a MAAS (Metal as a Service) deployment and g
 
 - Connects to MAAS API v2.0
 - Fetches all deployed/ready machines
-- Extracts network configuration (MAC, IP addresses)
+- **Advanced network configuration extraction:**
+  - Automatically extracts full network configuration from MAAS
+  - Supports multiple interfaces with multiple IP addresses
+  - VLAN configuration replication
+  - Bond/LAG configuration with LACP support
+  - Bridge unwrapping (converts bridges to bonds or simple interfaces)
+  - Static routes and MTU settings
+  - Ignored interfaces detection
 - Identifies installation disks
 - Detects out-of-band management (iLO, iDRAC, Redfish, IPMI)
 - Assigns roles based on MAAS tags
-- Generates properly formatted YAML inventory
+- Generates properly formatted YAML inventory for Talos deployment
 
 ## Prerequisites
 
@@ -164,7 +171,11 @@ maas admin tag update-nodes controlplane add=<machine-hostname>
 
 ## Output Structure
 
-The script generates a YAML file with the following structure:
+The script generates a YAML file with one of two formats:
+
+### Simple Networking (Backward Compatible)
+
+For machines with basic network configuration:
 
 ```yaml
 all:
@@ -178,6 +189,56 @@ all:
           ip: 192.168.1.101
           role: controlplane
           install_disk: /dev/sda
+          ignored_interfaces:
+            - eno2
+            - eno3
+          oob_type: ilo
+          oob_address: 192.168.1.201
+          oob_username: Administrator
+          oob_password: changeme
+```
+
+### Advanced Networking (NEW!)
+
+For machines with complex network configuration (multiple IPs, VLANs, bonds, bridges):
+
+```yaml
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+      domain: pxe.local
+      pxe_hosts:
+        - name: node01.pxe.local
+          mac: 52:54:00:12:34:56
+          ip: 192.168.1.101
+          role: controlplane
+          install_disk: /dev/sda
+          network_config:
+            - interface: eno1
+              addresses:
+                - 192.168.1.101/24
+              mtu: 9000
+              routes:
+                - network: 0.0.0.0/0
+                  gateway: 192.168.1.1
+            - interface: eno1.100
+              vlan:
+                vlanId: 100
+                vlanProtocol: 802.1q
+              addresses:
+                - 172.16.0.101/24
+            - interface: bond0
+              bond:
+                mode: 802.3ad
+                lacpRate: fast
+                interfaces:
+                  - eno2
+                  - eno3
+              addresses:
+                - 10.0.0.101/24
+          ignored_interfaces:
+            - eno4
           oob_type: ilo
           oob_address: 192.168.1.201
           oob_username: Administrator
@@ -221,19 +282,90 @@ The script will preserve all your custom settings and only update the `pxe_hosts
 - Check network connectivity to the MAAS server
 - Verify the MAAS server is running: `sudo systemctl status maas-rackd maas-regiond`
 
+## Advanced Networking Features
+
+### Automatic Network Configuration Extraction
+
+The script now automatically extracts comprehensive network configuration from MAAS and generates Talos-compatible network settings. This includes:
+
+#### Multiple Interfaces with Multiple IPs
+- Each interface can have multiple static IP addresses
+- All addresses are preserved in the Talos configuration
+
+#### VLAN Support
+- VLAN interfaces (e.g., `eno1.100`) are automatically detected
+- VLAN ID and protocol (802.1q) are preserved
+- IP addresses on VLANs are maintained
+
+#### Bond/LAG Support
+- Bond interfaces configured in MAAS are replicated in Talos
+- Bond mode (e.g., 802.3ad, active-backup) is preserved
+- LACP rate is set for 802.3ad bonds
+- Member interfaces are correctly configured
+
+#### Bridge Unwrapping (Special Handling)
+
+MAAS often uses bridges for VM networking, but Talos doesn't require bridges for most use cases. The script intelligently handles bridges:
+
+- **Bridge with multiple interfaces** → Converted to a Talos bond (802.3ad LACP)
+  - Example: `br0` containing `eno1` + `eno2` → `bond0` with members `eno1`, `eno2`
+
+- **Bridge with single interface** → Converted to simple interface
+  - Example: `br0` containing `eno1` → Configuration applied directly to `eno1`
+
+- **IP addresses on bridges** → Transferred to the bond or interface
+  - All static IPs configured on the bridge are assigned to the resulting interface/bond
+
+This ensures your machines have the same network connectivity in Talos as they had in MAAS, but using Talos-native configuration.
+
+#### Static Routes and MTU
+- Custom MTU settings are preserved per interface
+- Static routes are maintained
+- Default gateway is automatically configured on the primary interface
+
+#### Ignored Interfaces
+- Interfaces without IP addresses are automatically added to the ignored list
+- Disabled interfaces are excluded from configuration
+
+### How It Works
+
+1. **Network Discovery**: Script fetches full interface details from MAAS
+2. **Bridge Analysis**: Identifies bridges and their member interfaces
+3. **Configuration Extraction**: Extracts IPs, VLANs, bonds, routes, MTU for each interface
+4. **Bridge Conversion**: Converts bridges to bonds or simple interfaces as appropriate
+5. **Talos Format**: Generates proper Talos network configuration in `network_config` section
+6. **Template Application**: Ansible templates apply this configuration when generating machine files
+
+### Compatibility
+
+The script maintains **backward compatibility**:
+- Simple single-interface configurations still work with the basic format
+- Complex configurations use the new `network_config` structure
+- Both formats are supported by the Talos templates
+
 ## What Gets Extracted from MAAS
 
 | Field | MAAS Source | Notes |
 |-------|-------------|-------|
 | `name` | `hostname` + domain | FQDN of the machine |
 | `mac` | `boot_interface.mac_address` | Primary boot interface MAC |
-| `ip` | `interface_set[].links[].ip_address` | First static IP found |
+| `ip` | `interface_set[].links[].ip_address` | First static IP found (for backward compat) |
 | `role` | `tag_names` | Based on tags (controlplane/worker) |
 | `install_disk` | `blockdevice_set[]` | First physical block device |
+| `network_config` | `interface_set[]` | **NEW!** Detailed network configuration: |
+| `network_config[].interface` | `interface.name` | Interface name (e.g., eno1, bond0) |
+| `network_config[].addresses` | `links[].ip_address` + `subnet.cidr` | All static IPs with CIDR notation |
+| `network_config[].mtu` | `interface.effective_mtu` | MTU setting per interface |
+| `network_config[].vlan` | `interface.vlan.vid` | VLAN configuration (for VLAN interfaces) |
+| `network_config[].bond` | `interface.params.bond_mode` + `parents` | Bond configuration with mode and members |
+| `network_config[].routes` | `subnet.gateway_ip` | Static routes (default gateway) |
+| `ignored_interfaces` | `interface_set[]` (no IPs) | Interfaces without IP addresses |
 | `oob_type` | `power_type` | Mapped to ilo/idrac/redfish/ipmi |
 | `oob_address` | `power_parameters.power_address` | BMC IP address |
 | `oob_username` | `power_parameters.power_user` | BMC username |
 | `oob_password` | `power_parameters.power_pass` | BMC password |
+
+**Note on Bridges**: Bridge interfaces are automatically unwrapped and converted to bonds (if multiple members) or simple interfaces (if single member).
 
 ## Security Considerations
 
