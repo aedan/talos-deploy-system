@@ -247,7 +247,7 @@ all:
 
 ## Preserving Custom Configuration
 
-To preserve your custom network, DHCP, and Talos settings:
+To preserve your custom network, DHCP, HTTP server, and Talos settings:
 
 1. Save your existing inventory file as a template
 2. Use the `--template` option to merge MAAS data with your settings:
@@ -261,6 +261,12 @@ python3 maas_to_inventory.py \
 ```
 
 The script will preserve all your custom settings and only update the `pxe_hosts` section.
+
+**Custom settings preserved:**
+- Network configuration (`dhcp_interface`, `pxe_server_address`, DHCP ranges, DNS)
+- Talos settings (`talos_version`, `talos_extensions`, `talos_cluster_name`, etc.)
+- PXE boot configuration
+- All other variables in the template
 
 ## Troubleshooting
 

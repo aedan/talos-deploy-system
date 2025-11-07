@@ -8,12 +8,14 @@ Automated Ansible playbook that deploys and configures dnsmasq to provide DHCP a
 - **DHCP server** with static IP reservations
 - **MAC address whitelist** - Only serves DHCP to known machines
 - **PXE boot support** with TFTP server
+- **HTTP server (nginx)** - Serves Talos installer images locally on port 8080
 - **Automated syslinux installation** and configuration
 
 ### Talos Linux Integration
 - **Talos Image Factory API integration** - Automatically generates custom images
 - **System extensions support** - Default: iscsi-tools and util-linux-tools
-- **Automatic image downloads** - Kernel and initramfs downloaded to TFTP root
+- **Automatic image downloads** - Kernel, initramfs, and installer images downloaded locally
+- **Local installer serving** - Nodes install from local HTTP server (no external internet required)
 - **Version control** - Specify exact Talos version in inventory
 - **Architecture support** - amd64 and arm64
 
@@ -77,14 +79,15 @@ ansible-playbook -i inventory.yml playbooks/deploy-dnsmasq.yml
 ```
 
 The playbook will:
-1. Install dnsmasq and syslinux packages
+1. Install dnsmasq, syslinux, and nginx packages
 2. Configure DHCP server with your static hosts
-3. Set up TFTP server
-4. Generate Talos schematic with your extensions
-5. Upload schematic to Image Factory
-6. Download custom kernel and initramfs
-7. Configure PXE boot menu
-8. Start dnsmasq service
+3. Set up TFTP server for PXE boot files
+4. Configure nginx HTTP server on port 8080
+5. Generate Talos schematic with your extensions
+6. Upload schematic to Image Factory
+7. Download custom kernel, initramfs, and installer image
+8. Configure PXE boot menu
+9. Start dnsmasq and nginx services
 
 ### 4. Generate Talos Configurations
 
@@ -172,6 +175,7 @@ See the [extras/README.md](extras/README.md) for more information on available s
 │   ├── dnsmasq.conf.j2             # Main dnsmasq configuration
 │   ├── dnsmasq-pxe.conf.j2         # PXE-specific settings
 │   ├── dnsmasq-hosts.conf.j2       # Static DHCP reservations
+│   ├── nginx-talos.conf.j2         # nginx HTTP server configuration
 │   ├── pxelinux.cfg.default.j2     # PXE boot menu
 │   ├── talos-schematic.yaml.j2     # Talos Image Factory schematic
 │   ├── talos-controlplane.yaml.j2  # Control plane node template
@@ -203,11 +207,14 @@ See the [extras/README.md](extras/README.md) for more information on available s
 ```yaml
 dhcp_interface: eth0                # Interface to listen on
 domain: pxe.local                   # Internal domain name
+pxe_server_address: 192.168.1.10    # PXE/HTTP server IP or hostname
 dhcp_range:
   start: 192.168.1.100              # DHCP range start
   end: 192.168.1.150                # DHCP range end
 lease_time: "12h"                   # DHCP lease duration
 ```
+
+**Note:** `pxe_server_address` is used for the nginx HTTP server that serves Talos installer images on port 8080.
 
 ### Talos Image Factory
 
@@ -395,8 +402,9 @@ ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
 1. **Schematic Generation**: Creates YAML schematic with your system extensions
 2. **API Upload**: Uploads to `https://factory.talos.dev/schematics`
 3. **ID Retrieval**: Receives unique schematic ID
-4. **Image Download**: Downloads custom kernel and initramfs with extensions
-5. **PXE Configuration**: Configures boot menu for downloaded images
+4. **Image Download**: Downloads custom kernel, initramfs, and raw disk installer with extensions
+5. **Local HTTP Serving**: nginx serves installer image from `http://<pxe_server_address>:8080/talos-images/`
+6. **PXE Configuration**: Configures boot menu for downloaded images
 
 ### 2. Configuration Generation
 
@@ -434,6 +442,10 @@ dhcp-ignore=#known  # Ignore unknown MACs
 3. Machine downloads `pxelinux.0` via TFTP
 4. Boot menu is displayed
 5. Auto-boots Talos installer after 3 seconds (configurable)
+6. Kernel and initramfs downloaded via TFTP
+7. Talos boots in maintenance mode
+8. When config is applied, installer image downloads from local nginx HTTP server (port 8080)
+9. Installation proceeds without requiring external internet access
 
 ## Troubleshooting
 
@@ -527,9 +539,10 @@ talos_extra_kernel_args:
 
 ## Security Considerations
 
-- **Firewall rules**: Ensure ports 67/UDP (DHCP) and 69/UDP (TFTP) are allowed
-- **Network isolation**: Use interface binding to limit dnsmasq scope
+- **Firewall rules**: Ensure ports 67/UDP (DHCP), 69/UDP (TFTP), and 8080/TCP (HTTP) are allowed
+- **Network isolation**: Use interface binding to limit dnsmasq and nginx scope
 - **MAC filtering**: Only whitelisted machines receive DHCP
+- **HTTP server**: nginx serves only on configured `pxe_server_address`
 - **Regular updates**: Keep Talos version current for security patches
 
 ## Contributing
