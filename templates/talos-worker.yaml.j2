@@ -20,7 +20,7 @@ machine:
                   - rw
         nodeIP:
             validSubnets:
-                - {{ management_subnet }}
+                - {{ host.ip | ansible.utils.ipaddr('network') }}/{{ network_netmask }}
 {% if not kubespan_enabled %}
                 - "!100.64.0.0/10"
 {% endif %}
