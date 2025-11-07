@@ -130,6 +130,51 @@
         msg: "Talos schematic ID: {{ talos_schematic_id }}"
       when: talos_schematic_id is defined
 
+    - name: Check if talosctl is installed
+      command: which talosctl
+      register: talosctl_check
+      failed_when: false
+      changed_when: false
+      when: talos_version is defined
+
+    - name: Get current talosctl version if installed
+      command: talosctl version --client --short
+      register: talosctl_current_version
+      failed_when: false
+      changed_when: false
+      when: talos_version is defined and talosctl_check.rc == 0
+
+    - name: Determine system architecture for talosctl
+      set_fact:
+        talosctl_arch: "{{ 'amd64' if ansible_architecture == 'x86_64' else ansible_architecture }}"
+      when: talos_version is defined
+
+    - name: Download talosctl matching Talos version
+      get_url:
+        url: "https://github.com/siderolabs/talos/releases/download/{{ talos_version }}/talosctl-linux-{{ talosctl_arch }}"
+        dest: /usr/local/bin/talosctl
+        mode: '0755'
+        force: yes
+        timeout: 300
+      retries: 3
+      delay: 5
+      when: >
+        talos_version is defined and (
+          talosctl_check.rc != 0 or
+          (talosctl_current_version.stdout is defined and talos_version not in talosctl_current_version.stdout)
+        )
+
+    - name: Verify talosctl installation
+      command: talosctl version --client --short
+      register: talosctl_verify
+      changed_when: false
+      when: talos_version is defined
+
+    - name: Display talosctl version
+      debug:
+        msg: "Installed talosctl version: {{ talosctl_verify.stdout }}"
+      when: talos_version is defined and talosctl_verify.stdout is defined
+
     - name: Download Talos kernel from Image Factory
       get_url:
         url: "https://factory.talos.dev/image/{{ talos_schematic_id }}/{{ talos_version }}/kernel-{{ talos_arch }}"
