@@ -261,15 +261,15 @@
       vars:
         mode_check: "{{ mode_detection.results[idx] }}"
         is_secured: "{{ mode_check.stdout is defined and ('certificate required' in mode_check.stdout.lower() or 'tls:' in mode_check.stdout.lower()) }}"
-        # Find matching results from sparse arrays using working_ip
-        auth_ver_result: "{{ authenticated_version.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
-        auth_health_result: "{{ authenticated_health.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
-        auth_services_result: "{{ authenticated_services.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
-        auth_mconfig_result: "{{ authenticated_machineconfig.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
-        auth_extensions_result: "{{ authenticated_extensions.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
-        insec_health_result: "{{ insecure_health.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
-        insec_services_result: "{{ insecure_services.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
-        insec_mconfig_result: "{{ insecure_machineconfig.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
+        # Find matching results from sparse arrays using name
+        auth_ver_result: "{{ authenticated_version.results | selectattr('item.item.name', 'equalto', item.name) | list | first | default({}) }}"
+        auth_health_result: "{{ authenticated_health.results | selectattr('item.item.name', 'equalto', item.name) | list | first | default({}) }}"
+        auth_services_result: "{{ authenticated_services.results | selectattr('item.item.name', 'equalto', item.name) | list | first | default({}) }}"
+        auth_mconfig_result: "{{ authenticated_machineconfig.results | selectattr('item.item.name', 'equalto', item.name) | list | first | default({}) }}"
+        auth_extensions_result: "{{ authenticated_extensions.results | selectattr('item.item.name', 'equalto', item.name) | list | first | default({}) }}"
+        insec_health_result: "{{ insecure_health.results | selectattr('item.item.name', 'equalto', item.name) | list | first | default({}) }}"
+        insec_services_result: "{{ insecure_services.results | selectattr('item.item.name', 'equalto', item.name) | list | first | default({}) }}"
+        insec_mconfig_result: "{{ insecure_machineconfig.results | selectattr('item.item.name', 'equalto', item.name) | list | first | default({}) }}"
         # Select the right version based on mode
         version_output: "{{ auth_ver_result.stdout if is_secured else mode_check.stdout }}"
         health_output: "{{ auth_health_result.stdout if is_secured else insec_health_result.stdout }}"
@@ -363,30 +363,30 @@
           AUTHENTICATED CHECKS:
 
           Health Check:
-          {{ (authenticated_health.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
+          {{ (authenticated_health.results | selectattr('item.item.name', 'equalto', item.name) | list | first).stdout | default('N/A') }}
 
           Version Check:
-          {{ (authenticated_version.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
+          {{ (authenticated_version.results | selectattr('item.item.name', 'equalto', item.name) | list | first).stdout | default('N/A') }}
 
           Machine Config:
-          {{ (authenticated_machineconfig.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
+          {{ (authenticated_machineconfig.results | selectattr('item.item.name', 'equalto', item.name) | list | first).stdout | default('N/A') }}
 
           Services:
-          {{ (authenticated_services.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
+          {{ (authenticated_services.results | selectattr('item.item.name', 'equalto', item.name) | list | first).stdout | default('N/A') }}
 
           Extensions:
-          {{ (authenticated_extensions.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
+          {{ (authenticated_extensions.results | selectattr('item.item.name', 'equalto', item.name) | list | first).stdout | default('N/A') }}
           {% else %}
           INSECURE CHECKS:
 
           Health Check:
-          {{ (insecure_health.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
+          {{ (insecure_health.results | selectattr('item.item.name', 'equalto', item.name) | list | first).stdout | default('N/A') }}
 
           Machine Config:
-          {{ (insecure_machineconfig.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
+          {{ (insecure_machineconfig.results | selectattr('item.item.name', 'equalto', item.name) | list | first).stdout | default('N/A') }}
 
           Services:
-          {{ (insecure_services.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
+          {{ (insecure_services.results | selectattr('item.item.name', 'equalto', item.name) | list | first).stdout | default('N/A') }}
           {% endif %}
       loop: "{{ hosts_with_working_ip }}"
       loop_control:
