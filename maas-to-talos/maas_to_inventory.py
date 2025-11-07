@@ -105,7 +105,17 @@ class MAASClient:
     def get_machine_details(self, system_id: str) -> Dict:
         """Fetch detailed information for a specific machine"""
         if self.use_cli:
-            return self._run_cli_command(f'machine {system_id}')
+            try:
+                result = subprocess.run(
+                    ['maas', self.profile_name, 'machine', 'read', system_id],
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                return yaml.safe_load(result.stdout)
+            except subprocess.CalledProcessError as e:
+                print(f"Error fetching machine {system_id}: {e.stderr}", file=sys.stderr)
+                return {}
         return self._make_request(f'machines/{system_id}/')
 
     def get_subnets(self) -> List[Dict]:
@@ -429,6 +439,14 @@ def convert_maas_to_inventory(
             continue
 
         print(f"Processing {hostname}...")
+
+        # Fetch full machine details to get power management info
+        system_id = machine.get('system_id')
+        if system_id:
+            machine_details = maas_client.get_machine_details(system_id)
+            if machine_details:
+                # Merge details into machine dict
+                machine.update(machine_details)
 
         # Extract machine data
         mac = extract_primary_mac(machine)
