@@ -310,6 +310,10 @@ def extract_oob_info(machine: Dict) -> Dict[str, str]:
         print(f"DEBUG: Machine {machine.get('hostname', 'unknown')}")
         print(f"  power_type: {power_type}")
         print(f"  power_parameters keys: {list(power_params.keys())}")
+        if power_params:
+            print(f"  power_address: {power_params.get('power_address', 'MISSING')}")
+            print(f"  power_user: {power_params.get('power_user', 'MISSING')}")
+            print(f"  power_pass: {'***' if power_params.get('power_pass') else 'MISSING'}")
 
     oob_info = {}
 
@@ -345,7 +349,12 @@ def extract_oob_info(machine: Dict) -> Dict[str, str]:
 
     # Only return oob_info if we have at least the address
     if 'oob_address' not in oob_info:
+        if os.environ.get('DEBUG'):
+            print(f"  -> Skipping: No oob_address found")
         return {}
+
+    if os.environ.get('DEBUG'):
+        print(f"  -> Extracted OOB: type={oob_info.get('oob_type')}, address={oob_info.get('oob_address')}")
 
     return oob_info
 
