@@ -217,9 +217,9 @@ cluster:
             crt: {{ talos_etcd_ca_crt }}
             key: {{ talos_etcd_ca_key }}
         advertisedSubnets:
-            - {{ management_subnet }}
+            - {{ host.ip | ansible.utils.ipaddr('network') }}/{{ network_netmask }}
         listenSubnets:
-            - {{ management_subnet }}
+            - {{ host.ip | ansible.utils.ipaddr('network') }}/{{ network_netmask }}
 
     extraManifests: []
     inlineManifests: []
