@@ -61,12 +61,13 @@ all:
 
       # Static host reservations - only these machines will get DHCP leases
       pxe_hosts:
+        # Example 1: Simple networking (most common)
         - name: node01.pxe.local
           mac: 52:54:00:12:34:56
           ip: 192.168.1.101
           role: controlplane                     # controlplane or worker
           install_disk: /dev/sda                 # Disk for Talos installation
-          # ignored_interfaces: [eno2, eno3]     # Optional: override network_ignored_interfaces per-host
+          ignored_interfaces: [eno2, eno3]       # Optional: override network_ignored_interfaces per-host
           # Out-of-Band Management (iLO/iDRAC/Redfish)
           oob_type: ilo                          # ilo, idrac, or redfish
           oob_address: 192.168.1.201             # iLO/iDRAC IP address
@@ -112,3 +113,46 @@ all:
           oob_address: 192.168.1.205
           oob_username: root
           oob_password: changeme
+
+        # Example 2: Advanced networking with VLANs, Bonds, and Multiple IPs
+        # Uncomment and customize if you need complex network configurations
+        #
+        # - name: node06.pxe.local
+        #   mac: 52:54:00:12:34:5b
+        #   ip: 192.168.1.106                    # Primary IP for DHCP reservation
+        #   role: worker
+        #   install_disk: /dev/nvme0n1
+        #   network_config:                       # Advanced per-host network configuration
+        #     - interface: eno1                   # Primary interface
+        #       addresses:
+        #         - 192.168.1.106/24
+        #         - 192.168.1.107/24              # Multiple IPs on same interface
+        #       mtu: 9000                         # Jumbo frames
+        #       routes:
+        #         - network: 0.0.0.0/0
+        #           gateway: 192.168.1.1
+        #         - network: 10.0.0.0/8           # Additional route
+        #           gateway: 192.168.1.254
+        #     - interface: eno1.100               # VLAN interface
+        #       vlan:
+        #         vlanId: 100
+        #         vlanProtocol: 802.1q
+        #       addresses:
+        #         - 172.16.100.106/24
+        #       mtu: 1500
+        #     - interface: bond0                  # Bond/LAG interface
+        #       bond:
+        #         mode: 802.3ad                   # LACP
+        #         lacpRate: fast
+        #         interfaces:
+        #           - eno2
+        #           - eno3
+        #       addresses:
+        #         - 10.0.0.106/24
+        #       mtu: 9000
+        #   ignored_interfaces:                   # Unused interfaces
+        #     - eno4
+        #   oob_type: redfish
+        #   oob_address: 192.168.1.206
+        #   oob_username: admin
+        #   oob_password: changeme
