@@ -1,9 +1,10 @@
-# Static DHCP host reservations
-# Only machines defined here will receive IP addresses
+# DHCP host reservations for PXE booting
+# These hosts will receive dynamic IPs from dhcp_range during PXE boot
+# Static IPs will be configured in Talos machine files
 
 {% for host in pxe_hosts %}
 # {{ host.name }}
-dhcp-host={{ host.mac }},{{ host.ip }},{{ host.name }},{{ dhcp_lease_time }}
+dhcp-host={{ host.mac }},{{ host.name }},{{ lease_time }}
 {% endfor %}
 
 # Ignore unknown clients - only serve known MAC addresses
