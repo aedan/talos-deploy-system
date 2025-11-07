@@ -18,6 +18,7 @@
           - dnsmasq
           - syslinux-common
           - pxelinux
+          - nginx
         state: present
 
     - name: Create TFTP root directory
@@ -42,6 +43,7 @@
       loop:
         - pxelinux.cfg
         - images
+        - talos-images
 
     - name: Find syslinux BIOS modules directory
       shell: |
@@ -211,6 +213,24 @@
         msg: "Initramfs downloaded successfully to {{ dnsmasq_tftp_root }}/initramfs-{{ talos_arch }}.xz"
       when: initramfs_download is succeeded
 
+    - name: Download Talos installer raw disk image from Image Factory
+      get_url:
+        url: "https://factory.talos.dev/image/{{ talos_schematic_id }}/{{ talos_version }}/metal-{{ talos_arch }}.raw.xz"
+        dest: "{{ dnsmasq_tftp_root }}/talos-images/{{ talos_schematic_id }}-{{ talos_version }}.raw.xz"
+        mode: '0644'
+        force: yes
+        timeout: 1200
+      retries: 3
+      delay: 5
+      register: installer_download
+      until: installer_download is succeeded
+      when: talos_version is defined and talos_schematic_id is defined
+
+    - name: Display installer image download status
+      debug:
+        msg: "Installer image downloaded successfully to {{ dnsmasq_tftp_root }}/talos-images/{{ talos_schematic_id }}-{{ talos_version }}.raw.xz"
+      when: installer_download is succeeded
+
     - name: Verify Talos boot files exist
       stat:
         path: "{{ item }}"
@@ -233,6 +253,35 @@
         mode: '0644'
         force: yes
       when: talos_version is defined and talos_schematic_id is defined and talos_download_iso | default(false)
+
+    - name: Deploy nginx configuration for Talos image serving
+      template:
+        src: "{{ playbook_dir }}/../templates/nginx-talos.conf.j2"
+        dest: /etc/nginx/sites-available/talos-images
+        mode: '0644'
+      notify: restart nginx
+
+    - name: Enable nginx site for Talos images
+      file:
+        src: /etc/nginx/sites-available/talos-images
+        dest: /etc/nginx/sites-enabled/talos-images
+        state: link
+      notify: restart nginx
+      when: ansible_os_family == "Debian"
+
+    - name: Deploy nginx configuration for RHEL-based systems
+      copy:
+        src: /etc/nginx/sites-available/talos-images
+        dest: /etc/nginx/conf.d/talos-images.conf
+        remote_src: yes
+      notify: restart nginx
+      when: ansible_os_family == "RedHat"
+
+    - name: Enable and start nginx service
+      systemd:
+        name: nginx
+        enabled: yes
+        state: started
 
     - name: Deploy main dnsmasq configuration
       template:
@@ -275,6 +324,11 @@
         enabled: yes
         state: started
 
+    - name: Get server IP address
+      set_fact:
+        pxe_server_ip: "{{ hostvars[inventory_hostname]['ansible_' + dnsmasq_interface].ipv4.address }}"
+      when: hostvars[inventory_hostname]['ansible_' + dnsmasq_interface] is defined
+
     - name: Display deployment summary
       debug:
         msg:
@@ -288,9 +342,17 @@
           - "Talos schematic ID: {{ talos_schematic_id | default('not generated') }}"
           - "Kernel downloaded: {{ 'Yes' if kernel_download is succeeded else 'No/Skipped' }}"
           - "Initramfs downloaded: {{ 'Yes' if initramfs_download is succeeded else 'No/Skipped' }}"
+          - "Installer image downloaded: {{ 'Yes' if installer_download is succeeded else 'No/Skipped' }}"
+          - "HTTP server (nginx) enabled: Yes"
+          - "Installer image URL: http://{{ pxe_server_ip | default('SERVER_IP') }}:8080/talos-images/{{ talos_schematic_id | default('SCHEMATIC_ID') }}-{{ talos_version | default('VERSION') }}.raw.xz"
 
   handlers:
     - name: restart dnsmasq
       systemd:
         name: dnsmasq
+        state: restarted
+
+    - name: restart nginx
+      systemd:
+        name: nginx
         state: restarted

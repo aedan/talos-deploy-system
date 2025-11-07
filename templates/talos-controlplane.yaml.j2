@@ -173,7 +173,11 @@ machine:
 
     install:
         disk: {{ host.install_disk }}
+{% if talos_installer_url is defined %}
+        image: {{ talos_installer_url }}
+{% else %}
         image: factory.talos.dev/installer/{{ talos_schematic_id }}:{{ talos_version }}
+{% endif %}
         wipe: false
 
     registries: {}

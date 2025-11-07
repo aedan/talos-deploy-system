@@ -141,6 +141,20 @@
       debug:
         msg: "Talos schematic ID: {{ talos_schematic_id }}"
 
+    - name: Get PXE server IP address
+      set_fact:
+        pxe_server_ip: "{{ hostvars[inventory_hostname]['ansible_' + dhcp_interface].ipv4.address }}"
+      when: hostvars[inventory_hostname]['ansible_' + dhcp_interface] is defined
+
+    - name: Set installer image URL
+      set_fact:
+        talos_installer_url: "http://{{ pxe_server_ip }}:8080/talos-images/{{ talos_schematic_id }}-{{ talos_version }}.raw.xz"
+      when: pxe_server_ip is defined
+
+    - name: Display installer image URL
+      debug:
+        msg: "Talos installer will be served from: {{ talos_installer_url | default('factory.talos.dev') }}"
+
     - name: Filter control plane nodes
       set_fact:
         controlplane_hosts: "{{ pxe_hosts | default([]) | selectattr('role', 'defined') | selectattr('role', 'equalto', 'controlplane') | list }}"

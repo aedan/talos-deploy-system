@@ -1,0 +1,35 @@
+server {
+    listen {{ pxe_server_ip | default('0.0.0.0') }}:8080;
+    server_name _;
+
+    # Serve Talos installer images
+    location /talos-images/ {
+        alias {{ dnsmasq_tftp_root }}/talos-images/;
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
+
+        # Allow large file transfers
+        client_max_body_size 2G;
+
+        # Optimize for large file serving
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+
+        # CORS headers for flexibility
+        add_header Access-Control-Allow-Origin *;
+    }
+
+    # Optional: serve entire TFTP root
+    location / {
+        root {{ dnsmasq_tftp_root }};
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
+    }
+
+    # Logging
+    access_log /var/log/nginx/talos-images-access.log;
+    error_log /var/log/nginx/talos-images-error.log;
+}
