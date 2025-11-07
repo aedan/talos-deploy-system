@@ -268,9 +268,19 @@ def extract_oob_info(machine: Dict) -> Dict[str, str]:
     """Extract out-of-band management information"""
     power_type = machine.get('power_type', '')
     power_params = machine.get('power_parameters', {})
-    
+
+    # Debug: Check if we're getting power info
+    if os.environ.get('DEBUG'):
+        print(f"DEBUG: Machine {machine.get('hostname', 'unknown')}")
+        print(f"  power_type: {power_type}")
+        print(f"  power_parameters keys: {list(power_params.keys())}")
+
     oob_info = {}
-    
+
+    # Skip if no power type configured
+    if not power_type or power_type == 'manual':
+        return oob_info
+
     # Map MAAS power types to OOB types
     if 'ipmi' in power_type:
         oob_info['oob_type'] = 'ipmi'
@@ -285,18 +295,22 @@ def extract_oob_info(machine: Dict) -> Dict[str, str]:
     elif 'redfish' in power_type.lower():
         oob_info['oob_type'] = 'redfish'
     else:
-        oob_info['oob_type'] = power_type or 'manual'
-    
+        oob_info['oob_type'] = power_type
+
     # Extract connection details
     if 'power_address' in power_params:
         oob_info['oob_address'] = power_params['power_address']
-    
+
     if 'power_user' in power_params:
         oob_info['oob_username'] = power_params['power_user']
-    
+
     if 'power_pass' in power_params:
         oob_info['oob_password'] = power_params['power_pass']
-    
+
+    # Only return oob_info if we have at least the address
+    if 'oob_address' not in oob_info:
+        return {}
+
     return oob_info
 
 
@@ -390,7 +404,17 @@ def convert_maas_to_inventory(
     print("Fetching machines from MAAS...")
     machines = maas_client.get_machines()
     print(f"Found {len(machines)} machines")
-    
+
+    # Debug: Print first machine structure if DEBUG enabled
+    if os.environ.get('DEBUG') and machines:
+        print("\nDEBUG: First machine structure:")
+        print(f"Keys available: {list(machines[0].keys())}")
+        if 'power_type' in machines[0]:
+            print(f"power_type: {machines[0].get('power_type')}")
+        if 'power_parameters' in machines[0]:
+            print(f"power_parameters: {machines[0].get('power_parameters')}")
+        print()
+
     # Convert machines to pxe_hosts format
     pxe_hosts = []
     boot_interfaces = []  # Track boot interface names to determine most common
@@ -398,12 +422,12 @@ def convert_maas_to_inventory(
     for machine in machines:
         hostname = machine.get('hostname', machine.get('fqdn', ''))
         status = machine.get('status_name', '')
-        
+
         # Skip machines that are not deployed or ready
         if status not in ['Deployed', 'Ready', 'Allocated', 'Deploying']:
             print(f"Skipping {hostname} (status: {status})")
             continue
-        
+
         print(f"Processing {hostname}...")
 
         # Extract machine data
