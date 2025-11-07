@@ -33,128 +33,243 @@
         msg: "No talosconfig found - will only attempt insecure checks"
       when: not talosconfig_stat.stat.exists
 
-    - name: Detect mode for each host (check insecure version first)
-      ansible.builtin.shell: |
-        timeout 10 talosctl version --insecure --nodes {{ item.ip }} --short 2>&1 || true
-      register: mode_detection
+    - name: Try to read dnsmasq leases file
+      slurp:
+        src: /var/lib/misc/dnsmasq.leases
+      register: dnsmasq_leases_raw
+      become: yes
+      failed_when: false
+
+    - name: Parse dnsmasq leases if available
+      set_fact:
+        dnsmasq_lease_map: >-
+          {{
+            dnsmasq_lease_map | default({}) |
+            combine({
+              item.split()[1] | lower: item.split()[2]
+            })
+          }}
+      loop: "{{ (dnsmasq_leases_raw.content | b64decode).split('\n') }}"
+      when:
+        - dnsmasq_leases_raw.content is defined
+        - item | length > 0
+
+    - name: Build host list with both static and dynamic IPs
+      set_fact:
+        hosts_to_check: >-
+          {{
+            hosts_to_check | default([]) +
+            [{
+              'name': item.name,
+              'mac': item.mac,
+              'static_ip': item.ip,
+              'dynamic_ip': dnsmasq_lease_map[item.mac | lower] | default(none),
+              'role': item.role
+            }]
+          }}
       loop: "{{ pxe_hosts }}"
+
+    - name: Display IP detection results
+      debug:
+        msg:
+          - "IP Address Detection:"
+          - "{% for host in hosts_to_check %}  {{ host.name }}:\n    Static IP: {{ host.static_ip }}\n    Dynamic IP (PXE): {{ host.dynamic_ip if host.dynamic_ip else 'Not found in leases' }}\n{% endfor %}"
+
+    - name: Detect mode for each host (try dynamic IP first, then static)
+      ansible.builtin.shell: |
+        # Try dynamic IP first (PXE/maintenance mode scenario)
+        {% if item.dynamic_ip %}
+        RESULT=$(timeout 10 talosctl version --insecure --nodes {{ item.dynamic_ip }} --short 2>&1)
+        if echo "$RESULT" | grep -q "Talos"; then
+          echo "IP_USED={{ item.dynamic_ip }}"
+          echo "$RESULT"
+          exit 0
+        fi
+        {% endif %}
+        # Try static IP (configured node scenario)
+        RESULT=$(timeout 10 talosctl version --insecure --nodes {{ item.static_ip }} --short 2>&1)
+        if echo "$RESULT" | grep -q "Talos"; then
+          echo "IP_USED={{ item.static_ip }}"
+          echo "$RESULT"
+          exit 0
+        fi
+        # Neither worked
+        echo "IP_USED=NONE"
+        echo "$RESULT"
+        exit 1
+      register: mode_detection
+      loop: "{{ hosts_to_check }}"
       changed_when: false
       failed_when: false
+
+    - name: Extract working IP for each host
+      set_fact:
+        hosts_with_working_ip: >-
+          {{
+            hosts_with_working_ip | default([]) +
+            [{
+              'name': item.item.name,
+              'static_ip': item.item.static_ip,
+              'dynamic_ip': item.item.dynamic_ip,
+              'working_ip': (item.stdout | regex_search('IP_USED=([^\n]+)', '\\1'))[0] if item.stdout is defined and 'IP_USED=' in item.stdout else 'NONE',
+              'role': item.item.role,
+              'mac': item.item.mac
+            }]
+          }}
+      loop: "{{ mode_detection.results }}"
+
+    - name: Display which IPs are working
+      debug:
+        msg:
+          - "Working IPs detected:"
+          - "{% for host in hosts_with_working_ip %}  {{ host.name }}: {{ host.working_ip }} {% if host.working_ip == host.dynamic_ip %}(DYNAMIC/PXE){% elif host.working_ip == host.static_ip %}(STATIC/CONFIGURED){% else %}(UNREACHABLE){% endif %}\n{% endfor %}"
 
     - name: Check version for secured hosts (authenticated)
       ansible.builtin.shell: |
-        timeout 10 talosctl version --nodes {{ item.item.ip }} --endpoints {{ item.item.ip }} --talosconfig {{ talosconfig_path }} --short 2>&1 || true
+        {% set working_ip = hosts_with_working_ip[idx].working_ip %}
+        timeout 10 talosctl version --nodes {{ working_ip }} --endpoints {{ working_ip }} --talosconfig {{ talosconfig_path }} --short 2>&1 || true
       register: authenticated_version
       loop: "{{ mode_detection.results }}"
+      loop_control:
+        index_var: idx
       changed_when: false
       failed_when: false
       when:
         - talosconfig_stat.stat.exists
         - item.stdout is defined
         - "'certificate required' in item.stdout.lower() or 'tls:' in item.stdout.lower()"
+        - hosts_with_working_ip[idx].working_ip != 'NONE'
 
     - name: Check health for secured hosts (authenticated)
       ansible.builtin.shell: |
-        timeout 10 talosctl health --nodes {{ item.item.ip }} --endpoints {{ item.item.ip }} --talosconfig {{ talosconfig_path }} 2>&1 || true
+        {% set working_ip = hosts_with_working_ip[idx].working_ip %}
+        timeout 10 talosctl health --nodes {{ working_ip }} --endpoints {{ working_ip }} --talosconfig {{ talosconfig_path }} 2>&1 || true
       register: authenticated_health
       loop: "{{ mode_detection.results }}"
+      loop_control:
+        index_var: idx
       changed_when: false
       failed_when: false
       when:
         - talosconfig_stat.stat.exists
         - item.stdout is defined
         - "'certificate required' in item.stdout.lower() or 'tls:' in item.stdout.lower()"
+        - hosts_with_working_ip[idx].working_ip != 'NONE'
 
     - name: Check services for secured hosts (authenticated)
       ansible.builtin.shell: |
-        timeout 5 talosctl services --nodes {{ item.item.ip }} --endpoints {{ item.item.ip }} --talosconfig {{ talosconfig_path }} 2>&1 || true
+        {% set working_ip = hosts_with_working_ip[idx].working_ip %}
+        timeout 5 talosctl services --nodes {{ working_ip }} --endpoints {{ working_ip }} --talosconfig {{ talosconfig_path }} 2>&1 || true
       register: authenticated_services
       loop: "{{ mode_detection.results }}"
+      loop_control:
+        index_var: idx
       changed_when: false
       failed_when: false
       when:
         - talosconfig_stat.stat.exists
         - item.stdout is defined
         - "'certificate required' in item.stdout.lower() or 'tls:' in item.stdout.lower()"
+        - hosts_with_working_ip[idx].working_ip != 'NONE'
 
     - name: Check machine config for secured hosts (authenticated)
       ansible.builtin.shell: |
-        timeout 5 talosctl get machineconfig --nodes {{ item.item.ip }} --endpoints {{ item.item.ip }} --talosconfig {{ talosconfig_path }} 2>&1 || true
+        {% set working_ip = hosts_with_working_ip[idx].working_ip %}
+        timeout 5 talosctl get machineconfig --nodes {{ working_ip }} --endpoints {{ working_ip }} --talosconfig {{ talosconfig_path }} 2>&1 || true
       register: authenticated_machineconfig
       loop: "{{ mode_detection.results }}"
+      loop_control:
+        index_var: idx
       changed_when: false
       failed_when: false
       when:
         - talosconfig_stat.stat.exists
         - item.stdout is defined
         - "'certificate required' in item.stdout.lower() or 'tls:' in item.stdout.lower()"
+        - hosts_with_working_ip[idx].working_ip != 'NONE'
 
     - name: Check extensions for secured hosts (authenticated)
       ansible.builtin.shell: |
-        timeout 5 talosctl get extensions --nodes {{ item.item.ip }} --endpoints {{ item.item.ip }} --talosconfig {{ talosconfig_path }} 2>&1 || true
+        {% set working_ip = hosts_with_working_ip[idx].working_ip %}
+        timeout 5 talosctl get extensions --nodes {{ working_ip }} --endpoints {{ working_ip }} --talosconfig {{ talosconfig_path }} 2>&1 || true
       register: authenticated_extensions
       loop: "{{ mode_detection.results }}"
+      loop_control:
+        index_var: idx
       changed_when: false
       failed_when: false
       when:
         - talosconfig_stat.stat.exists
         - item.stdout is defined
         - "'certificate required' in item.stdout.lower() or 'tls:' in item.stdout.lower()"
+        - hosts_with_working_ip[idx].working_ip != 'NONE'
 
     - name: Check health for insecure hosts (maintenance mode)
       ansible.builtin.shell: |
-        timeout 10 talosctl health --nodes {{ item.item.ip }} 2>&1 || true
+        {% set working_ip = hosts_with_working_ip[idx].working_ip %}
+        timeout 10 talosctl health --nodes {{ working_ip }} 2>&1 || true
       register: insecure_health
       loop: "{{ mode_detection.results }}"
+      loop_control:
+        index_var: idx
       changed_when: false
       failed_when: false
       when:
         - item.stdout is defined
         - "'certificate required' not in item.stdout.lower()"
         - "'tls:' not in item.stdout.lower()"
+        - hosts_with_working_ip[idx].working_ip != 'NONE'
 
     - name: Check services for insecure hosts (maintenance mode)
       ansible.builtin.shell: |
-        timeout 5 talosctl services --nodes {{ item.item.ip }} 2>&1 || true
+        {% set working_ip = hosts_with_working_ip[idx].working_ip %}
+        timeout 5 talosctl services --nodes {{ working_ip }} 2>&1 || true
       register: insecure_services
       loop: "{{ mode_detection.results }}"
+      loop_control:
+        index_var: idx
       changed_when: false
       failed_when: false
       when:
         - item.stdout is defined
         - "'certificate required' not in item.stdout.lower()"
         - "'tls:' not in item.stdout.lower()"
+        - hosts_with_working_ip[idx].working_ip != 'NONE'
 
     - name: Check machine config for insecure hosts (maintenance mode)
       ansible.builtin.shell: |
-        timeout 5 talosctl get machineconfig --nodes {{ item.item.ip }} 2>&1 || true
+        {% set working_ip = hosts_with_working_ip[idx].working_ip %}
+        timeout 5 talosctl get machineconfig --nodes {{ working_ip }} 2>&1 || true
       register: insecure_machineconfig
       loop: "{{ mode_detection.results }}"
+      loop_control:
+        index_var: idx
       changed_when: false
       failed_when: false
       when:
         - item.stdout is defined
         - "'certificate required' not in item.stdout.lower()"
         - "'tls:' not in item.stdout.lower()"
+        - hosts_with_working_ip[idx].working_ip != 'NONE'
 
     - name: Build status summary
       ansible.builtin.set_fact:
         status_results: "{{ status_results + [result] }}"
-      loop: "{{ pxe_hosts }}"
+      loop: "{{ hosts_with_working_ip }}"
       loop_control:
         index_var: idx
       vars:
         mode_check: "{{ mode_detection.results[idx] }}"
         is_secured: "{{ mode_check.stdout is defined and ('certificate required' in mode_check.stdout.lower() or 'tls:' in mode_check.stdout.lower()) }}"
-        # Find matching results from sparse arrays
-        auth_ver_result: "{{ authenticated_version.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
-        auth_health_result: "{{ authenticated_health.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
-        auth_services_result: "{{ authenticated_services.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
-        auth_mconfig_result: "{{ authenticated_machineconfig.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
-        auth_extensions_result: "{{ authenticated_extensions.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
-        insec_health_result: "{{ insecure_health.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
-        insec_services_result: "{{ insecure_services.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
-        insec_mconfig_result: "{{ insecure_machineconfig.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first | default({}) }}"
+        # Find matching results from sparse arrays using working_ip
+        auth_ver_result: "{{ authenticated_version.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
+        auth_health_result: "{{ authenticated_health.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
+        auth_services_result: "{{ authenticated_services.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
+        auth_mconfig_result: "{{ authenticated_machineconfig.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
+        auth_extensions_result: "{{ authenticated_extensions.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
+        insec_health_result: "{{ insecure_health.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
+        insec_services_result: "{{ insecure_services.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
+        insec_mconfig_result: "{{ insecure_machineconfig.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first | default({}) }}"
         # Select the right version based on mode
         version_output: "{{ auth_ver_result.stdout if is_secured else mode_check.stdout }}"
         health_output: "{{ auth_health_result.stdout if is_secured else insec_health_result.stdout }}"
@@ -163,7 +278,10 @@
         extensions_output: "{{ auth_extensions_result.stdout if is_secured else '' }}"
         result:
           hostname: "{{ item.name }}"
-          ip: "{{ item.ip }}"
+          ip: "{{ item.working_ip }}"
+          ip_type: "{{ 'dynamic' if item.working_ip == item.dynamic_ip else 'static' if item.working_ip == item.static_ip else 'unknown' }}"
+          static_ip: "{{ item.static_ip }}"
+          dynamic_ip: "{{ item.dynamic_ip }}"
           role: "{{ item.role }}"
           mode: "{{ 'SECURED' if is_secured else 'INSECURE' }}"
           stage: >-
@@ -231,7 +349,10 @@
       ansible.builtin.copy:
         dest: "/tmp/talos-raw-output-{{ item.name | regex_replace('\\..*', '') }}.txt"
         content: |
-          Host: {{ item.name }} ({{ item.ip }})
+          Host: {{ item.name }} ({{ item.working_ip }})
+          IP Type: {{ 'Dynamic' if item.working_ip == item.dynamic_ip else 'Static' if item.working_ip == item.static_ip else 'Unknown' }}
+          Static IP: {{ item.static_ip }}
+          Dynamic IP: {{ item.dynamic_ip if item.dynamic_ip else 'N/A' }}
           ================================================================================
 
           MODE DETECTION (version check):
@@ -242,32 +363,32 @@
           AUTHENTICATED CHECKS:
 
           Health Check:
-          {{ (authenticated_health.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first).stdout | default('N/A') }}
+          {{ (authenticated_health.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
 
           Version Check:
-          {{ (authenticated_version.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first).stdout | default('N/A') }}
+          {{ (authenticated_version.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
 
           Machine Config:
-          {{ (authenticated_machineconfig.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first).stdout | default('N/A') }}
+          {{ (authenticated_machineconfig.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
 
           Services:
-          {{ (authenticated_services.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first).stdout | default('N/A') }}
+          {{ (authenticated_services.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
 
           Extensions:
-          {{ (authenticated_extensions.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first).stdout | default('N/A') }}
+          {{ (authenticated_extensions.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
           {% else %}
           INSECURE CHECKS:
 
           Health Check:
-          {{ (insecure_health.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first).stdout | default('N/A') }}
+          {{ (insecure_health.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
 
           Machine Config:
-          {{ (insecure_machineconfig.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first).stdout | default('N/A') }}
+          {{ (insecure_machineconfig.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
 
           Services:
-          {{ (insecure_services.results | selectattr('item.item.ip', 'equalto', item.ip) | list | first).stdout | default('N/A') }}
+          {{ (insecure_services.results | selectattr('item.item.working_ip', 'equalto', item.working_ip) | list | first).stdout | default('N/A') }}
           {% endif %}
-      loop: "{{ pxe_hosts }}"
+      loop: "{{ hosts_with_working_ip }}"
       loop_control:
         index_var: idx
         label: "{{ item.name }}"
@@ -277,7 +398,9 @@
         msg:
           - "================================================================================"
           - "Host: {{ item.hostname }}"
-          - "  IP: {{ item.ip }} | Role: {{ item.role }}"
+          - "  IP: {{ item.ip }} ({{ item.ip_type }}) | Role: {{ item.role }}"
+          - "{% if item.ip_type == 'dynamic' %}  Note: Using dynamic IP (PXE/maintenance mode) - Static IP: {{ item.static_ip }}{% endif %}"
+          - "{% if item.ip_type == 'static' %}  Static IP active (configured node) - Dynamic IP was: {{ item.dynamic_ip if item.dynamic_ip else 'N/A' }}{% endif %}"
           - "  Mode: {{ item.mode }} | Stage: {{ item.stage }} | Has Config: {{ item.has_config }}"
           - "  Version: {{ item.version if item.version else 'N/A' }}"
           - "  Health: {{ item.health_status }}"
@@ -294,8 +417,12 @@
         msg:
           - ""
           - "================================================================================"
-          - "SUMMARY - {{ pxe_hosts | length }} Total Hosts"
+          - "SUMMARY - {{ hosts_with_working_ip | length }} Total Hosts"
           - "================================================================================"
+          - "IP Address Types:"
+          - "  Using Dynamic IPs: {{ status_results | selectattr('ip_type', 'equalto', 'dynamic') | list | length }}"
+          - "  Using Static IPs:  {{ status_results | selectattr('ip_type', 'equalto', 'static') | list | length }}"
+          - ""
           - "Mode:"
           - "  Secured (TLS):  {{ secured_hosts }}"
           - "  Insecure:       {{ insecure_hosts }}"
