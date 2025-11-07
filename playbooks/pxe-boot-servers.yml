@@ -6,6 +6,18 @@
     boot_wait_time: 10  # Wait time between hosts (seconds)
 
   tasks:
+    - name: Check if urllib3 is installed
+      command: python3 -c "import urllib3"
+      register: urllib3_check
+      failed_when: false
+      changed_when: false
+
+    - name: Install urllib3 if missing
+      pip:
+        name: urllib3
+        state: present
+      when: urllib3_check.rc != 0
+
     - name: Set inventory variables as facts
       set_fact:
         pxe_hosts: "{{ hostvars[inventory_hostname]['pxe_hosts'] }}"

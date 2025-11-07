@@ -27,9 +27,31 @@ Automated Ansible playbook that deploys and configures dnsmasq to provide DHCP a
 ## Prerequisites
 
 - **Ansible** 2.9+ installed on the control machine
+- **Python 3.6+** with pip
 - **Root/sudo access** on the target machine (localhost)
 - **Internet connection** for downloading Talos images from Image Factory
 - **Ubuntu/Debian or RHEL/Rocky/CentOS** Linux distribution
+
+## Installation
+
+### Setup Virtual Environment (Recommended)
+
+```bash
+./setup-ansible-env.sh
+source ~/.venvs/talos-deploy/bin/activate
+```
+
+This will install:
+- Ansible
+- Python dependencies (netaddr, urllib3)
+- Required Ansible collections
+
+### Manual Installation
+
+```bash
+pip install -r requirements.txt
+ansible-galaxy collection install ansible.utils ansible.posix community.general
+```
 
 ## Quick Start
 
@@ -40,7 +62,14 @@ git clone https://github.com/aedan/talos-deploy-system.git
 cd talos-deploy-system
 ```
 
-### 2. Create your inventory
+### 2. Setup environment
+
+```bash
+./setup-ansible-env.sh
+source ~/.venvs/talos-deploy/bin/activate
+```
+
+### 3. Create your inventory
 
 ```bash
 cp inventory.yml.example inventory.yml
@@ -72,7 +101,7 @@ pxe_hosts:
     ip: 192.168.1.101
 ```
 
-### 3. Deploy PXE Server
+### 4. Deploy PXE Server
 
 ```bash
 ansible-playbook -i inventory.yml playbooks/deploy-dnsmasq.yml
@@ -89,7 +118,7 @@ The playbook will:
 8. Configure PXE boot menu
 9. Start dnsmasq and nginx services
 
-### 4. Generate Talos Configurations
+### 5. Generate Talos Configurations
 
 ```bash
 ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
@@ -108,7 +137,7 @@ Output: `./talos-configs/` directory with:
 - `talosconfig` for cluster access
 - `README.md` with deployment instructions
 
-### 5. PXE Boot All Nodes
+### 6. PXE Boot All Nodes
 
 **Option A: Automated via OOB Management (iLO/iDRAC)**
 
@@ -131,7 +160,7 @@ All nodes will:
 2. Boot into Talos maintenance mode
 3. Wait for configuration to be applied
 
-### 6. Deploy the Cluster
+### 7. Deploy the Cluster
 
 ```bash
 ansible-playbook -i inventory.yml playbooks/deploy-talos-cluster.yml
@@ -146,7 +175,7 @@ This will:
 
 **Note:** Nodes will show `NotReady` until CNI (kube-ovn) is installed - this is expected!
 
-### 7. Install Additional Services (Optional)
+### 8. Install Additional Services (Optional)
 
 After the cluster is deployed, you can install additional services like cert-manager:
 

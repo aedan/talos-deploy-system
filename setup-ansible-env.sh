@@ -14,7 +14,7 @@ echo "Upgrading pip..."
 pip install --upgrade pip
 
 echo "Installing Ansible and required Python packages..."
-pip install ansible netaddr
+pip install -r requirements.txt
 
 echo "Installing Ansible collections..."
 ansible-galaxy collection install ansible.utils
