@@ -143,6 +143,11 @@
       until: kernel_download is succeeded
       when: talos_version is defined and talos_schematic_id is defined
 
+    - name: Display kernel download status
+      debug:
+        msg: "Kernel downloaded successfully to {{ dnsmasq_tftp_root }}/kernel-{{ talos_arch }}"
+      when: kernel_download is succeeded
+
     - name: Download Talos initramfs from Image Factory
       get_url:
         url: "https://factory.talos.dev/image/{{ talos_schematic_id }}/{{ talos_version }}/initramfs-{{ talos_arch }}.xz"
@@ -155,6 +160,26 @@
       register: initramfs_download
       until: initramfs_download is succeeded
       when: talos_version is defined and talos_schematic_id is defined
+
+    - name: Display initramfs download status
+      debug:
+        msg: "Initramfs downloaded successfully to {{ dnsmasq_tftp_root }}/initramfs-{{ talos_arch }}.xz"
+      when: initramfs_download is succeeded
+
+    - name: Verify Talos boot files exist
+      stat:
+        path: "{{ item }}"
+      register: talos_files
+      loop:
+        - "{{ dnsmasq_tftp_root }}/kernel-{{ talos_arch }}"
+        - "{{ dnsmasq_tftp_root }}/initramfs-{{ talos_arch }}.xz"
+      when: talos_version is defined and talos_schematic_id is defined
+
+    - name: Display boot file verification
+      debug:
+        msg: "{{ item.item }} - {{ 'EXISTS' if item.stat.exists else 'MISSING' }}"
+      loop: "{{ talos_files.results }}"
+      when: talos_files is defined and talos_files.results is defined
 
     - name: Download Talos metal ISO (optional)
       get_url:
@@ -214,6 +239,10 @@
           - "Domain: {{ domain_name }}"
           - "TFTP Root: {{ dnsmasq_tftp_root }}"
           - "Static hosts configured: {{ pxe_hosts | length }}"
+          - "Talos version: {{ talos_version | default('not configured') }}"
+          - "Talos schematic ID: {{ talos_schematic_id | default('not generated') }}"
+          - "Kernel downloaded: {{ 'Yes' if kernel_download is succeeded else 'No/Skipped' }}"
+          - "Initramfs downloaded: {{ 'Yes' if initramfs_download is succeeded else 'No/Skipped' }}"
 
   handlers:
     - name: restart dnsmasq
