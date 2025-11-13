@@ -179,36 +179,10 @@
       loop: "{{ worker_health.results }}"
       when: worker_hosts | length > 0
 
-    - name: Verify etcd service is available on first control plane
-      command: >
-        talosctl service etcd
-        --nodes {{ first_controlplane.static_ip }}
-        --endpoints {{ first_controlplane.static_ip }}
-        --talosconfig {{ talosconfig_file }}
-      register: etcd_service_check
-      retries: 10
-      delay: 30
-      until: etcd_service_check.rc == 0
-      failed_when: false
-
-    - name: Display etcd service status
-      debug:
-        msg: "etcd service on {{ first_controlplane.name }}: {{ 'READY' if etcd_service_check.rc == 0 else 'NOT READY' }}"
-
     - name: Fail if control plane nodes are not healthy
       fail:
         msg: "One or more control plane nodes failed health checks. Cannot proceed."
       when: controlplane_health.results | selectattr('rc', 'ne', 0) | list | length > 0
-
-    - name: Check if cluster is already bootstrapped
-      command: >
-        talosctl etcd members
-        --nodes {{ first_controlplane.static_ip }}
-        --endpoints {{ first_controlplane.static_ip }}
-        --talosconfig {{ talosconfig_file }}
-      register: bootstrap_check
-      failed_when: false
-      changed_when: false
 
     - name: Display next steps message
       debug:
@@ -219,15 +193,13 @@
           - ""
           - "All nodes have been configured and are healthy."
           - ""
-          - "{% if bootstrap_check.rc == 0 %}Cluster Status: etcd is ALREADY BOOTSTRAPPED{% else %}Cluster Status: NOT BOOTSTRAPPED (ready to bootstrap){% endif %}"
-          - ""
           - "Control Plane Nodes ({{ controlplane_hosts | length }}):"
           - "{% for host in controlplane_hosts %}  - {{ host.name }} ({{ host.static_ip }}){% endfor %}"
           - ""
           - "Worker Nodes ({{ worker_hosts | length }}):"
           - "{% for host in worker_hosts %}  - {{ host.name }} ({{ host.static_ip }}){% endfor %}"
           - ""
-          - "{% if bootstrap_check.rc != 0 %}========================================================================="
+          - "========================================================================="
           - "NEXT STEP: Bootstrap the cluster"
           - "========================================================================="
           - ""
@@ -235,11 +207,12 @@
           - "  ansible-playbook -i inventory.yml playbooks/bootstrap-talos-cluster.yml"
           - ""
           - "This will:"
-          - "  1. Bootstrap etcd on first control plane node"
-          - "  2. Wait for Kubernetes API to be ready"
-          - "  3. Extract kubeconfig to ~/.kube/config"
-          - "  4. Verify cluster access"
-          - "{% endif %}"
+          - "  1. Check if etcd is already bootstrapped"
+          - "  2. Bootstrap etcd on first control plane node (if needed)"
+          - "  3. Wait for Kubernetes API to be ready"
+          - "  4. Extract kubeconfig to ~/.kube/config"
+          - "  5. Verify cluster access"
+          - ""
           - "========================================================================="
 
     - name: Create deployment summary
@@ -253,12 +226,6 @@
           ## Deployment Status
 
           All nodes have been configured and passed health checks.
-
-          {% if bootstrap_check.rc == 0 %}
-          **Cluster Status:** etcd is ALREADY BOOTSTRAPPED
-          {% else %}
-          **Cluster Status:** NOT BOOTSTRAPPED (ready to bootstrap)
-          {% endif %}
 
           ## Nodes Deployed
 
@@ -290,12 +257,6 @@
           talosctl services --nodes {{ first_controlplane.static_ip }} --talosconfig {{ talosconfig_file }}
           ```
 
-          Check etcd service status:
-          ```bash
-          talosctl service etcd --nodes {{ first_controlplane.static_ip }} --talosconfig {{ talosconfig_file }}
-          ```
-
-          {% if bootstrap_check.rc != 0 %}
           ## Next Step: Bootstrap the Cluster
 
           Run the bootstrap playbook to initialize etcd and extract kubeconfig:
@@ -305,27 +266,13 @@
           ```
 
           This will:
-          1. Bootstrap etcd on the first control plane node
-          2. Wait for Kubernetes API to be ready
-          3. Extract kubeconfig to ~/.kube/config
-          4. Verify cluster access
+          1. Check if etcd is already bootstrapped
+          2. Bootstrap etcd on the first control plane node (if needed)
+          3. Wait for Kubernetes API to be ready
+          4. Extract kubeconfig to ~/.kube/config
+          5. Verify cluster access
 
           After bootstrapping, nodes will show NotReady until CNI is installed.
-          {% else %}
-          ## Cluster Already Bootstrapped
-
-          Your cluster is already running. You can extract kubeconfig with:
-
-          ```bash
-          talosctl kubeconfig --nodes {{ first_controlplane.static_ip }} --talosconfig {{ talosconfig_file }}
-          ```
-
-          Or bootstrap again by running:
-
-          ```bash
-          ansible-playbook -i inventory.yml playbooks/bootstrap-talos-cluster.yml
-          ```
-          {% endif %}
 
           ## Configuration Files
           - All Talos configs: {{ talos_config_dir }}/
