@@ -15,7 +15,7 @@ Automated Ansible playbook that deploys and configures dnsmasq to provide DHCP a
 - **Talos Image Factory API integration** - Automatically generates custom images
 - **System extensions support** - Default: iscsi-tools and util-linux-tools
 - **Automatic image downloads** - Kernel, initramfs, and installer images downloaded locally
-- **Local installer serving** - Nodes install from local HTTP server (no external internet required)
+- **Flexible installer serving** - Choose between local HTTP server (airgapped) or direct factory.talos.dev pull (internet-connected)
 - **Version control** - Specify exact Talos version in inventory
 - **Architecture support** - amd64 and arm64
 
@@ -111,12 +111,12 @@ The playbook will:
 1. Install dnsmasq, syslinux, and nginx packages
 2. Configure DHCP server with your static hosts
 3. Set up TFTP server for PXE boot files
-4. Configure nginx HTTP server on port 8080
+4. Configure nginx HTTP server on port 8080 (if `use_local_installer: true`)
 5. Generate Talos schematic with your extensions
 6. Upload schematic to Image Factory
-7. Download custom kernel, initramfs, and installer image
+7. Download custom kernel, initramfs, and installer image (installer only if `use_local_installer: true`)
 8. Configure PXE boot menu
-9. Start dnsmasq and nginx services
+9. Start dnsmasq and nginx services (nginx only if `use_local_installer: true`)
 
 ### 5. Generate Talos Configurations
 
@@ -256,7 +256,12 @@ talos_extensions:                   # System extensions to include
   - siderolabs/qemu-guest-agent     # Add more as needed
 talos_extra_kernel_args: []         # Optional kernel arguments
 talos_download_iso: false           # Set true to download ISO
+use_local_installer: true           # Use local nginx for installer images (true) or pull from factory.talos.dev (false)
 ```
+
+**`use_local_installer` option:**
+- `true` (default): Downloads installer image to local nginx server, nodes install from local HTTP server (no external internet required during installation)
+- `false`: Nodes pull installer images directly from factory.talos.dev (requires internet access on PXE network). If nginx is currently enabled, it will be stopped and disabled.
 
 Available extensions: https://factory.talos.dev
 
@@ -431,8 +436,8 @@ ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
 1. **Schematic Generation**: Creates YAML schematic with your system extensions
 2. **API Upload**: Uploads to `https://factory.talos.dev/schematics`
 3. **ID Retrieval**: Receives unique schematic ID
-4. **Image Download**: Downloads custom kernel, initramfs, and raw disk installer with extensions
-5. **Local HTTP Serving**: nginx serves installer image from `http://<pxe_server_address>:8080/talos-images/`
+4. **Image Download**: Downloads custom kernel and initramfs (always), plus raw disk installer (if `use_local_installer: true`)
+5. **Local HTTP Serving** (optional): If `use_local_installer: true`, nginx serves installer image from `http://<pxe_server_address>:8080/talos-images/`
 6. **PXE Configuration**: Configures boot menu for downloaded images
 
 ### 2. Configuration Generation
@@ -473,8 +478,10 @@ dhcp-ignore=#known  # Ignore unknown MACs
 5. Auto-boots Talos installer after 3 seconds (configurable)
 6. Kernel and initramfs downloaded via TFTP
 7. Talos boots in maintenance mode
-8. When config is applied, installer image downloads from local nginx HTTP server (port 8080)
-9. Installation proceeds without requiring external internet access
+8. When config is applied, installer image downloads from:
+   - Local nginx HTTP server on port 8080 (if `use_local_installer: true`) - no external internet required
+   - factory.talos.dev (if `use_local_installer: false`) - requires internet access
+9. Installation proceeds
 
 ## Troubleshooting
 
@@ -568,10 +575,11 @@ talos_extra_kernel_args:
 
 ## Security Considerations
 
-- **Firewall rules**: Ensure ports 67/UDP (DHCP), 69/UDP (TFTP), and 8080/TCP (HTTP) are allowed
+- **Firewall rules**: Ensure ports 67/UDP (DHCP), 69/UDP (TFTP) are allowed. Port 8080/TCP (HTTP) only needed if `use_local_installer: true`
 - **Network isolation**: Use interface binding to limit dnsmasq and nginx scope
 - **MAC filtering**: Only whitelisted machines receive DHCP
-- **HTTP server**: nginx serves only on configured `pxe_server_address`
+- **HTTP server**: nginx serves only on configured `pxe_server_address` (when `use_local_installer: true`)
+- **Internet requirements**: If `use_local_installer: false`, PXE network must have internet access to factory.talos.dev
 - **Regular updates**: Keep Talos version current for security patches
 
 ## Contributing

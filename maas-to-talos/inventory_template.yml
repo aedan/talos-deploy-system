@@ -24,6 +24,7 @@ all:
         - siderolabs/util-linux-tools
       talos_extra_kernel_args: []                # Optional extra kernel arguments
       # talos_download_iso: true                 # Uncomment to download ISO file
+      use_local_installer: true                  # Use local nginx for installer images (true) or pull from factory.talos.dev (false)
 
       # PXE boot configuration
       pxe_boot_image: /var/lib/tftpboot/pxelinux.0

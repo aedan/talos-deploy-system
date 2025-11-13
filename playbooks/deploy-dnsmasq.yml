@@ -224,12 +224,12 @@
       delay: 5
       register: installer_download
       until: installer_download is succeeded
-      when: talos_version is defined and talos_schematic_id is defined
+      when: talos_version is defined and talos_schematic_id is defined and (use_local_installer | default(true))
 
     - name: Display installer image download status
       debug:
         msg: "Installer image downloaded successfully to {{ dnsmasq_tftp_root }}/talos-images/{{ talos_schematic_id }}-{{ talos_version }}.raw.xz"
-      when: installer_download is succeeded
+      when: installer_download is succeeded and (use_local_installer | default(true))
 
     - name: Verify Talos boot files exist
       stat:
@@ -260,6 +260,7 @@
         dest: /etc/nginx/sites-available/talos-images
         mode: '0644'
       notify: restart nginx
+      when: use_local_installer | default(true)
 
     - name: Enable nginx site for Talos images
       file:
@@ -267,7 +268,7 @@
         dest: /etc/nginx/sites-enabled/talos-images
         state: link
       notify: restart nginx
-      when: ansible_os_family == "Debian"
+      when: ansible_os_family == "Debian" and (use_local_installer | default(true))
 
     - name: Deploy nginx configuration for RHEL-based systems
       copy:
@@ -275,13 +276,36 @@
         dest: /etc/nginx/conf.d/talos-images.conf
         remote_src: yes
       notify: restart nginx
-      when: ansible_os_family == "RedHat"
+      when: ansible_os_family == "RedHat" and (use_local_installer | default(true))
 
     - name: Enable and start nginx service
       systemd:
         name: nginx
         enabled: yes
         state: started
+      when: use_local_installer | default(true)
+
+    - name: Disable nginx site for Talos images (Debian/Ubuntu)
+      file:
+        path: /etc/nginx/sites-enabled/talos-images
+        state: absent
+      notify: restart nginx
+      when: ansible_os_family == "Debian" and not (use_local_installer | default(true))
+
+    - name: Remove nginx configuration for Talos images (RHEL/CentOS)
+      file:
+        path: /etc/nginx/conf.d/talos-images.conf
+        state: absent
+      notify: restart nginx
+      when: ansible_os_family == "RedHat" and not (use_local_installer | default(true))
+
+    - name: Stop and disable nginx service
+      systemd:
+        name: nginx
+        enabled: no
+        state: stopped
+      when: not (use_local_installer | default(true))
+      failed_when: false
 
     - name: Deploy main dnsmasq configuration
       template:
@@ -337,10 +361,11 @@
           - "Talos schematic ID: {{ talos_schematic_id | default('not generated') }}"
           - "Kernel downloaded: {{ 'Yes' if kernel_download is succeeded else 'No/Skipped' }}"
           - "Initramfs downloaded: {{ 'Yes' if initramfs_download is succeeded else 'No/Skipped' }}"
+          - "Use local installer: {{ 'Yes' if (use_local_installer | default(true)) else 'No (nodes will pull from factory.talos.dev)' }}"
           - "Installer image downloaded: {{ 'Yes' if installer_download is succeeded else 'No/Skipped' }}"
-          - "HTTP server (nginx) enabled: Yes"
+          - "HTTP server (nginx) enabled: {{ 'Yes' if (use_local_installer | default(true)) else 'No' }}"
           - "PXE server address: {{ pxe_server_address | default('not configured') }}"
-          - "Installer image URL: http://{{ pxe_server_address | default('SERVER_IP') }}:8080/talos-images/{{ talos_schematic_id | default('SCHEMATIC_ID') }}-{{ talos_version | default('VERSION') }}.raw.xz"
+          - "Installer image URL: {{ 'http://' + (pxe_server_address | default('SERVER_IP')) + ':8080/talos-images/' + (talos_schematic_id | default('SCHEMATIC_ID')) + '-' + (talos_version | default('VERSION')) + '.raw.xz' if (use_local_installer | default(true)) else 'factory.talos.dev/installer/' + (talos_schematic_id | default('SCHEMATIC_ID')) + ':' + (talos_version | default('VERSION')) }}"
 
   handlers:
     - name: restart dnsmasq
