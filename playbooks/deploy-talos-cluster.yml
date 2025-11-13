@@ -197,11 +197,10 @@
 
     - name: Fail if control plane nodes are not healthy
       fail:
-        msg: "One or more control plane nodes failed health checks. Cannot proceed with bootstrap."
+        msg: "One or more control plane nodes failed health checks. Cannot proceed."
       when: controlplane_health.results | selectattr('rc', 'ne', 0) | list | length > 0
 
-    # Check if etcd is already bootstrapped by checking for members
-    - name: Check if etcd is already bootstrapped and healthy
+    - name: Check if cluster is already bootstrapped
       command: >
         talosctl etcd members
         --nodes {{ first_controlplane.static_ip }}
@@ -211,122 +210,55 @@
       failed_when: false
       changed_when: false
 
-    - name: Display etcd bootstrap status
-      debug:
-        msg: "etcd cluster {{ 'ALREADY BOOTSTRAPPED' if bootstrap_check.rc == 0 else 'NOT BOOTSTRAPPED - will bootstrap now' }}"
-
-    - name: Bootstrap etcd cluster on first control plane node
-      command: >
-        talosctl bootstrap
-        -e {{ first_controlplane.static_ip }}
-        --talosconfig {{ talosconfig_file }}
-        --nodes {{ first_controlplane.static_ip }}
-      when: bootstrap_check.rc != 0
-      register: bootstrap_result
-      failed_when: false
-      timeout: 300
-
-    - name: Wait for etcd to initialize after bootstrap
-      pause:
-        seconds: 60
-        prompt: "Waiting for etcd to initialize..."
-      when: bootstrap_result.changed | default(false)
-
-    - name: Wait for etcd cluster to be fully operational
-      command: >
-        talosctl etcd members
-        --nodes {{ first_controlplane.static_ip }}
-        --endpoints {{ first_controlplane.static_ip }}
-        --talosconfig {{ talosconfig_file }}
-      register: etcd_health_check
-      retries: 20
-      delay: 30
-      until: etcd_health_check.rc == 0
-      when: bootstrap_check.rc != 0 or (bootstrap_result.changed | default(false))
-
-    - name: Display etcd cluster members
-      debug:
-        msg: "{{ etcd_health_check.stdout_lines }}"
-      when: etcd_health_check is defined and etcd_health_check.rc == 0
-
-    - name: Wait for Kubernetes API to respond
-      command: >
-        talosctl get members
-        --nodes {{ first_controlplane.static_ip }}
-        --endpoints {{ first_controlplane.static_ip }}
-        --talosconfig {{ talosconfig_file }}
-      register: api_check
-      retries: 15
-      delay: 20
-      until: api_check.rc == 0
-
-    - name: Create .kube directory
-      file:
-        path: "{{ ansible_env.HOME }}/.kube"
-        state: directory
-        mode: '0755'
-
-    - name: Check if kubeconfig already exists
-      stat:
-        path: "{{ kubeconfig_dest }}"
-      register: existing_kubeconfig
-
-    - name: Backup existing kubeconfig
-      copy:
-        src: "{{ kubeconfig_dest }}"
-        dest: "{{ kubeconfig_dest }}.backup.{{ ansible_date_time.epoch }}"
-        mode: '0600'
-        remote_src: yes
-      when: existing_kubeconfig.stat.exists
-
-    - name: Extract kubeconfig from cluster
-      command: >
-        talosctl kubeconfig
-        --nodes {{ first_controlplane.static_ip }}
-        --endpoints {{ first_controlplane.static_ip }}
-        --talosconfig {{ talosconfig_file }}
-        --force
-        {{ kubeconfig_dest }}
-      register: kubeconfig_extract
-
-    - name: Set kubeconfig permissions
-      file:
-        path: "{{ kubeconfig_dest }}"
-        mode: '0600'
-
-    - name: Verify cluster access
-      command: kubectl get nodes
-      environment:
-        KUBECONFIG: "{{ kubeconfig_dest }}"
-      register: cluster_nodes
-      retries: 5
-      delay: 10
-      until: cluster_nodes.rc == 0
-
-    - name: Display cluster status
+    - name: Display next steps message
       debug:
         msg:
-          - "NOTE: Nodes will show NotReady until CNI (kube-ovn) is installed"
-          - "{{ cluster_nodes.stdout_lines }}"
-
-    - name: Get cluster info
-      command: kubectl cluster-info
-      environment:
-        KUBECONFIG: "{{ kubeconfig_dest }}"
-      register: cluster_info
+          - "========================================================================="
+          - "Talos Node Deployment Complete!"
+          - "========================================================================="
+          - ""
+          - "All nodes have been configured and are healthy."
+          - ""
+          - "{% if bootstrap_check.rc == 0 %}Cluster Status: etcd is ALREADY BOOTSTRAPPED{% else %}Cluster Status: NOT BOOTSTRAPPED (ready to bootstrap){% endif %}"
+          - ""
+          - "Control Plane Nodes ({{ controlplane_hosts | length }}):"
+          - "{% for host in controlplane_hosts %}  - {{ host.name }} ({{ host.static_ip }}){% endfor %}"
+          - ""
+          - "Worker Nodes ({{ worker_hosts | length }}):"
+          - "{% for host in worker_hosts %}  - {{ host.name }} ({{ host.static_ip }}){% endfor %}"
+          - ""
+          - "{% if bootstrap_check.rc != 0 %}========================================================================="
+          - "NEXT STEP: Bootstrap the cluster"
+          - "========================================================================="
+          - ""
+          - "Run the bootstrap playbook to initialize etcd and extract kubeconfig:"
+          - "  ansible-playbook -i inventory.yml playbooks/bootstrap-talos-cluster.yml"
+          - ""
+          - "This will:"
+          - "  1. Bootstrap etcd on first control plane node"
+          - "  2. Wait for Kubernetes API to be ready"
+          - "  3. Extract kubeconfig to ~/.kube/config"
+          - "  4. Verify cluster access"
+          - "{% endif %}"
+          - "========================================================================="
 
     - name: Create deployment summary
       copy:
         content: |
-          # Talos Cluster Deployment Summary
+          # Talos Node Deployment Summary
 
           Deployment Date: {{ ansible_date_time.iso8601 }}
           Deployed By: {{ ansible_env.USER }}@{{ ansible_hostname }}
 
-          ## Cluster Information
-          - Cluster Name: {{ talos_cluster_name }}
-          - Endpoint: {{ talos_cluster_endpoint }}
-          - Kubernetes Version: {{ talos_kubernetes_version }}
+          ## Deployment Status
+
+          All nodes have been configured and passed health checks.
+
+          {% if bootstrap_check.rc == 0 %}
+          **Cluster Status:** etcd is ALREADY BOOTSTRAPPED
+          {% else %}
+          **Cluster Status:** NOT BOOTSTRAPPED (ready to bootstrap)
+          {% endif %}
 
           ## Nodes Deployed
 
@@ -346,114 +278,53 @@
           - Talosconfig: {{ talosconfig_file }}
           - Usage: `export TALOSCONFIG={{ talosconfig_file }}`
 
-          ### Kubernetes Configuration
-          - Kubeconfig: {{ kubeconfig_dest }}
-          - Usage: `export KUBECONFIG={{ kubeconfig_dest }}`
+          ## Verification Commands
 
-          ### Quick Access Commands
+          Check node health:
           ```bash
-          # Check Talos nodes
-          talosctl --talosconfig {{ talosconfig_file }} --nodes {{ first_controlplane.static_ip }} get members
-
-          # Check Kubernetes nodes
-          kubectl get nodes -o wide
-
-          # View system pods
-          kubectl get pods -A
-
-          # Talos dashboard (if available)
-          talosctl dashboard --nodes {{ first_controlplane.static_ip }} --talosconfig {{ talosconfig_file }}
+          talosctl health --nodes {{ first_controlplane.static_ip }} --endpoints {{ first_controlplane.static_ip }} --talosconfig {{ talosconfig_file }}
           ```
 
-          ## Current Cluster Status
-
-          ```
-          {{ cluster_nodes.stdout }}
-          ```
-
-          ## Cluster Info
-
-          ```
-          {{ cluster_info.stdout }}
-          ```
-
-          ## Next Steps
-
-          **IMPORTANT:** Nodes will show NotReady status until CNI is installed.
-
-          1. **Install kube-ovn CNI** (Cluster networking - REQUIRED)
-             ```bash
-             # Install kube-ovn
-             # Follow kube-ovn installation instructions for your version
-             # https://github.com/kubeovn/kube-ovn
-
-             # Verify CNI is running
-             kubectl get pods -n kube-system -l app=kube-ovn-cni
-
-             # Wait for nodes to become Ready
-             kubectl get nodes -w
-             ```
-
-          2. **Install Longhorn** (Storage)
-             ```bash
-             kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.2/deploy/longhorn.yaml
-
-             # Wait for Longhorn to be ready
-             kubectl -n longhorn-system get pods
-
-             # Set as default storage class (optional)
-             kubectl patch storageclass longhorn -p '{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
-             ```
-
-          3. **Verify Cluster Health** (after CNI installation)
-             ```bash
-             # Check all nodes are Ready (will be NotReady without CNI)
-             kubectl get nodes
-
-             # Check all system pods are running
-             kubectl get pods -A
-
-             # Check etcd health via Talos
-             talosctl --nodes {{ first_controlplane.ip }} etcd members
-             ```
-
-          4. **Deploy your applications**
-             ```bash
-             kubectl apply -f your-app.yaml
-             ```
-
-          ## Troubleshooting
-
-          ### Check Talos Service Status
+          Check all services:
           ```bash
-          talosctl --nodes {{ first_controlplane.static_ip }} services
+          talosctl services --nodes {{ first_controlplane.static_ip }} --talosconfig {{ talosconfig_file }}
           ```
 
-          ### View Talos Logs
+          Check etcd service status:
           ```bash
-          # Kubelet logs
-          talosctl --nodes {{ first_controlplane.static_ip }} logs kubelet
-
-          # API server logs
-          talosctl --nodes {{ first_controlplane.static_ip }} logs controller-runtime
+          talosctl service etcd --nodes {{ first_controlplane.static_ip }} --talosconfig {{ talosconfig_file }}
           ```
 
-          ### Check etcd Health
+          {% if bootstrap_check.rc != 0 %}
+          ## Next Step: Bootstrap the Cluster
+
+          Run the bootstrap playbook to initialize etcd and extract kubeconfig:
+
           ```bash
-          talosctl --nodes {{ first_controlplane.static_ip }} etcd members
+          ansible-playbook -i inventory.yml playbooks/bootstrap-talos-cluster.yml
           ```
 
-          ### Reset a Node (DANGER!)
-          ```bash
-          talosctl --nodes <node-ip> reset --graceful=false --reboot
-          ```
+          This will:
+          1. Bootstrap etcd on the first control plane node
+          2. Wait for Kubernetes API to be ready
+          3. Extract kubeconfig to ~/.kube/config
+          4. Verify cluster access
 
-          ## Backup Information
-
-          {% if existing_kubeconfig.stat.exists %}
-          Previous kubeconfig backed up to: {{ kubeconfig_dest }}.backup.{{ ansible_date_time.epoch }}
+          After bootstrapping, nodes will show NotReady until CNI is installed.
           {% else %}
-          No previous kubeconfig found.
+          ## Cluster Already Bootstrapped
+
+          Your cluster is already running. You can extract kubeconfig with:
+
+          ```bash
+          talosctl kubeconfig --nodes {{ first_controlplane.static_ip }} --talosconfig {{ talosconfig_file }}
+          ```
+
+          Or bootstrap again by running:
+
+          ```bash
+          ansible-playbook -i inventory.yml playbooks/bootstrap-talos-cluster.yml
+          ```
           {% endif %}
 
           ## Configuration Files
@@ -461,24 +332,3 @@
           - Secrets: {{ talos_secrets_file }} (KEEP SECURE!)
         dest: "{{ talos_config_dir }}/DEPLOYMENT.md"
         mode: '0644'
-
-    - name: Display completion message
-      debug:
-        msg:
-          - "========================================================================="
-          - "Talos Cluster Deployed Successfully!"
-          - "========================================================================="
-          - ""
-          - "Kubeconfig: {{ kubeconfig_dest }}"
-          - "Talosconfig: {{ talosconfig_file }}"
-          - ""
-          - "Quick start:"
-          - "  kubectl get nodes  # Will show NotReady until CNI installed"
-          - "  kubectl get pods -A"
-          - "  talosctl --nodes {{ first_controlplane.static_ip }} etcd members"
-          - ""
-          - "IMPORTANT: Nodes will be NotReady until kube-ovn CNI is installed!"
-          - "  This is expected. etcd and Kubernetes API are running."
-          - "  See {{ talos_config_dir }}/DEPLOYMENT.md for next steps"
-          - ""
-          - "========================================================================="

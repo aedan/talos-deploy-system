@@ -160,7 +160,7 @@ All nodes will:
 2. Boot into Talos maintenance mode
 3. Wait for configuration to be applied
 
-### 7. Deploy the Cluster
+### 7. Deploy Configurations to All Nodes
 
 ```bash
 ansible-playbook -i inventory.yml playbooks/deploy-talos-cluster.yml
@@ -171,15 +171,30 @@ This will:
 2. Wait for all control plane nodes to be fully healthy (installer downloaded, disk installed, rebooted, services running)
 3. Wait for all worker nodes to be fully healthy
 4. Verify etcd service is ready on first control plane
-5. Bootstrap etcd on first control plane node (if not already bootstrapped)
-6. Wait for etcd cluster to be operational
-7. Wait for Kubernetes API to be available
-8. Extract kubeconfig to `~/.kube/config`
-9. Verify cluster access
+5. Check if cluster is already bootstrapped
+6. Display next steps
 
-**Note:** The playbook now includes comprehensive health checks to ensure nodes are fully ready before bootstrapping etcd. This prevents bootstrap failures due to incomplete configuration application. Nodes will show `NotReady` until CNI (kube-ovn) is installed - this is expected!
+**Note:** This playbook includes comprehensive health checks to ensure all nodes are fully ready. It stops before bootstrapping to allow you to verify node status.
 
-### 8. Install Additional Services (Optional)
+### 8. Bootstrap the Cluster
+
+After all nodes are healthy, bootstrap etcd and extract kubeconfig:
+
+```bash
+ansible-playbook -i inventory.yml playbooks/bootstrap-talos-cluster.yml
+```
+
+This will:
+1. Check if etcd is already bootstrapped
+2. Bootstrap etcd on first control plane node (if not already done)
+3. Wait for etcd cluster to be operational
+4. Wait for Kubernetes API to be available
+5. Extract kubeconfig to `~/.kube/config`
+6. Verify cluster access
+
+**Note:** Nodes will show `NotReady` until CNI (kube-ovn) is installed - this is expected!
+
+### 9. Install Additional Services (Optional)
 
 After the cluster is deployed, you can install additional services like cert-manager:
 
@@ -352,10 +367,13 @@ ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
 # 3. PXE boot all nodes (automated via OOB)
 ansible-playbook -i inventory.yml playbooks/pxe-boot-servers.yml
 
-# 4. Deploy the cluster
+# 4. Deploy configurations to all nodes
 ansible-playbook -i inventory.yml playbooks/deploy-talos-cluster.yml
 
-# 5. Verify cluster
+# 5. Bootstrap the cluster
+ansible-playbook -i inventory.yml playbooks/bootstrap-talos-cluster.yml
+
+# 6. Verify cluster
 kubectl get nodes  # Will show NotReady (expected without CNI)
 kubectl get pods -A
 ```
@@ -456,17 +474,23 @@ ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
    - CNI set to "none" (for kube-ovn)
 4. **Talosconfig Creation**: Generates CLI config for cluster management
 
-### 3. Cluster Bootstrap
+### 3. Node Deployment (deploy-talos-cluster.yml)
 
 1. **Config Application**: Applies configs to all nodes via `talosctl apply-config --insecure`
 2. **Health Check - Control Plane**: Waits for all control plane nodes to pass `talosctl health` checks (up to 10 minutes per node)
 3. **Health Check - Workers**: Waits for all worker nodes to pass `talosctl health` checks
 4. **etcd Service Verification**: Confirms etcd service is available on first control plane
-5. **etcd Bootstrap**: Bootstraps etcd on first control plane node (if not already done)
-6. **etcd Cluster Ready**: Waits for etcd members to be responsive
-7. **API Availability**: Waits for Kubernetes API to respond
-8. **Kubeconfig Extraction**: Downloads kubeconfig to `~/.kube/config`
-9. **Verification**: Verifies cluster access (nodes will be NotReady without CNI)
+5. **Bootstrap Check**: Checks if etcd is already bootstrapped
+6. **Summary**: Displays deployment status and next steps
+
+### 4. Cluster Bootstrap (bootstrap-talos-cluster.yml)
+
+1. **Bootstrap Check**: Verifies if etcd is already bootstrapped
+2. **etcd Bootstrap**: Bootstraps etcd on first control plane node (if not already done)
+3. **etcd Cluster Ready**: Waits for etcd members to be responsive
+4. **API Availability**: Waits for Kubernetes API to respond
+5. **Kubeconfig Extraction**: Downloads kubeconfig to `~/.kube/config`
+6. **Verification**: Verifies cluster access (nodes will be NotReady without CNI)
 
 ### DHCP Whitelist
 
