@@ -8,7 +8,8 @@
     talosconfig_file: "{{ talos_config_dir }}/talosconfig"
     kubeconfig_dest: "{{ ansible_env.HOME }}/.kube/config"
     apply_timeout: 600  # 10 minutes for config application
-    bootstrap_timeout: 900  # 15 minutes for bootstrap
+    health_check_timeout: 600  # 10 minutes per node for health checks
+    etcd_ready_timeout: 600  # 10 minutes for etcd to become ready
 
   tasks:
     - name: Verify talos-configs directory exists
@@ -127,13 +128,79 @@
       async: "{{ apply_timeout }}"
       poll: 10
 
-    - name: Wait for all nodes to apply configuration and reboot
+    - name: Wait for initial configuration application to begin
       pause:
-        seconds: 120
-        prompt: "Waiting for all nodes to apply configuration and stabilize..."
+        seconds: 30
+        prompt: "Waiting for nodes to begin applying configuration..."
 
-    # Check if etcd is already healthy (better check than member existence)
-    # After reboot, nodes will have their static IPs configured
+    - name: Wait for control plane nodes to be healthy and ready
+      command: >
+        talosctl health
+        --nodes {{ host.static_ip }}
+        --endpoints {{ host.static_ip }}
+        --talosconfig {{ talosconfig_file }}
+        --wait-timeout 10m
+      loop: "{{ controlplane_hosts }}"
+      loop_control:
+        loop_var: host
+        label: "{{ host.name }} ({{ host.static_ip }})"
+      register: controlplane_health
+      retries: 3
+      delay: 30
+      until: controlplane_health.rc == 0
+      failed_when: false
+
+    - name: Display control plane health status
+      debug:
+        msg: "{{ item.host.name }}: {{ 'HEALTHY' if item.rc == 0 else 'NOT READY' }}"
+      loop: "{{ controlplane_health.results }}"
+
+    - name: Wait for worker nodes to be healthy and ready
+      command: >
+        talosctl health
+        --nodes {{ host.static_ip }}
+        --endpoints {{ host.static_ip }}
+        --talosconfig {{ talosconfig_file }}
+        --wait-timeout 10m
+      loop: "{{ worker_hosts }}"
+      loop_control:
+        loop_var: host
+        label: "{{ host.name }} ({{ host.static_ip }})"
+      register: worker_health
+      retries: 3
+      delay: 30
+      until: worker_health.rc == 0
+      failed_when: false
+      when: worker_hosts | length > 0
+
+    - name: Display worker health status
+      debug:
+        msg: "{{ item.host.name }}: {{ 'HEALTHY' if item.rc == 0 else 'NOT READY' }}"
+      loop: "{{ worker_health.results }}"
+      when: worker_hosts | length > 0
+
+    - name: Verify etcd service is available on first control plane
+      command: >
+        talosctl service etcd
+        --nodes {{ first_controlplane.static_ip }}
+        --endpoints {{ first_controlplane.static_ip }}
+        --talosconfig {{ talosconfig_file }}
+      register: etcd_service_check
+      retries: 10
+      delay: 30
+      until: etcd_service_check.rc == 0
+      failed_when: false
+
+    - name: Display etcd service status
+      debug:
+        msg: "etcd service on {{ first_controlplane.name }}: {{ 'READY' if etcd_service_check.rc == 0 else 'NOT READY' }}"
+
+    - name: Fail if control plane nodes are not healthy
+      fail:
+        msg: "One or more control plane nodes failed health checks. Cannot proceed with bootstrap."
+      when: controlplane_health.results | selectattr('rc', 'ne', 0) | list | length > 0
+
+    # Check if etcd is already bootstrapped by checking for members
     - name: Check if etcd is already bootstrapped and healthy
       command: >
         talosctl etcd members
@@ -144,7 +211,11 @@
       failed_when: false
       changed_when: false
 
-    - name: Bootstrap the cluster (first attempt)
+    - name: Display etcd bootstrap status
+      debug:
+        msg: "etcd cluster {{ 'ALREADY BOOTSTRAPPED' if bootstrap_check.rc == 0 else 'NOT BOOTSTRAPPED - will bootstrap now' }}"
+
+    - name: Bootstrap etcd cluster on first control plane node
       command: >
         talosctl bootstrap
         -e {{ first_controlplane.static_ip }}
@@ -155,57 +226,28 @@
       failed_when: false
       timeout: 300
 
-    - name: Wait for etcd to initialize
+    - name: Wait for etcd to initialize after bootstrap
       pause:
-        seconds: 120
-        prompt: "Waiting for etcd to begin initializing..."
+        seconds: 60
+        prompt: "Waiting for etcd to initialize..."
       when: bootstrap_result.changed | default(false)
 
-    - name: Check etcd health (initial check - 3 minutes)
+    - name: Wait for etcd cluster to be fully operational
       command: >
         talosctl etcd members
         --nodes {{ first_controlplane.static_ip }}
         --endpoints {{ first_controlplane.static_ip }}
         --talosconfig {{ talosconfig_file }}
-      register: etcd_initial_check
-      retries: 6
+      register: etcd_health_check
+      retries: 20
       delay: 30
-      until: etcd_initial_check.rc == 0
-      failed_when: false
+      until: etcd_health_check.rc == 0
+      when: bootstrap_check.rc != 0 or (bootstrap_result.changed | default(false))
 
-    - name: Run bootstrap again if etcd not responding (matches manual intervention pattern)
-      block:
-        - name: Display bootstrap retry message
-          debug:
-            msg: "etcd not responding after 3 minutes, running bootstrap again..."
-
-        - name: Bootstrap second time (while etcd is initializing)
-          command: >
-            talosctl bootstrap
-            -e {{ first_controlplane.static_ip }}
-            --talosconfig {{ talosconfig_file }}
-            --nodes {{ first_controlplane.static_ip }}
-          register: bootstrap_retry
-          failed_when: false
-          timeout: 300
-
-        - name: Wait for etcd to stabilize after second bootstrap
-          pause:
-            seconds: 60
-            prompt: "Waiting for etcd to stabilize after second bootstrap..."
-
-        - name: Check etcd health again (5 minutes)
-          command: >
-            talosctl etcd members
-            --nodes {{ first_controlplane.static_ip }}
-            --endpoints {{ first_controlplane.static_ip }}
-            --talosconfig {{ talosconfig_file }}
-          register: etcd_retry_check
-          retries: 10
-          delay: 30
-          until: etcd_retry_check.rc == 0
-          failed_when: etcd_retry_check.rc != 0
-      when: etcd_initial_check.rc != 0
+    - name: Display etcd cluster members
+      debug:
+        msg: "{{ etcd_health_check.stdout_lines }}"
+      when: etcd_health_check is defined and etcd_health_check.rc == 0
 
     - name: Wait for Kubernetes API to respond
       command: >

@@ -168,12 +168,16 @@ ansible-playbook -i inventory.yml playbooks/deploy-talos-cluster.yml
 
 This will:
 1. Apply configurations to all nodes
-2. Bootstrap etcd on first control plane node
-3. Wait for Kubernetes API to be available
-4. Extract kubeconfig to `~/.kube/config`
-5. Verify cluster access
+2. Wait for all control plane nodes to be fully healthy (installer downloaded, disk installed, rebooted, services running)
+3. Wait for all worker nodes to be fully healthy
+4. Verify etcd service is ready on first control plane
+5. Bootstrap etcd on first control plane node (if not already bootstrapped)
+6. Wait for etcd cluster to be operational
+7. Wait for Kubernetes API to be available
+8. Extract kubeconfig to `~/.kube/config`
+9. Verify cluster access
 
-**Note:** Nodes will show `NotReady` until CNI (kube-ovn) is installed - this is expected!
+**Note:** The playbook now includes comprehensive health checks to ensure nodes are fully ready before bootstrapping etcd. This prevents bootstrap failures due to incomplete configuration application. Nodes will show `NotReady` until CNI (kube-ovn) is installed - this is expected!
 
 ### 8. Install Additional Services (Optional)
 
@@ -455,10 +459,14 @@ ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
 ### 3. Cluster Bootstrap
 
 1. **Config Application**: Applies configs to all nodes via `talosctl apply-config --insecure`
-2. **etcd Bootstrap**: Bootstraps etcd on first control plane node
-3. **API Availability**: Waits for Kubernetes API to respond
-4. **Kubeconfig Extraction**: Downloads kubeconfig to `~/.kube/config`
-5. **Verification**: Verifies cluster access (nodes will be NotReady without CNI)
+2. **Health Check - Control Plane**: Waits for all control plane nodes to pass `talosctl health` checks (up to 10 minutes per node)
+3. **Health Check - Workers**: Waits for all worker nodes to pass `talosctl health` checks
+4. **etcd Service Verification**: Confirms etcd service is available on first control plane
+5. **etcd Bootstrap**: Bootstraps etcd on first control plane node (if not already done)
+6. **etcd Cluster Ready**: Waits for etcd members to be responsive
+7. **API Availability**: Waits for Kubernetes API to respond
+8. **Kubeconfig Extraction**: Downloads kubeconfig to `~/.kube/config`
+9. **Verification**: Verifies cluster access (nodes will be NotReady without CNI)
 
 ### DHCP Whitelist
 
@@ -510,6 +518,30 @@ ip link show
 # Test DHCP manually
 sudo nmap --script broadcast-dhcp-discover -e eth0
 ```
+
+### Cluster deployment fails during health checks
+
+If nodes fail health checks during deployment:
+
+```bash
+# Check node status directly
+talosctl health --nodes <node-ip> --endpoints <node-ip> --talosconfig talos-configs/talosconfig
+
+# Check what's failing
+talosctl services --nodes <node-ip> --endpoints <node-ip> --talosconfig talos-configs/talosconfig
+
+# View logs for specific service
+talosctl logs kubelet --nodes <node-ip> --talosconfig talos-configs/talosconfig
+
+# Check if node finished installing
+talosctl get machineconfig --nodes <node-ip> --endpoints <node-ip> --talosconfig talos-configs/talosconfig
+```
+
+Common issues:
+- Node still installing to disk (wait longer)
+- Network connectivity issues after reboot (check static IP configuration)
+- Insufficient resources (check disk space, memory)
+- Installer download timeout (check internet connectivity or use_local_installer setting)
 
 ### PXE boot fails with "ldlinux.c32 not found"
 
