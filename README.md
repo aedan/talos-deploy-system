@@ -402,6 +402,35 @@ sudo cat /var/lib/misc/dnsmasq.leases
 ls -la /var/lib/tftpboot/
 ```
 
+### Re-apply configurations to running nodes
+
+Apply updated configurations to running nodes without full redeployment:
+
+```bash
+# Apply to all nodes (no reboot)
+ansible-playbook -i inventory.yml playbooks/re-apply-configs.yml
+
+# Apply to all nodes with reboot
+ansible-playbook -i inventory.yml playbooks/re-apply-configs.yml -e "reboot=true"
+
+# Apply to specific nodes only
+ansible-playbook -i inventory.yml playbooks/re-apply-configs.yml -e "target_nodes=['node01.pxe.local','node02.pxe.local']"
+
+# Apply to specific nodes with reboot
+ansible-playbook -i inventory.yml playbooks/re-apply-configs.yml -e "reboot=true" -e "target_nodes=['node01.pxe.local']"
+```
+
+This will:
+- Validate all configuration files for syntax errors
+- Apply configs using secure authentication (--talosconfig)
+- By default: stage changes without rebooting (apply on next reboot)
+- With `reboot=true`: use `--mode reboot` to reboot nodes immediately
+
+Use cases:
+- Apply configuration changes to running cluster
+- Update node settings without full redeployment
+- Roll out changes to specific nodes
+
 ### Reset all nodes to maintenance mode
 
 Useful for reprovisioning, upgrading, or troubleshooting:

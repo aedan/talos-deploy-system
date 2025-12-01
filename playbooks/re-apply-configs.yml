@@ -1,0 +1,128 @@
+---
+- name: Re-apply Talos configurations to nodes
+  hosts: localhost
+  gather_facts: yes
+  vars:
+    talos_config_dir: "{{ playbook_dir }}/../talos-configs"
+    talosconfig_file: "{{ talos_config_dir }}/talosconfig"
+    reboot: false  # Set to true to reboot nodes after applying config
+    target_nodes: []  # Leave empty to apply to all nodes, or specify list of node names
+
+  tasks:
+    - name: Verify talos-configs directory exists
+      stat:
+        path: "{{ talos_config_dir }}"
+      register: config_dir_stat
+      failed_when: not config_dir_stat.stat.exists
+
+    - name: Verify talosconfig exists
+      stat:
+        path: "{{ talosconfig_file }}"
+      register: talosconfig_stat
+      failed_when: not talosconfig_stat.stat.exists
+
+    - name: Set inventory variables as facts
+      set_fact:
+        pxe_hosts: "{{ hostvars[inventory_hostname]['pxe_hosts'] }}"
+
+    - name: Filter nodes to apply configs to
+      set_fact:
+        nodes_to_configure: >-
+          {{
+            pxe_hosts if (target_nodes | length == 0)
+            else pxe_hosts | selectattr('name', 'in', target_nodes) | list
+          }}
+
+    - name: Verify all target nodes exist in inventory
+      fail:
+        msg: "Node '{{ item }}' not found in inventory"
+      loop: "{{ target_nodes }}"
+      vars:
+        node_names: "{{ pxe_hosts | map(attribute='name') | list }}"
+      when: target_nodes | length > 0 and item not in node_names
+
+    - name: Display configuration plan
+      debug:
+        msg:
+          - "========================================="
+          - "Talos Configuration Re-application"
+          - "========================================="
+          - "Nodes to configure: {{ nodes_to_configure | length }}"
+          - "{% for node in nodes_to_configure %}  - {{ node.name }} ({{ node.ip }}){% endfor %}"
+          - ""
+          - "Reboot after apply: {{ 'YES' if reboot else 'NO' }}"
+          - "Apply mode: {{ '--mode reboot' if reboot else 'default (no mode flag)' }}"
+          - "========================================="
+
+    - name: Pause for user confirmation
+      pause:
+        prompt: |
+
+          This will re-apply configurations to the nodes listed above using secure authentication.
+          {% if reboot %}
+          WARNING: Nodes will REBOOT after configuration is applied!
+          {% else %}
+          Nodes will NOT reboot. Changes will take effect on next reboot.
+          {% endif %}
+
+          Press ENTER to continue or Ctrl+C to abort...
+
+    - name: Validate configuration files
+      command: >
+        talosctl validate
+        --config {{ talos_config_dir }}/{{ node.name.split('.')[0] }}.yaml
+        --mode metal
+      loop: "{{ nodes_to_configure }}"
+      loop_control:
+        loop_var: node
+        label: "{{ node.name }}"
+      register: validation_results
+      failed_when: validation_results.rc != 0
+
+    - name: Display validation results
+      debug:
+        msg: "All {{ nodes_to_configure | length }} configuration files validated successfully"
+
+    - name: Apply configuration to nodes (without reboot)
+      command: >
+        talosctl apply-config
+        --nodes {{ node.ip }}
+        --endpoints {{ node.ip }}
+        --file {{ talos_config_dir }}/{{ node.name.split('.')[0] }}.yaml
+        --talosconfig {{ talosconfig_file }}
+      loop: "{{ nodes_to_configure }}"
+      loop_control:
+        loop_var: node
+        label: "{{ node.name }} ({{ node.ip }})"
+      register: apply_results
+      when: not reboot
+
+    - name: Apply configuration to nodes (with reboot)
+      command: >
+        talosctl apply-config
+        --nodes {{ node.ip }}
+        --endpoints {{ node.ip }}
+        --file {{ talos_config_dir }}/{{ node.name.split('.')[0] }}.yaml
+        --talosconfig {{ talosconfig_file }}
+        --mode reboot
+      loop: "{{ nodes_to_configure }}"
+      loop_control:
+        loop_var: node
+        label: "{{ node.name }} ({{ node.ip }})"
+      register: apply_results_reboot
+      when: reboot
+
+    - name: Display completion message
+      debug:
+        msg:
+          - "========================================================================="
+          - "Configuration Re-application Complete!"
+          - "========================================================================="
+          - ""
+          - "Configurations applied to {{ nodes_to_configure | length }} node(s):"
+          - "{% for node in nodes_to_configure %}  - {{ node.name }} ({{ node.ip }}){% endfor %}"
+          - ""
+          - "{% if reboot %}Nodes are rebooting to apply changes...{% else %}Changes staged. Nodes will NOT reboot automatically."
+          - "To apply changes, reboot nodes manually or run with reboot: true{% endif %}"
+          - ""
+          - "========================================================================="
