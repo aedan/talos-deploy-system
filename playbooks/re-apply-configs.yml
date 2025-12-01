@@ -50,8 +50,8 @@
           - "Nodes to configure: {{ nodes_to_configure | length }}"
           - "{% for node in nodes_to_configure %}  - {{ node.name }} ({{ node.ip }}){% endfor %}"
           - ""
-          - "Reboot after apply: {{ 'YES' if reboot else 'NO' }}"
-          - "Apply mode: {{ '--mode reboot' if reboot else 'default (no mode flag)' }}"
+          - "Reboot after apply: {{ 'YES' if (reboot | bool) else 'NO' }}"
+          - "Apply mode: {{ '--mode reboot' if (reboot | bool) else 'default (no mode flag)' }}"
           - "========================================="
 
     - name: Pause for user confirmation
@@ -59,7 +59,7 @@
         prompt: |
 
           This will re-apply configurations to the nodes listed above using secure authentication.
-          {% if reboot %}
+          {% if reboot | bool %}
           WARNING: Nodes will REBOOT after configuration is applied!
           {% else %}
           Nodes will NOT reboot. Changes will take effect on next reboot.
@@ -95,7 +95,7 @@
         loop_var: node
         label: "{{ node.name }} ({{ node.ip }})"
       register: apply_results
-      when: not reboot
+      when: not (reboot | bool)
 
     - name: Apply configuration to nodes (with reboot)
       command: >
@@ -110,7 +110,7 @@
         loop_var: node
         label: "{{ node.name }} ({{ node.ip }})"
       register: apply_results_reboot
-      when: reboot
+      when: reboot | bool
 
     - name: Display completion message
       debug:
@@ -122,7 +122,7 @@
           - "Configurations applied to {{ nodes_to_configure | length }} node(s):"
           - "{% for node in nodes_to_configure %}  - {{ node.name }} ({{ node.ip }}){% endfor %}"
           - ""
-          - "{% if reboot %}Nodes are rebooting to apply changes...{% else %}Changes staged. Nodes will NOT reboot automatically."
+          - "{% if reboot | bool %}Nodes are rebooting to apply changes...{% else %}Changes staged. Nodes will NOT reboot automatically."
           - "To apply changes, reboot nodes manually or run with reboot: true{% endif %}"
           - ""
           - "========================================================================="
