@@ -109,6 +109,29 @@ struct TalosDeployCLI {
             }
         }
 
+        if let labLabel = options["lab"] ?? options["lab-label"], !labLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let markers = splitCommaList(options["controller-markers"] ?? "")
+            let result = LabRoleAssignmentPlanner().makeAssignments(
+                devices: devices,
+                labLabel: labLabel,
+                deployerID: options["deployer"] ?? options["deployer-device"] ?? "",
+                controllerMarkers: markers.isEmpty ? LabRoleAssignmentPlanner.defaultControllerMarkers : markers
+            )
+            if output == "json" || output == "lab-plan" {
+                let data = try JSONEncoder.pretty.encode(result)
+                print(String(decoding: data, as: UTF8.self))
+                return
+            }
+            for device in result.selectedDevices {
+                let assignment = result.assignments[device.id]
+                print("\(device.id)\t\(device.name)\t\(assignment?.role.displayName ?? "unassigned")\t\(device.privateIP.isEmpty ? device.primaryIP : device.privateIP)")
+            }
+            for warning in result.warnings {
+                fputs("warning: \(warning)\n", stderr)
+            }
+            return
+        }
+
         if output == "json" {
             let data = try JSONEncoder.pretty.encode(devices)
             print(String(decoding: data, as: UTF8.self))
@@ -211,8 +234,8 @@ struct TalosDeployCLI {
             try await handleUbuntuBuildISO(arguments: remaining)
         case "validate-iso":
             try await handleUbuntuValidateISO(arguments: remaining)
-        case "bootstrap-deployer", "bootstrap-overseer", "bootstrap-helper", "local-media-plan":
-            try await handleUbuntuBootstrapHelper(arguments: remaining)
+        case "bootstrap-deployer", "local-media-plan":
+            try await handleUbuntuBootstrapDeployer(arguments: remaining)
         case "network-plan":
             try handleUbuntuNetworkPlan(arguments: remaining)
         case "oob-boot-url":
@@ -277,7 +300,7 @@ struct TalosDeployCLI {
         print(String(decoding: data, as: UTF8.self))
     }
 
-    private static func handleUbuntuBootstrapHelper(arguments: [String]) async throws {
+    private static func handleUbuntuBootstrapDeployer(arguments: [String]) async throws {
         let options = parseOptions(arguments)
         let builder = UbuntuAutoinstallBuilder()
         let spec = try ubuntuInstallSpec(from: options, arguments: arguments)
@@ -291,7 +314,7 @@ struct TalosDeployCLI {
                 vendor: .ilo
             )
         )
-        let run = HelperBootstrapRun(
+        let run = DeployerBootstrapRun(
             installSpec: spec,
             networkPlan: plan,
             isoArtifacts: artifacts,
@@ -349,46 +372,25 @@ struct TalosDeployCLI {
     }
 
     private static func handleDeploy(arguments: [String]) async throws {
-        if let subcommand = arguments.first, !subcommand.hasPrefix("--") {
-            let remaining = Array(arguments.dropFirst())
-            switch subcommand {
-            case "plan":
-                try await handlePlan(arguments: remaining)
-            case "run":
-                try await handleDeployRun(arguments: remaining)
-            case "resume":
-                try handleResume(arguments: remaining)
-            case "verify":
-                try handleDeployVerify(arguments: remaining)
-            case "deployer":
-                try await handleDeployDeployer(arguments: remaining)
-            default:
-                printUsage()
-            }
+        guard let subcommand = arguments.first, !subcommand.hasPrefix("--") else {
+            printDeployUsage()
             return
         }
-
-        try await handleDeployLegacy(arguments: arguments)
-    }
-
-    private static func handleDeployLegacy(arguments: [String]) async throws {
-        let options = parseOptions(arguments)
-        let spec = try loadSpec(from: options["spec"] ?? "examples/deployment-spec.example.json")
-        let settings = (try? SettingsController().load()) ?? AppSettings()
-        let paths = AppPaths()
-        try paths.ensureExists()
-        let coordinator = DeploymentCoordinator(settings: settings)
-        let state = try await coordinator.stage(spec: spec, at: paths.stateDirectory)
-
-        if let connection = deployerConnection(options: options) {
-            let synchronized = try await coordinator.synchronizeToHelper(state, connection: connection)
-            let data = try JSONEncoder.pretty.encode(synchronized)
-            print(String(decoding: data, as: UTF8.self))
-            return
+        let remaining = Array(arguments.dropFirst())
+        switch subcommand {
+        case "plan":
+            try await handlePlan(arguments: remaining)
+        case "run":
+            try await handleDeployRun(arguments: remaining)
+        case "resume":
+            try handleResume(arguments: remaining)
+        case "verify":
+            try handleDeployVerify(arguments: remaining)
+        case "deployer":
+            try await handleDeployDeployer(arguments: remaining)
+        default:
+            printDeployUsage()
         }
-
-        let data = try JSONEncoder.pretty.encode(state)
-        print(String(decoding: data, as: UTF8.self))
     }
 
     private static func handleDeployRun(arguments: [String]) async throws {
@@ -429,8 +431,8 @@ struct TalosDeployCLI {
         }
         let options = parseOptions(Array(arguments.dropFirst()))
         let settings = (try? SettingsController().load()) ?? AppSettings()
-        let client = DefaultHelperHostClient()
-        let configuration = HelperMediaServiceConfiguration(defaults: settings.helper)
+        let client = DefaultDeployerHostClient()
+        let configuration = DeployerMediaServiceConfiguration(defaults: settings.deployer)
         switch subcommand {
         case "plan":
             let plan = client.planDeployerServices(configuration: configuration)
@@ -478,13 +480,13 @@ struct TalosDeployCLI {
     }
 
     private static func deployerConnection(options: [String: String]) -> SSHConnection? {
-        let host = options["deployer-host"] ?? options["helper-host"]
-        let user = options["deployer-user"] ?? options["helper-user"]
+        let host = options["deployer-host"]
+        let user = options["deployer-user"]
         guard let host, let user else { return nil }
         return SSHConnection(
             host: host,
             user: user,
-            port: Int(options["deployer-port"] ?? options["helper-port"] ?? "22") ?? 22,
+            port: Int(options["deployer-port"] ?? "22") ?? 22,
             identityFile: options["identity-file"] ?? ""
         )
     }
@@ -610,6 +612,7 @@ struct TalosDeployCLI {
               ubuntu local-media-plan --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url URL
               ubuntu oob-boot-url --device DEVICE_ID --url OOB_REACHABLE_IMAGE_URL [--one-time-boot usb] [--reboot true]
               devices --account ACCOUNT [--source auto|core|hammertime] [--output table|json]
+              devices --account ACCOUNT --lab LAB --deployer DEVICE [--controller-markers controller,master] [--output table|json]
               facts --account ACCOUNT [--source auto|core|hammertime] [device-id...]
               snapshot --account ACCOUNT --device DEVICE [--source auto|core|hammertime] [--output-dir DIR]
               plan --spec path/to/spec.json
@@ -618,7 +621,6 @@ struct TalosDeployCLI {
               deploy verify --path /path/to/deployment-state.json
               deploy deployer plan
               deploy deployer prepare --deployer-host HOST --deployer-user USER
-              deploy --spec path/to/spec.json [--deployer-host HOST --deployer-user USER]
               resume --path /path/to/deployment-state.json
             """
         )
@@ -668,7 +670,6 @@ struct TalosDeployCLI {
               deployer prepare --deployer-host HOST --deployer-user USER
 
             Non-dry-run execution requires --execute true plus a deployer SSH connection.
-            --helper-host/--helper-user remain accepted as backward-compatible aliases.
             """
         )
     }

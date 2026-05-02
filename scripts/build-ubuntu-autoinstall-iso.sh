@@ -253,7 +253,7 @@ else
   cp "$AUTOINSTALL_FILE" "$ISO_ROOT/nocloud/user-data"
   {
     echo "instance-id: tds-$(date -u +%Y%m%dT%H%M%SZ)"
-    echo "local-hostname: tds-helper"
+    echo "local-hostname: tds-deployer"
   } >"$ISO_ROOT/nocloud/meta-data"
 fi
 if [[ ! -f "$ISO_ROOT/nocloud/90-tds-preserved.yaml" ]]; then

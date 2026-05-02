@@ -1,779 +1,228 @@
 # tds
 
-Swift-first Rackspace Talos deployment tooling for macOS, with a shared core library, a desktop UI, and a CLI for `rax`-side testing and automation.
+`tds` is a macOS-first Rackspace bare-metal Talos deployment tool. The desktop app is the primary operator experience, and the CLI exists for `rax`-side testing, automation, and repeatable end-to-end runs.
 
-## Current Architecture
+The deployer is a selected physical server that receives Ubuntu first and then manages Talos artifacts, PXE/media services, machine configs, cluster bootstrap, and health checks. The deployer is not a Talos node.
 
-- `TalosDeployCore`: shared models, settings, Core/Hammertime adapters, deployment planning, Ubuntu bootstrap media, deployer-state staging, and Talos artifact rendering
-- `tds`: automation-friendly CLI for testing on `rax`
-- `tds.app`: SwiftUI desktop interface for account lookup, role assignment, deployer bootstrap, static networking validation, local-media attach, deployment staging, resume, and settings
-- bundled Core bridge: a Python helper shipped with `TalosDeployCore` that reuses the active hammertime cache on `rax` and queries Core inventory through the same authenticated environment
-- `legacy` Ansible flow: the existing playbooks/templates remain in this repo as migration references and are not a runtime dependency of the new implementation
+## Components
 
-## Development Workflow
+- `tds.app`: SwiftUI desktop UI for Core session discovery, account lookup, physical-server filtering, role assignment, deployer bootstrap, OOB local media, static networking, deployment staging, resume, and settings.
+- `tds`: CLI for `rax` testing and automation.
+- `TalosDeployCore`: shared Swift core for Core inventory, hammertime integration, OOB planning, Ubuntu autoinstall media, deployer service planning, Talos artifact rendering, and deployment orchestration.
+- Core bridge: bundled Python bridge used on `rax` to query Core through the active hammertime-authenticated environment.
 
-- Develop and build on this machine with Xcode or `swift build`
-- Use git to move changes to `rax`: commit or stash locally, then `git pull` from the matching repo path on `rax`
+## Build And Run
 
-### Local Commands
+Develop locally, commit on `main`, then pull the same repo path on `rax` for Core/OOB/hammertime validation.
 
 ```bash
 swift test
 swift build --product tds
 swift build --product tds-app
-swift run tds plan --spec examples/deployment-spec.example.json
-swift run tds deploy plan --spec examples/deployment-spec.example.json
-swift run tds deploy run --spec examples/deployment-spec.example.json --dry-run true
 scripts/build-tds-app-bundle.sh build-cache/tds.app
 open build-cache/tds.app
 ```
 
-### Run On `rax`
+On `rax`:
 
 ```bash
-ssh rax 'cd ~/Documents/GitHub/talos-deploy-system && git pull'
-ssh rax 'cd ~/Documents/GitHub/talos-deploy-system && swift run tds deploy plan --spec examples/deployment-spec.example.json'
+cd ~/Documents/GitHub/talos-deploy-system
+git switch main
+git pull --ff-only
+swift build --product tds
+.build/debug/tds devices --account 0000000 --source auto
 ```
 
-## Settings Coverage
+Use fake account numbers in examples and docs. Real account numbers belong in operator input, local settings, or ignored run state only.
 
-The Swift implementation includes first-pass support for:
+## Operator Flow
 
-- Access profiles: direct, HTTP proxy, SOCKS proxy, SSH dynamic SOCKS, and Hammertime-routed profiles
-- Core session storage in the macOS Keychain plus automatic detection of the active hammertime-backed session on `rax`
-- Hammertime defaults including binary path, optional Python override, session cache path, fact groups, and command timeout
-- Talos defaults for version, Kubernetes version, cluster name, endpoint, default Rackspace extensions, and Longhorn extra mounts
-- Deployer defaults including SSH user, generated hostname suffix, durable state root, package cache root, media/PXE roots, and pinned `talosctl`
-- Safety settings for destructive deployer reinstall confirmation
+1. Open `tds.app` on `rax` or from a workstation with a working access profile.
+2. Use `Sign In` to refresh/import the active hammertime-backed Core session. Manual Core session storage is available, but the normal `rax` path is automatic discovery.
+3. In `Inventory + Roles`, enter the account number and load devices. Non-server devices such as firewalls, load balancers, switches, and VMs are filtered out of cluster role assignment.
+4. Select one physical device as `deployer`. If it needs Ubuntu reinstalled, leave install enabled and type the destructive confirmation.
+5. Assign Talos nodes as `controlplane` or `worker`. For lab-based end-to-end runs, use `Lab Auto Assignment`: enter a label such as `lab2`, choose the deployer device ID/name, and let `tds` assign controller-named devices as control-plane nodes and all other matching physical servers as workers.
+6. Review static networking for every Talos node. DHCP may be used for live boot only; final machine configs require static management IPs from Core, capture, or manual overrides.
+7. Use `Bootstrap Deployer` to capture/build/validate Ubuntu media and attach it through the embedded iLO local-media WebView when the OOB network cannot fetch external media.
+8. Stage and run deployment. After Ubuntu is online, `tds` installs deployer services, stages Talos artifacts, boots nodes, applies configs, bootstraps etcd, fetches kubeconfig, and verifies health.
 
-## Deployer Bootstrap Flow
+## Settings
 
-The Ubuntu `deployer` is a selected physical device, but it is not a Talos node. If the selected deployer is marked for reinstall:
+Access Profiles:
 
-1. temporary deployment state is staged on `rax`
-2. the deployer is planned first
-3. the deployer must come back with SSH access
-4. durable state is synchronized to the deployer root
-5. the remaining cluster nodes are then provisioned
+- `direct`: no proxy.
+- `httpProxy`: HTTP CONNECT proxy for OOB WebView/Redfish paths.
+- `socksProxy`: SOCKS proxy for OOB WebView paths.
+- `sshDynamicSocks`: operator-managed SOCKS tunnel profile.
+- `hammertimeProxy`: diagnostic routing hint only; deployment does not depend on `ht proxy`.
 
-After the deployer is online, the default Talos provisioning order is deployer-hosted iLO URL media, deployer PXE, direct/external OOB URL media, then operator local media.
+Core Session:
 
-Talos nodes may use DHCP only for initial live boot. Final machine configs are blocked until every control plane and worker has static management networking from Core, a capture, or manual UI/JSON input.
+- Default account is optional and should usually be blank.
+- Inventory source can be `auto`, `core`, or `hammertime`.
+- Docs and service URLs point at Core documentation/API endpoints available from `rax`.
 
-## Hammertime Notes
+Hammertime:
 
-- Inventory now prefers the bundled Core bridge on `rax`, which reads hammertime's cached auth and queries Core directly instead of relying on `ht info`
-- Live facts still use `ht raxfacts`
-- Hammertime calls now default to `--no-checks` so old or misclassified OS records do not block pre-provision access workflows
-- `tds login --source hammertime` imports the active `rax` session into the local store when needed
-- CLI Hammertime calls run in `--batch --no-colors` mode and now time out cleanly instead of hanging indefinitely
-- Missing live facts are non-blocking by design, which keeps bare-metal installs possible even when a node has no current OS
+- Binary path defaults to `ht`.
+- `--no-checks` is enabled by default so old OS records do not block pre-provision access attempts.
+- Live facts are optional enrichment and never block deployment.
 
-## Ubuntu Reinstall Lessons
+Talos Defaults:
 
-- `tds ubuntu snapshot` captures the current host state before a destructive deployer reinstall.
-- `tds ubuntu build-iso` now creates a proper NoCloud ISO with `/nocloud/user-data`, `/nocloud/meta-data`, and `/nocloud/90-tds-preserved.yaml`, then patches GRUB with `autoinstall ds=nocloud\\;s=/cdrom/nocloud/`.
-- `tds ubuntu validate-iso` extracts the rebuilt ISO and verifies the NoCloud seed, GRUB patch, `rack` user, root access, and install evidence hooks.
-- Local VM experiments are development-only checks and are not part of `tds.app`, the `tds` CLI, or the supported deployment workflow.
-- Preserve the exact physical networking only: routed NICs, bridge members, VLAN subinterfaces, DNS, and static routes. Do not recreate transient `vnet*` or libvirt bridges when the goal is only host recovery.
-- Keep URL-based iLO virtual media on a stable external host such as `rax`, not on the machine being reinstalled. If the target reboots while serving its own ISO, the install media disappears mid-boot.
-- Enable iLO VSP logging before the destructive reboot so post-reboot console capture is available if SSH does not come back.
-- Recovery-oriented Ubuntu autoinstall should preserve post-install access for both the environment tooling and operators. In practice that means keeping a working `rack` user, setting a root password intentionally, and retaining SSH key access.
+- Default extensions are `siderolabs/iscsi-tools`, `siderolabs/util-linux-tools`, and `siderolabs/bnx2-bnx2x`.
+- Longhorn `machine.extraMounts` for `/var/lib/longhorn` are rendered by default.
+- Kernel modules and extra kernel args are configurable.
 
-## Legacy Ansible Workflow
+Provisioning Priority:
 
-The remainder of this README documents the original Ansible-based PXE flow that is still useful as implementation reference material while the Swift system reaches feature parity.
+- Deployer-hosted iLO URL media.
+- Deployer PXE.
+- Direct/external OOB URL media.
+- Operator local media.
 
-### Legacy Overview
+Bootstrap Media:
 
-Automated Ansible playbook that deploys and configures dnsmasq to provide DHCP and PXE boot services with integrated Talos Linux Image Factory support for custom image generation.
+- Operator local media is the greenfield-safe default for the first Ubuntu deployer.
+- External OOB media is valid only when the OOB network can fetch that URL.
+- Existing OS media host is explicit opt-in because a brand-new environment may have no working OS anywhere.
 
-## Features
+Deployer Defaults:
 
-### Core Features
-- **DHCP server** with static IP reservations
-- **MAC address whitelist** - Only serves DHCP to known machines
-- **PXE boot support** with TFTP server
-- **HTTP server (nginx)** - Serves Talos installer images locally on port 8080
-- **Automated syslinux installation** and configuration
+- SSH user, state root, hostname suffix, PXE address, HTTP bind/port, package cache, and pinned `talosctl` version are managed by `tds`.
+- Generated deployer hostnames use `<deviceNumber>-deployer` plus an optional suffix, for example `100001-deployer-lab2`.
 
-### Talos Linux Integration
-- **Talos Image Factory API integration** - Automatically generates custom images
-- **System extensions support** - Default: iscsi-tools, util-linux-tools, and bnx2/bnx2x firmware support
-- **Automatic image downloads** - Kernel, initramfs, and installer images downloaded locally
-- **Flexible installer serving** - Choose between local HTTP server (airgapped) or direct factory.talos.dev pull (internet-connected)
-- **Version control** - Specify exact Talos version in inventory
-- **Architecture support** - amd64 and arm64
+Safety:
 
-### Security
-- Only machines defined in inventory receive IP addresses
-- Static DHCP reservations prevent IP conflicts
-- Interface binding for network isolation
+- Reinstalling the deployer requires typed confirmation because it destroys the OS before the rest of the cluster can proceed.
 
-## Prerequisites
-
-- **Ansible** 2.9+ installed on the control machine
-- **Python 3.6+** with pip
-- **Root/sudo access** on the target machine (localhost)
-- **Internet connection** for downloading Talos images from Image Factory
-- **Ubuntu/Debian or RHEL/Rocky/CentOS** Linux distribution
-
-## Installation
-
-### Setup Virtual Environment (Recommended)
+## CLI Reference
 
 ```bash
-./setup-ansible-env.sh
-source ~/.venvs/talos-deploy/bin/activate
+tds login --source hammertime
+tds devices --account 0000000 --source auto --output table
+tds devices --account 0000000 --lab lab2 --deployer 100001 --output json
+tds facts --account 0000000 100002 100003
+tds ubuntu snapshot --account 0000000 --device 100001 --output-dir ~/tds-captures
+tds ubuntu network-plan --capture ~/tds-captures/0000000/100001/snapshot.json --output yaml
+tds ubuntu build-iso --capture ~/tds-captures/0000000/100001/snapshot.json --source-iso ~/iso/ubuntu-24.04-live-server-amd64.iso --output-iso ~/iso/tds-100001-ubuntu.iso
+tds ubuntu validate-iso --iso ~/iso/tds-100001-ubuntu.iso
+tds ubuntu bootstrap-deployer --capture ~/tds-captures/0000000/100001/snapshot.json --source-iso ~/iso/ubuntu-24.04-live-server-amd64.iso --output-iso ~/iso/tds-100001-ubuntu.iso --oob-url https://192.0.2.10
+tds talos schematic
+tds talos artifacts --version v1.12.1 --arch amd64
+tds deploy plan --spec examples/deployment-spec.example.json
+tds deploy run --spec examples/deployment-spec.example.json --dry-run true
+tds deploy run --spec examples/deployment-spec.example.json --execute true --deployer-host 192.0.2.20 --deployer-user rack
+tds deploy verify --path ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
 ```
 
-This will install:
-- Ansible
-- Python dependencies (netaddr, urllib3)
-- Required Ansible collections
+## Full Example
 
-### Manual Installation
+This example uses fake devices and a fake account. Replace values only in your local run state.
+
+1. Build and open the app:
 
 ```bash
-pip install -r requirements.txt
-ansible-galaxy collection install ansible.utils ansible.posix community.general
+swift build --product tds
+scripts/build-tds-app-bundle.sh build-cache/tds.app
+open build-cache/tds.app
 ```
 
-## Quick Start
-
-### 1. Clone the repository
+2. Confirm Core/hammertime auth on `rax`:
 
 ```bash
-git clone https://github.com/aedan/talos-deploy-system.git
-cd talos-deploy-system
+tds login --source hammertime
+tds devices --account 0000000 --source auto --output table
 ```
 
-### 2. Setup environment
+3. Use lab auto-assignment for an end-to-end test:
 
 ```bash
-./setup-ansible-env.sh
-source ~/.venvs/talos-deploy/bin/activate
+tds devices --account 0000000 --lab lab2 --deployer 100001 --output json
 ```
 
-### 3. Create your inventory
+Expected role intent:
+
+- `100001-lab2-deployer.example.test`: `deployer`
+- `100002-lab2-controller01.example.test`: `controlplane`
+- `100003-lab2-controller02.example.test`: `controlplane`
+- `100004-lab2-controller03.example.test`: `controlplane`
+- every other matching physical `lab2` server: `worker`
+
+4. Capture the deployer before destroying its OS:
 
 ```bash
-cp inventory.yml.example inventory.yml
+tds ubuntu snapshot --account 0000000 --device 100001 --output-dir ~/tds-captures
+tds ubuntu network-plan --capture ~/tds-captures/0000000/100001/snapshot.json --output yaml
 ```
 
-Edit `inventory.yml` and configure:
-
-```yaml
-# Network configuration
-dhcp_interface: eno1                    # Your network interface
-domain: internal.example.com            # Your domain
-
-# DHCP range
-dhcp_range:
-  start: 192.168.1.100
-  end: 192.168.1.150
-
-# Talos Image Factory configuration
-talos_version: v1.11.3                  # Talos version
-talos_arch: amd64                       # Architecture
-talos_extensions:                       # System extensions
-  - siderolabs/iscsi-tools
-  - siderolabs/util-linux-tools
-
-# Add your machines
-pxe_hosts:
-  - name: node01.example.com
-    mac: 52:54:00:12:34:56
-    ip: 192.168.1.101
-```
-
-### 4. Deploy PXE Server
+5. Build and validate Ubuntu media:
 
 ```bash
-ansible-playbook -i inventory.yml playbooks/deploy-dnsmasq.yml
+tds ubuntu build-iso \
+  --capture ~/tds-captures/0000000/100001/snapshot.json \
+  --source-iso ~/iso/ubuntu-24.04-live-server-amd64.iso \
+  --output-iso ~/iso/tds-100001-ubuntu.iso \
+  --rack-password-hash "$TDS_RACK_PASSWORD_HASH" \
+  --root-password-hash "$TDS_ROOT_PASSWORD_HASH"
+
+tds ubuntu validate-iso --iso ~/iso/tds-100001-ubuntu.iso
 ```
 
-The playbook will:
-1. Install dnsmasq, syslinux, and nginx packages
-2. Configure DHCP server with your static hosts
-3. Set up TFTP server for PXE boot files
-4. Configure nginx HTTP server on port 8080 (if `use_local_installer: true`)
-5. Generate Talos schematic with your extensions
-6. Upload schematic to Image Factory
-7. Download custom kernel, initramfs, and installer image (installer only if `use_local_installer: true`)
-8. Configure PXE boot menu
-9. Start dnsmasq and nginx services (nginx only if `use_local_installer: true`)
+6. Attach through `tds.app`:
 
-### 5. Generate Talos Configurations
+- Open `Bootstrap Deployer`.
+- Set the snapshot path, source ISO, output ISO, iLO URL, and iLO credentials.
+- Click `Prepare Local Media Session`.
+- Use the embedded iLO WebView to launch HTML5 console and attach local media.
+- Boot once from virtual CD/DVD.
+- Keep `tds.app` open until Ubuntu has finished copying media and the server reboots to disk.
+
+7. Prepare the deployer and dry-run the Talos execution:
 
 ```bash
-ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
+tds deploy deployer prepare --deployer-host 192.0.2.20 --deployer-user rack
+tds deploy plan --spec examples/deployment-spec.example.json
+tds deploy run --spec examples/deployment-spec.example.json --dry-run true
 ```
 
-This will:
-1. Download/update talosctl to match your Talos version
-2. Generate cluster secrets (only once, idempotent)
-3. Create individual node configs for control plane and workers
-4. Generate talosconfig for cluster management
-5. Create deployment documentation
-
-Output: `./talos-configs/` directory with:
-- Individual node YAML configs
-- `secrets.yaml` (keep secure!)
-- `talosconfig` for cluster access
-- `README.md` with deployment instructions
-
-### 6. PXE Boot All Nodes
-
-**Option A: Automated via OOB Management (iLO/iDRAC)**
+8. Execute once the plan, networking, and warnings are clean:
 
 ```bash
-ansible-playbook -i inventory.yml playbooks/pxe-boot-servers.yml
+tds deploy run \
+  --spec examples/deployment-spec.example.json \
+  --execute true \
+  --deployer-host 192.0.2.20 \
+  --deployer-user rack
+
+tds deploy verify --path ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
 ```
 
-This will:
-1. Connect to each server's iLO/iDRAC via Redfish API
-2. Set next boot to PXE/Network
-3. Trigger server restart
-4. Monitor boot progress via dnsmasq logs
+## Ubuntu Autoinstall Notes
 
-**Option B: Manual Boot**
+Ubuntu deployer media uses a NoCloud seed under `/nocloud` and GRUB `autoinstall ds=nocloud;s=/cdrom/nocloud/`. The generated installer:
 
-Manually boot each server and select network/PXE boot from BIOS or iLO/iDRAC console.
+- creates the `rack` admin user,
+- sets the configured `rack` and `root` password hashes,
+- enables SSH password and root login according to the operator-provided hashes,
+- writes install evidence under `/var/log/installer/tds/`,
+- preserves physical networking from the preinstall snapshot, including MAC mappings, bridges, bridge ports, VLANs, routes, DNS, and search domains.
 
-All nodes will:
-1. Download kernel and initramfs from dnsmasq
-2. Boot into Talos maintenance mode
-3. Wait for configuration to be applied
+VM smoke testing is development-only and is not part of the product UI or CLI.
 
-### 7. Deploy Configurations to All Nodes
+## Talos Output
 
-```bash
-ansible-playbook -i inventory.yml playbooks/deploy-talos-cluster.yml
+Generated Talos state includes:
+
+- Image Factory schematic and artifact URLs.
+- Cluster config and per-node patches.
+- Static node networking from Core/capture/manual input.
+- Selected system extensions and kernel modules.
+- Longhorn bind mount configuration unless disabled.
+- Deployment manifest and saved deployment state for resume.
+
+Durable state is stored on the deployer under:
+
+```text
+/var/lib/talos-deploy/<account>/<cluster>/
 ```
-
-This will:
-1. Apply configurations to all nodes
-2. Wait for all control plane nodes to be fully healthy (installer downloaded, disk installed, rebooted, services running)
-3. Wait for all worker nodes to be fully healthy
-4. Verify etcd service is ready on first control plane
-5. Check if cluster is already bootstrapped
-6. Display next steps
-
-**Note:** This playbook includes comprehensive health checks to ensure all nodes are fully ready. It stops before bootstrapping to allow you to verify node status.
-
-### 8. Bootstrap the Cluster
-
-After all nodes are healthy, bootstrap etcd and extract kubeconfig:
-
-```bash
-ansible-playbook -i inventory.yml playbooks/bootstrap-talos-cluster.yml
-```
-
-This will:
-1. Check if etcd is already bootstrapped
-2. Bootstrap etcd on first control plane node (if not already done)
-3. Wait for etcd cluster to be operational
-4. Wait for Kubernetes API to be available
-5. Extract kubeconfig to `~/.kube/config`
-6. Verify cluster access
-
-**Note:** Nodes will show `NotReady` until CNI (kube-ovn) is installed - this is expected!
-
-### 9. Install Additional Services (Optional)
-
-After the cluster is deployed, you can install additional services like cert-manager:
-
-```bash
-cd extras/cert-manager
-./install-cert-manager.sh
-```
-
-See the [extras/README.md](extras/README.md) for more information on available services and customization options.
-
-## File Structure
-
-```
-.
-├── inventory.yml.example           # Example inventory file
-├── inventory.yml                   # Your inventory (gitignored)
-├── playbooks/                      # Ansible playbooks
-│   ├── deploy-dnsmasq.yml          # PXE server deployment
-│   ├── generate-talos-configs.yml  # Generate Talos node configs
-│   ├── pxe-boot-servers.yml        # Trigger PXE boot via iLO/iDRAC
-│   ├── reset-to-maintenance.yml    # Reset nodes to maintenance mode
-│   └── deploy-talos-cluster.yml    # Bootstrap and deploy cluster
-├── scripts/
-│   └── redfish_pxe_boot.py         # Redfish API client for OOB management
-├── templates/
-│   ├── dnsmasq.conf.j2             # Main dnsmasq configuration
-│   ├── dnsmasq-pxe.conf.j2         # PXE-specific settings
-│   ├── dnsmasq-hosts.conf.j2       # Static DHCP reservations
-│   ├── nginx-talos.conf.j2         # nginx HTTP server configuration
-│   ├── pxelinux.cfg.default.j2     # PXE boot menu
-│   ├── talos-schematic.yaml.j2     # Talos Image Factory schematic
-│   ├── talos-controlplane.yaml.j2  # Control plane node template
-│   └── talos-worker.yaml.j2        # Worker node template
-├── extras/                         # Additional service installation scripts
-│   ├── cert-manager/               # Cert-manager installation
-│   │   ├── install-cert-manager.sh
-│   │   └── cert-manager-helm-overrides.yaml
-│   └── README.md                   # Extras documentation
-├── etc/                            # Configuration files
-│   ├── helm-chart-versions.yaml    # Centralized Helm chart versions
-│   └── helm-configs/               # Helm override configurations
-│       ├── global_overrides/       # Global overrides for all charts
-│       └── cert-manager/           # Cert-manager specific overrides
-├── talos-configs/                  # Generated configs (gitignored)
-│   ├── *.yaml                      # Individual node configs
-│   ├── secrets.yaml                # Cluster secrets
-│   ├── talosconfig                 # Talos CLI config
-│   └── DEPLOYMENT.md               # Deployment guide
-├── pxe-boot-*.log                  # Boot trigger logs (gitignored)
-├── maintenance-reset-*.log         # Maintenance reset logs (gitignored)
-└── README.md                       # This file
-```
-
-## Configuration
-
-### Network Settings
-
-```yaml
-dhcp_interface: eth0                # Interface to listen on
-domain: pxe.local                   # Internal domain name
-pxe_server_address: 192.168.1.10    # PXE/HTTP server IP or hostname
-dhcp_range:
-  start: 192.168.1.100              # DHCP range start
-  end: 192.168.1.150                # DHCP range end
-lease_time: "12h"                   # DHCP lease duration
-```
-
-**Note:** `pxe_server_address` is used for the nginx HTTP server that serves Talos installer images on port 8080.
-
-### Talos Image Factory
-
-```yaml
-talos_version: v1.11.3              # Talos Linux version
-talos_arch: amd64                   # Architecture (amd64, arm64)
-talos_extensions:                   # System extensions to include
-  - siderolabs/iscsi-tools
-  - siderolabs/util-linux-tools
-  - siderolabs/qemu-guest-agent     # Add more as needed
-talos_extra_kernel_args: []         # Optional kernel arguments
-talos_download_iso: false           # Set true to download ISO
-use_local_installer: true           # Use local nginx for installer images (true) or pull from factory.talos.dev (false)
-```
-
-**`use_local_installer` option:**
-- `true` (default): Downloads installer image to local nginx server, nodes install from local HTTP server (no external internet required during installation)
-- `false`: Nodes pull installer images directly from factory.talos.dev (requires internet access on PXE network). If nginx is currently enabled, it will be stopped and disabled.
-
-Available extensions: https://factory.talos.dev
-
-### PXE Boot Options
-
-```yaml
-pxe_boot_label: talos-install           # Boot menu label
-pxe_boot_menu_text: Install Talos Linux # Menu description
-pxe_timeout: 30                          # Timeout (deciseconds)
-pxe_default_label: talos-install         # Auto-boot option
-pxe_boot_params: talos.platform=metal... # Kernel parameters
-```
-
-### Cluster Configuration
-
-```yaml
-talos_cluster_name: cluster.local
-talos_cluster_endpoint: https://talos-api.example.com:6443
-talos_kubernetes_version: v1.34.1
-
-# Network configuration (from deployer node)
-network_gateway: 192.168.1.1
-network_netmask: 24
-network_nameservers:
-  - 8.8.8.8
-  - 1.1.1.1
-network_mtu: 1500
-network_primary_interface: eno1
-
-# Longhorn configuration
-longhorn_mount_path: /var/lib/longhorn
-```
-
-### Host Definitions
-
-Each machine needs:
-- **name**: FQDN or hostname
-- **mac**: MAC address (XX:XX:XX:XX:XX:XX format)
-- **ip**: Static IP address
-- **role**: `controlplane` or `worker`
-- **install_disk**: Disk for Talos installation
-- **oob_type**: `ilo`, `idrac`, or `redfish` (optional, for automated PXE boot)
-- **oob_address**: OOB management IP (optional)
-- **oob_username**: OOB username (optional)
-- **oob_password**: OOB password (optional)
-
-```yaml
-pxe_hosts:
-  - name: control-plane-1.k8s.local
-    mac: 52:54:00:aa:bb:cc
-    ip: 192.168.1.10
-    role: controlplane
-    install_disk: /dev/sda
-    # Out-of-Band Management (optional)
-    oob_type: ilo
-    oob_address: 192.168.1.110
-    oob_username: Administrator
-    oob_password: your-ilo-password
-
-  - name: worker-1.k8s.local
-    mac: 52:54:00:dd:ee:ff
-    ip: 192.168.1.20
-    role: worker
-    install_disk: /dev/sda
-    oob_type: idrac
-    oob_address: 192.168.1.120
-    oob_username: root
-    oob_password: your-idrac-password
-```
-
-**Note:** OOB credentials are stored in `inventory.yml` which is gitignored for security.
-
-## Complete Workflow
-
-### Full Deployment from Scratch
-
-```bash
-# 1. Deploy PXE server
-ansible-playbook -i inventory.yml playbooks/deploy-dnsmasq.yml
-
-# 2. Generate Talos configurations
-ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
-
-# 3. PXE boot all nodes (automated via OOB)
-ansible-playbook -i inventory.yml playbooks/pxe-boot-servers.yml
-
-# 4. Deploy configurations to all nodes
-ansible-playbook -i inventory.yml playbooks/deploy-talos-cluster.yml
-
-# 5. Bootstrap the cluster
-ansible-playbook -i inventory.yml playbooks/bootstrap-talos-cluster.yml
-
-# 6. Verify cluster
-kubectl get nodes  # Will show NotReady (expected without CNI)
-kubectl get pods -A
-```
-
-## Usage Examples
-
-### Deploy PXE server only
-
-```bash
-ansible-playbook -i inventory.yml playbooks/deploy-dnsmasq.yml
-```
-
-### Check deployment status
-
-```bash
-# Check dnsmasq status
-sudo systemctl status dnsmasq
-
-# View dnsmasq logs
-sudo journalctl -u dnsmasq -f
-
-# Check DHCP leases
-sudo cat /var/lib/misc/dnsmasq.leases
-
-# Verify TFTP files
-ls -la /var/lib/tftpboot/
-```
-
-### Re-apply configurations to running nodes
-
-Apply updated configurations to running nodes without full redeployment:
-
-```bash
-# Apply to all nodes (no reboot)
-ansible-playbook -i inventory.yml playbooks/re-apply-configs.yml
-
-# Apply to all nodes with reboot
-ansible-playbook -i inventory.yml playbooks/re-apply-configs.yml -e "reboot=true"
-
-# Apply to specific nodes only
-ansible-playbook -i inventory.yml playbooks/re-apply-configs.yml -e "target_nodes=['node01.pxe.local','node02.pxe.local']"
-
-# Apply to specific nodes with reboot
-ansible-playbook -i inventory.yml playbooks/re-apply-configs.yml -e "reboot=true" -e "target_nodes=['node01.pxe.local']"
-```
-
-This will:
-- Validate all configuration files for syntax errors
-- Apply configs using secure authentication (--talosconfig)
-- By default: stage changes without rebooting (apply on next reboot)
-- With `reboot=true`: use `--mode reboot` to reboot nodes immediately
-
-Use cases:
-- Apply configuration changes to running cluster
-- Update node settings without full redeployment
-- Roll out changes to specific nodes
-
-### Reset all nodes to maintenance mode
-
-Useful for reprovisioning, upgrading, or troubleshooting:
-```bash
-ansible-playbook -i inventory.yml playbooks/reset-to-maintenance.yml
-```
-
-This will:
-- Wipe ALL disks on worker nodes first (using control plane as endpoint)
-- Wipe ALL disks on control plane nodes (using their own endpoint)
-- Nodes automatically reboot with wiped disks
-- Nodes PXE boot into Talos maintenance mode (no OS on disk)
-- Delete talos-configs/ directory to force fresh cluster
-
-After reset, regenerate configs and redeploy:
-```bash
-# Optionally update Talos version in inventory.yml
-ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
-ansible-playbook -i inventory.yml playbooks/deploy-talos-cluster.yml
-```
-
-### Regenerate configs for new nodes
-
-Add nodes to inventory, then:
-```bash
-# Generate new node configs (existing configs won't be overwritten)
-ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
-
-# Apply to new nodes
-talosctl apply-config --insecure --nodes <new-node-ip> --file talos-configs/<node>.yaml
-```
-
-### Update to new Talos version
-
-Edit `inventory.yml`:
-```yaml
-talos_version: v1.12.0
-```
-
-Re-run playbooks:
-```bash
-# Download new PXE images
-ansible-playbook -i inventory.yml playbooks/deploy-dnsmasq.yml
-
-# Regenerate configs (delete talos-configs/ first!)
-rm -rf talos-configs/
-ansible-playbook -i inventory.yml playbooks/generate-talos-configs.yml
-```
-
-## How It Works
-
-### 1. Talos Image Factory Integration
-
-1. **Schematic Generation**: Creates YAML schematic with your system extensions
-2. **API Upload**: Uploads to `https://factory.talos.dev/schematics`
-3. **ID Retrieval**: Receives unique schematic ID
-4. **Image Download**: Downloads custom kernel and initramfs (always), plus raw disk installer (if `use_local_installer: true`)
-5. **Local HTTP Serving** (optional): If `use_local_installer: true`, nginx serves installer image from `http://<pxe_server_address>:8080/talos-images/`
-6. **PXE Configuration**: Configures boot menu for downloaded images
-
-### 2. Configuration Generation
-
-1. **Secret Generation**: Uses `talosctl gen secrets` (once, reuses existing)
-2. **Secret Parsing**: Extracts all PKI certificates and tokens
-3. **Template Rendering**: Generates individual configs per node with:
-   - Unique hostname and IP from inventory
-   - Proper role (controlplane/worker)
-   - Network config from deployer node
-   - Longhorn mount configuration
-   - CNI set to "none" (for kube-ovn)
-4. **Talosconfig Creation**: Generates CLI config for cluster management
-
-### 3. Node Deployment (deploy-talos-cluster.yml)
-
-1. **Config Application**: Applies configs to all nodes via `talosctl apply-config --insecure`
-2. **Health Check - Control Plane**: Waits for all control plane nodes to pass `talosctl health` checks (up to 10 minutes per node)
-3. **Health Check - Workers**: Waits for all worker nodes to pass `talosctl health` checks
-4. **etcd Service Verification**: Confirms etcd service is available on first control plane
-5. **Bootstrap Check**: Checks if etcd is already bootstrapped
-6. **Summary**: Displays deployment status and next steps
-
-### 4. Cluster Bootstrap (bootstrap-talos-cluster.yml)
-
-1. **Bootstrap Check**: Verifies if etcd is already bootstrapped
-2. **etcd Bootstrap**: Bootstraps etcd on first control plane node (if not already done)
-3. **etcd Cluster Ready**: Waits for etcd members to be responsive
-4. **API Availability**: Waits for Kubernetes API to respond
-5. **Kubeconfig Extraction**: Downloads kubeconfig to `~/.kube/config`
-6. **Verification**: Verifies cluster access (nodes will be NotReady without CNI)
-
-### DHCP Whitelist
-
-The playbook configures dnsmasq to only serve DHCP to known MAC addresses:
-
-```
-dhcp-host=52:54:00:12:34:56,192.168.1.101,node01,12h
-dhcp-ignore=#known  # Ignore unknown MACs
-```
-
-### PXE Boot Flow
-
-1. Machine sends PXE boot request
-2. dnsmasq responds with DHCP offer (if MAC is whitelisted)
-3. Machine downloads `pxelinux.0` via TFTP
-4. Boot menu is displayed
-5. Auto-boots Talos installer after 3 seconds (configurable)
-6. Kernel and initramfs downloaded via TFTP
-7. Talos boots in maintenance mode
-8. When config is applied, installer image downloads from:
-   - Local nginx HTTP server on port 8080 (if `use_local_installer: true`) - no external internet required
-   - factory.talos.dev (if `use_local_installer: false`) - requires internet access
-9. Installation proceeds
-
-## Troubleshooting
-
-### dnsmasq won't start
-
-```bash
-# Check if ports are in use
-sudo netstat -tulpn | grep -E ':(67|69)'
-
-# Verify interface exists
-ip link show
-
-# Check configuration syntax
-sudo dnsmasq --test
-```
-
-### Machines not getting IP addresses
-
-```bash
-# Check dnsmasq logs for DHCP requests
-sudo journalctl -u dnsmasq | grep DHCP
-
-# Verify MAC address is correct
-ip link show
-
-# Test DHCP manually
-sudo nmap --script broadcast-dhcp-discover -e eth0
-```
-
-### Cluster deployment fails during health checks
-
-If nodes fail health checks during deployment:
-
-```bash
-# Check node status directly
-talosctl health --nodes <node-ip> --endpoints <node-ip> --talosconfig talos-configs/talosconfig
-
-# Check what's failing
-talosctl services --nodes <node-ip> --endpoints <node-ip> --talosconfig talos-configs/talosconfig
-
-# View logs for specific service
-talosctl logs kubelet --nodes <node-ip> --talosconfig talos-configs/talosconfig
-
-# Check if node finished installing
-talosctl get machineconfig --nodes <node-ip> --endpoints <node-ip> --talosconfig talos-configs/talosconfig
-```
-
-Common issues:
-- Node still installing to disk (wait longer)
-- Network connectivity issues after reboot (check static IP configuration)
-- Insufficient resources (check disk space, memory)
-- Installer download timeout (check internet connectivity or use_local_installer setting)
-
-### PXE boot fails with "ldlinux.c32 not found"
-
-The playbook automatically installs syslinux files. If you see this error:
-
-```bash
-# Verify syslinux files
-ls -la /var/lib/tftpboot/*.c32
-
-# Re-run playbook to copy files
-ansible-playbook -i inventory.yml playbooks/deploy-dnsmasq.yml
-```
-
-### Image Factory download timeouts
-
-Large initramfs files may timeout on slow connections:
-
-```bash
-# Manual download as fallback
-sudo curl -L -o /var/lib/tftpboot/kernel-amd64 \
-  https://factory.talos.dev/image/{schematic-id}/v1.11.3/kernel-amd64
-
-sudo curl -L -o /var/lib/tftpboot/initramfs-amd64.xz \
-  https://factory.talos.dev/image/{schematic-id}/v1.11.3/initramfs-amd64.xz
-```
-
-The playbook retries downloads up to 3 times with 10-minute timeout.
-
-## Advanced Configuration
-
-### Custom TFTP root
-
-Edit playbook variables:
-```yaml
-vars:
-  dnsmasq_tftp_root: /srv/tftp
-```
-
-### Disable DNS functions
-
-```yaml
-dns_enabled: false
-```
-
-### Multiple boot options
-
-Edit `templates/pxelinux.cfg.default.j2` to add additional LABEL sections:
-
-```
-LABEL rescue
-    MENU LABEL Boot Rescue System
-    KERNEL /rescue/vmlinuz
-    APPEND initrd=/rescue/initrd.img
-```
-
-### Custom kernel arguments
-
-```yaml
-talos_extra_kernel_args:
-  - vga=791
-  - nomodeset
-```
-
-## Security Considerations
-
-- **Firewall rules**: Ensure ports 67/UDP (DHCP), 69/UDP (TFTP) are allowed. Port 8080/TCP (HTTP) only needed if `use_local_installer: true`
-- **Network isolation**: Use interface binding to limit dnsmasq and nginx scope
-- **MAC filtering**: Only whitelisted machines receive DHCP
-- **HTTP server**: nginx serves only on configured `pxe_server_address` (when `use_local_installer: true`)
-- **Internet requirements**: If `use_local_installer: false`, PXE network must have internet access to factory.talos.dev
-- **Regular updates**: Keep Talos version current for security patches
-
-## Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Test your changes thoroughly
-4. Submit a pull request
-
-## License
-
-This project is provided as-is for educational and production use.
-
-## Resources
-
-- [Talos Linux Documentation](https://www.talos.dev/)
-- [Talos Image Factory](https://factory.talos.dev/)
-- [dnsmasq Documentation](http://www.thekelleys.org.uk/dnsmasq/doc.html)
-- [Syslinux Documentation](https://wiki.syslinux.org/)
-
-## Support
-
-For issues and questions:
-- GitHub Issues: https://github.com/aedan/talos-deploy-system/issues
-- Talos Community: https://slack.dev.talos-systems.io/

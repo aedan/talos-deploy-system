@@ -70,16 +70,16 @@ public final class DefaultRedfishClient: RedfishClient, @unchecked Sendable {
     }
 }
 
-public protocol HelperHostClient: Sendable {
+public protocol DeployerHostClient: Sendable {
     func validate(connection: SSHConnection) async throws
     func setHostname(_ hostname: String, connection: SSHConnection) async throws
-    func planDeployerServices(configuration: HelperMediaServiceConfiguration) -> DeployerServicePlan
-    func prepareDeployerServices(configuration: HelperMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerServicePlan
-    func prepareMediaServices(configuration: HelperMediaServiceConfiguration, connection: SSHConnection) async throws -> HelperMediaServicePlan
+    func planDeployerServices(configuration: DeployerMediaServiceConfiguration) -> DeployerServicePlan
+    func prepareDeployerServices(configuration: DeployerMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerServicePlan
+    func prepareMediaServices(configuration: DeployerMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerMediaServicePlan
     func syncState(localDirectory: URL, remoteStateRoot: String, connection: SSHConnection) async throws
 }
 
-public final class DefaultHelperHostClient: HelperHostClient, @unchecked Sendable {
+public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sendable {
     private let router: SSHCommandRouter
 
     public init(router: SSHCommandRouter = SSHCommandRouter()) {
@@ -95,7 +95,7 @@ public final class DefaultHelperHostClient: HelperHostClient, @unchecked Sendabl
         _ = try await router.run(connection: connection, remoteCommand: "sudo hostnamectl set-hostname \(escaped) || hostnamectl set-hostname \(escaped)")
     }
 
-    public func planDeployerServices(configuration: HelperMediaServiceConfiguration) -> DeployerServicePlan {
+    public func planDeployerServices(configuration: DeployerMediaServiceConfiguration) -> DeployerServicePlan {
         let packages = ["ca-certificates", "curl", "dnsmasq", "python3", "openssh-client"]
         let talosctlVersion = configuration.talosctlVersion.isEmpty ? "configured Talos version" : configuration.talosctlVersion
         return DeployerServicePlan(
@@ -120,7 +120,7 @@ public final class DefaultHelperHostClient: HelperHostClient, @unchecked Sendabl
         )
     }
 
-    public func prepareDeployerServices(configuration: HelperMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerServicePlan {
+    public func prepareDeployerServices(configuration: DeployerMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerServicePlan {
         let plan = planDeployerServices(configuration: configuration)
         let packageList = plan.packages.joined(separator: " ")
         let binRoot = "\(configuration.stateRoot)/bin"
@@ -193,7 +193,7 @@ public final class DefaultHelperHostClient: HelperHostClient, @unchecked Sendabl
         return plan
     }
 
-    public func prepareMediaServices(configuration: HelperMediaServiceConfiguration, connection: SSHConnection) async throws -> HelperMediaServicePlan {
+    public func prepareMediaServices(configuration: DeployerMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerMediaServicePlan {
         let mediaRoot = configuration.mediaRoot
         let pxeRoot = configuration.pxeRoot
         let binRoot = "\(configuration.stateRoot)/bin"
@@ -317,7 +317,7 @@ public final class DefaultHelperHostClient: HelperHostClient, @unchecked Sendabl
         """
         _ = try await router.run(connection: connection, remoteCommand: remoteCommand)
 
-        return HelperMediaServicePlan(
+        return DeployerMediaServicePlan(
             mediaRoot: mediaRoot,
             pxeRoot: pxeRoot,
             httpBindAddress: configuration.httpBindAddress,
@@ -637,28 +637,28 @@ public struct NoOpProvisioner: Provisioner {
 }
 
 public enum DeploymentPlannerError: Error, LocalizedError {
-    case missingHelper
-    case multipleHelpers
+    case missingDeployer
+    case multipleDeployers
     case invalidControlPlaneCount
-    case missingHelperConfirmation(String)
+    case missingDeployerConfirmation(String)
     case existingMediaHostNotExplicitlyAllowed
-    case pxeCannotBootstrapFirstOverseer
+    case pxeCannotBootstrapFirstDeployer
     case missingOOBReachableMediaURL
     case staticNetworkInvalid([StaticNetworkValidationResult])
 
     public var errorDescription: String? {
         switch self {
-        case .missingHelper:
+        case .missingDeployer:
             return "Exactly one deployer must be selected."
-        case .multipleHelpers:
+        case .multipleDeployers:
             return "Only one deployer may be selected."
         case .invalidControlPlaneCount:
             return "The control plane count must be either 1 or 3."
-        case .missingHelperConfirmation(let name):
+        case .missingDeployerConfirmation(let name):
             return "Typed confirmation is required before reinstalling deployer \(name)."
         case .existingMediaHostNotExplicitlyAllowed:
             return "Existing OS media host delivery is disabled. Use operator local media for greenfield installs, or explicitly allow an existing media host in Settings."
-        case .pxeCannotBootstrapFirstOverseer:
+        case .pxeCannotBootstrapFirstDeployer:
             return "PXE cannot bootstrap the first deployer unless an external PXE service already exists."
         case .missingOOBReachableMediaURL:
             return "OOB-reachable URL media delivery requires an external media base URL in Settings."
@@ -680,9 +680,9 @@ public struct DeploymentPlanner: Sendable {
     }
 
     public func makePlan(spec: DeploymentSpec) throws -> DeploymentPlan {
-        let helpers = spec.nodes.filter { $0.assignment.role.isDeployer }
-        guard !helpers.isEmpty else { throw DeploymentPlannerError.missingHelper }
-        guard helpers.count == 1 else { throw DeploymentPlannerError.multipleHelpers }
+        let deployers = spec.nodes.filter { $0.assignment.role.isDeployer }
+        guard !deployers.isEmpty else { throw DeploymentPlannerError.missingDeployer }
+        guard deployers.count == 1 else { throw DeploymentPlannerError.multipleDeployers }
         let controlPlanes = spec.nodes.filter { $0.assignment.role == .controlplane }
         guard controlPlanes.count == 1 || controlPlanes.count == 3 else {
             throw DeploymentPlannerError.invalidControlPlaneCount
@@ -692,14 +692,14 @@ public struct DeploymentPlanner: Sendable {
             throw DeploymentPlannerError.staticNetworkInvalid(networkValidation)
         }
 
-        let helperNode = helpers[0]
-        if helperNode.assignment.shouldInstallOS && settings.safety.requireTypedConfirmationForHelperReinstall {
-            let expected = "\(settings.safety.destructiveConfirmationTextPrefix) \(helperNode.device.name)"
-            guard helperNode.assignment.typedConfirmation == expected else {
-                throw DeploymentPlannerError.missingHelperConfirmation(helperNode.device.name)
+        let deployerNode = deployers[0]
+        if deployerNode.assignment.shouldInstallOS && settings.safety.requireTypedConfirmationForDeployerReinstall {
+            let expected = "\(settings.safety.destructiveConfirmationTextPrefix) \(deployerNode.device.name)"
+            guard deployerNode.assignment.typedConfirmation == expected else {
+                throw DeploymentPlannerError.missingDeployerConfirmation(deployerNode.device.name)
             }
         }
-        try validateBootstrapMediaDelivery(for: helperNode)
+        try validateBootstrapMediaDelivery(for: deployerNode)
 
         let planned = spec.nodes
             .filter { $0.assignment.role != .unassigned }
@@ -711,11 +711,11 @@ public struct DeploymentPlanner: Sendable {
                 )
             }
 
-        guard let helper = planned.first(where: { $0.assignment.role.isDeployer }) else {
-            throw DeploymentPlannerError.missingHelper
+        guard let deployer = planned.first(where: { $0.assignment.role.isDeployer }) else {
+            throw DeploymentPlannerError.missingDeployer
         }
 
-        let remotePath = "\(spec.helperStateRoot)/\(spec.accountNumber)/\(spec.clusterName)"
+        let remotePath = "\(spec.deployerStateRoot)/\(spec.accountNumber)/\(spec.clusterName)"
         let tempPath = "rax-temp/\(spec.accountNumber)/\(spec.clusterName)"
         let talosArtifacts = TalosFactoryClient().artifactURLs(settings: spec.talosFactory, talosVersion: spec.talosVersion)
         var phases: [DeploymentPhase] = []
@@ -732,11 +732,11 @@ public struct DeploymentPlanner: Sendable {
             )
         )
 
-        if helper.assignment.shouldInstallOS && helper.assignment.helperMode == .bootstrap {
+        if deployer.assignment.shouldInstallOS && deployer.assignment.deployerMode == .bootstrap {
             phases.append(
                 DeploymentPhase(
                     title: "Bootstrap Deployer",
-                    steps: bootstrapDeployerSteps(helper: helper, tempPath: tempPath, remotePath: remotePath)
+                    steps: bootstrapDeployerSteps(deployer: deployer, tempPath: tempPath, remotePath: remotePath)
                 )
             )
         } else {
@@ -744,7 +744,7 @@ public struct DeploymentPlanner: Sendable {
                 DeploymentPhase(
                     title: "Prepare Existing Deployer",
                     steps: [
-                        "Validate SSH access to deployer \(helper.device.name).",
+                        "Validate SSH access to deployer \(deployer.device.name).",
                         "Create durable state root at \(remotePath).",
                         "tds prepares media and PXE directories plus a range-capable HTTP media service on the selected existing device.",
                         "Stage generated Talos/Ubuntu media through tds before booting any dependent nodes.",
@@ -753,7 +753,7 @@ public struct DeploymentPlanner: Sendable {
             )
         }
 
-        let remainingInstalls = planned.filter { $0.device.id != helper.device.id && $0.assignment.shouldInstallOS }
+        let remainingInstalls = planned.filter { $0.device.id != deployer.device.id && $0.assignment.shouldInstallOS }
         phases.append(
             DeploymentPhase(
                 title: "Provision Cluster",
@@ -770,7 +770,7 @@ public struct DeploymentPlanner: Sendable {
         return DeploymentPlan(
             accountNumber: spec.accountNumber,
             clusterName: spec.clusterName,
-            helper: helper,
+            deployer: deployer,
             installs: planned,
             phases: phases,
             talosArtifacts: talosArtifacts,
@@ -781,13 +781,13 @@ public struct DeploymentPlanner: Sendable {
     }
 
     private func selectInstallMethod(for node: DeploymentNodeSpec, spec: DeploymentSpec) -> InstallMethod {
-        if node.assignment.role.isDeployer && node.assignment.helperMode == .bootstrap && node.assignment.shouldInstallOS {
+        if node.assignment.role.isDeployer && node.assignment.deployerMode == .bootstrap && node.assignment.shouldInstallOS {
             switch settings.bootstrapMedia.deliveryMode {
             case .operatorLocalMedia:
                 return .operatorLocalMedia
             case .oobReachableURL, .existingOSMediaHost:
                 return .bootURL
-            case .pxeAfterOverseerOnline:
+            case .pxeAfterDeployerOnline:
                 return .pxe
             }
         }
@@ -816,12 +816,12 @@ public struct DeploymentPlanner: Sendable {
             switch strategy {
             case .automatic:
                 continue
-            case .overseerHostedMedia:
-                if spec.talosProvisioning.allowOverseerHostedMedia {
+            case .deployerHostedMedia:
+                if spec.talosProvisioning.allowDeployerHostedMedia {
                     return .bootURL
                 }
-            case .overseerPXE:
-                if spec.talosProvisioning.allowOverseerPXE {
+            case .deployerPXE:
+                if spec.talosProvisioning.allowDeployerPXE {
                     return .pxe
                 }
             case .directVirtualMedia:
@@ -855,10 +855,10 @@ public struct DeploymentPlanner: Sendable {
         }
     }
 
-    private func validateBootstrapMediaDelivery(for helperNode: DeploymentNodeSpec) throws {
-        guard helperNode.assignment.role.isDeployer,
-              helperNode.assignment.helperMode == .bootstrap,
-              helperNode.assignment.shouldInstallOS
+    private func validateBootstrapMediaDelivery(for deployerNode: DeploymentNodeSpec) throws {
+        guard deployerNode.assignment.role.isDeployer,
+              deployerNode.assignment.deployerMode == .bootstrap,
+              deployerNode.assignment.shouldInstallOS
         else { return }
 
         switch settings.bootstrapMedia.deliveryMode {
@@ -872,14 +872,14 @@ public struct DeploymentPlanner: Sendable {
             guard settings.bootstrapMedia.allowExistingOSMediaHost else {
                 throw DeploymentPlannerError.existingMediaHostNotExplicitlyAllowed
             }
-        case .pxeAfterOverseerOnline:
-            throw DeploymentPlannerError.pxeCannotBootstrapFirstOverseer
+        case .pxeAfterDeployerOnline:
+            throw DeploymentPlannerError.pxeCannotBootstrapFirstDeployer
         }
     }
 
-    private func bootstrapDeployerSteps(helper: PlannedDeviceInstall, tempPath: String, remotePath: String) -> [String] {
+    private func bootstrapDeployerSteps(deployer: PlannedDeviceInstall, tempPath: String, remotePath: String) -> [String] {
         let commonTail = [
-            "Install \(helper.device.name) first and wait for SSH reachability.",
+            "Install \(deployer.device.name) first and wait for SSH reachability.",
             "Move durable deployment state from rax to \(remotePath).",
             "Only after the deployer is online may PXE-dependent control-plane and worker nodes proceed.",
         ]
@@ -903,7 +903,7 @@ public struct DeploymentPlanner: Sendable {
                 "Use the explicitly allowed existing OS media host \(settings.bootstrapMedia.mediaHostDeviceID) to serve installation media.",
                 "This is not greenfield-safe; every run must document which existing host is being used.",
             ] + commonTail
-        case .pxeAfterOverseerOnline:
+        case .pxeAfterDeployerOnline:
             return [
                 "PXE is deferred until after the deployer is installed.",
             ] + commonTail
@@ -914,7 +914,7 @@ public struct DeploymentPlanner: Sendable {
 public final class DeploymentCoordinator: @unchecked Sendable {
     private let settings: AppSettings
     private let builder: TalosBuilder
-    private let helperHostClient: HelperHostClient
+    private let deployerHostClient: DeployerHostClient
     private let coreClient: CoreClient?
     private let stateStore: DeploymentStateStore
     private let fileManager: FileManager
@@ -922,14 +922,14 @@ public final class DeploymentCoordinator: @unchecked Sendable {
     public init(
         settings: AppSettings,
         builder: TalosBuilder = DefaultTalosBuilder(),
-        helperHostClient: HelperHostClient = DefaultHelperHostClient(),
+        deployerHostClient: DeployerHostClient = DefaultDeployerHostClient(),
         coreClient: CoreClient? = nil,
         stateStore: DeploymentStateStore = DeploymentStateStore(),
         fileManager: FileManager = .default
     ) {
         self.settings = settings
         self.builder = builder
-        self.helperHostClient = helperHostClient
+        self.deployerHostClient = deployerHostClient
         self.coreClient = coreClient
         self.stateStore = stateStore
         self.fileManager = fileManager
@@ -946,26 +946,26 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             plan: plan,
             events: [DeploymentEvent(message: "Deployment staged locally.")],
             localStateDirectory: localStateDirectory.path,
-            helperSynchronized: false
+            deployerSynchronized: false
         )
         _ = try stateStore.save(state, to: localStateDirectory)
         return state
     }
 
-    public func synchronizeToHelper(_ state: DeploymentState, connection: SSHConnection) async throws -> DeploymentState {
+    public func synchronizeToDeployer(_ state: DeploymentState, connection: SSHConnection) async throws -> DeploymentState {
         let localDirectory = URL(fileURLWithPath: state.localStateDirectory, isDirectory: true)
-        try await helperHostClient.validate(connection: connection)
-        let mediaPlan = try await helperHostClient.prepareMediaServices(
-            configuration: HelperMediaServiceConfiguration(defaults: settings.helper),
+        try await deployerHostClient.validate(connection: connection)
+        let mediaPlan = try await deployerHostClient.prepareMediaServices(
+            configuration: DeployerMediaServiceConfiguration(defaults: settings.deployer),
             connection: connection
         )
-        try await helperHostClient.syncState(
+        try await deployerHostClient.syncState(
             localDirectory: localDirectory,
             remoteStateRoot: state.plan.durableStateDirectory,
             connection: connection
         )
         var updated = state
-        updated.helperSynchronized = true
+        updated.deployerSynchronized = true
         updated.events.append(DeploymentEvent(message: "Prepared deployer media services on \(connection.host) at \(mediaPlan.mediaRoot)."))
         updated.events.append(DeploymentEvent(message: "Deployment state synchronized to deployer \(connection.host)."))
         _ = try stateStore.save(updated, to: localDirectory)
@@ -977,11 +977,11 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         connection: SSHConnection? = nil,
         dryRun: Bool = true
     ) async throws -> TalosExecutionRun {
-        let deployer = state.plan.helper
-        let hostname = DeployerNaming().hostname(for: deployer.device, suffix: settings.helper.hostnameSuffix)
-        let serviceConfiguration = HelperMediaServiceConfiguration(defaults: settings.helper)
+        let deployer = state.plan.deployer
+        let hostname = DeployerNaming().hostname(for: deployer.device, suffix: settings.deployer.hostnameSuffix)
+        let serviceConfiguration = DeployerMediaServiceConfiguration(defaults: settings.deployer)
         var updated = state
-        var servicePlan = helperHostClient.planDeployerServices(configuration: serviceConfiguration)
+        var servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
         let renameResult: CoreRenameResult?
 
         if dryRun {
@@ -1014,13 +1014,13 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             guard let connection else {
                 throw DeploymentCoordinatorError.missingDeployerConnection
             }
-            try await helperHostClient.validate(connection: connection)
-            try await helperHostClient.setHostname(hostname, connection: connection)
-            servicePlan = try await helperHostClient.prepareDeployerServices(
+            try await deployerHostClient.validate(connection: connection)
+            try await deployerHostClient.setHostname(hostname, connection: connection)
+            servicePlan = try await deployerHostClient.prepareDeployerServices(
                 configuration: serviceConfiguration,
                 connection: connection
             )
-            updated = try await synchronizeToHelper(updated, connection: connection)
+            updated = try await synchronizeToDeployer(updated, connection: connection)
             updated.events.append(DeploymentEvent(message: "Deployer services prepared on \(connection.host)."))
         }
 
@@ -1099,6 +1099,9 @@ public final class AppController: ObservableObject {
     @Published public var ubuntuLastValidation: UbuntuIsoValidationResult?
     @Published public var ubuntuNetworkPlan: NetworkRebuildPlan?
     @Published public var ubuntuLocalMediaState: LocalMediaSessionState?
+    @Published public var labAssignmentLabel: String
+    @Published public var labAssignmentDeployerID: String
+    @Published public var labAssignmentControllerMarkers: String
     @Published public var accessProfileProxyPasswords: [UUID: String]
     @Published public var statusMessage: String
 
@@ -1145,6 +1148,9 @@ public final class AppController: ObservableObject {
         self.ubuntuSSHKeyFiles = ""
         self.ubuntuOOBURL = ""
         self.ubuntuOOBUsername = ""
+        self.labAssignmentLabel = ""
+        self.labAssignmentDeployerID = ""
+        self.labAssignmentControllerMarkers = LabRoleAssignmentPlanner.defaultControllerMarkers.joined(separator: ",")
         self.accessProfileProxyPasswords = Self.loadProxyPasswords(for: loadedSettings.accessProfiles, secretStore: secretStore)
         self.statusMessage = "Ready"
     }
@@ -1344,6 +1350,32 @@ public final class AppController: ObservableObject {
         assignments[assignment.deviceID] = assignment
     }
 
+    public func applyLabRoleAssignment() {
+        let markers = labAssignmentControllerMarkers
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let result = LabRoleAssignmentPlanner().makeAssignments(
+            devices: clusterEligibleDevices,
+            labLabel: labAssignmentLabel,
+            deployerID: labAssignmentDeployerID,
+            controllerMarkers: markers.isEmpty ? LabRoleAssignmentPlanner.defaultControllerMarkers : markers
+        )
+
+        for device in clusterEligibleDevices {
+            assignments[device.id] = defaultAssignment(for: device.id)
+        }
+        for assignment in result.assignments.values {
+            assignments[assignment.deviceID] = assignment
+        }
+
+        let controlPlanes = result.assignments.values.filter { $0.role == .controlplane }.count
+        let workers = result.assignments.values.filter { $0.role == .worker }.count
+        let deployers = result.assignments.values.filter { $0.role.isDeployer }.count
+        let warningSuffix = result.warnings.isEmpty ? "" : " Warnings: \(result.warnings.joined(separator: " "))"
+        statusMessage = "Assigned lab \(result.labLabel): \(deployers) deployer, \(controlPlanes) control-plane, \(workers) workers.\(warningSuffix)"
+    }
+
     private func defaultAssignment(for deviceID: String) -> DeviceAssignment {
         DeviceAssignment(
             deviceID: deviceID,
@@ -1362,7 +1394,7 @@ public final class AppController: ObservableObject {
             clusterEndpoint: settings.talos.clusterEndpoint,
             talosVersion: settings.talos.talosVersion,
             kubernetesVersion: settings.talos.kubernetesVersion,
-            helperStateRoot: settings.helper.stateRoot,
+            deployerStateRoot: settings.deployer.stateRoot,
             talosFactory: settings.talos.factory,
             talosProvisioning: settings.talos.provisioning,
             talosKernelModules: settings.talos.kernelModules,

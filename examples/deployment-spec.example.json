@@ -2,13 +2,13 @@
   "accountNumber" : "0000000",
   "clusterEndpoint" : "https://talos-api.example.com:6443",
   "clusterName" : "cluster.local",
-  "helperStateRoot" : "/var/lib/talos-deploy",
+  "deployerStateRoot" : "/var/lib/talos-deploy",
   "kubernetesVersion" : "v1.34.1",
   "nodes" : [
     {
       "assignment" : {
         "deviceID" : "123456",
-        "helperMode" : "bootstrap",
+        "deployerMode" : "bootstrap",
         "preferredInstall" : "automatic",
         "role" : "deployer",
         "shouldInstallOS" : true,
@@ -45,7 +45,7 @@
     {
       "assignment" : {
         "deviceID" : "cp-1",
-        "helperMode" : "existing",
+        "deployerMode" : "existing",
         "networkSource" : "core",
         "preferredInstall" : "automatic",
         "role" : "controlplane",

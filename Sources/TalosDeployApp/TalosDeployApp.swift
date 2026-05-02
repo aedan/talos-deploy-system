@@ -117,18 +117,25 @@ private struct BootstrapDeployerView: View {
                         .foregroundStyle(.secondary)
                     TextField("Preinstall capture directory or snapshot.json", text: $controller.ubuntuCapturePath)
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Path to the snapshot captured before reinstall; this is what preserves bridges, VLANs, routes, DNS, and MAC mappings.")
                     TextField("Source Ubuntu ISO", text: $controller.ubuntuSourceISOPath)
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Path to the stock Ubuntu 24.04 server ISO that tds will rebuild with a NoCloud autoinstall seed.")
                     TextField("Output customized ISO", text: $controller.ubuntuOutputISOPath)
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Destination path for the generated bootable ISO that will be attached through iLO local media.")
                     TextField("Work directory (optional)", text: $controller.ubuntuWorkDirectoryPath)
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Optional scratch directory for ISO extraction/rebuild work; leave blank to let tds choose a temporary location.")
                     TextField("SSH public key files, comma separated (optional)", text: $controller.ubuntuSSHKeyFiles)
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Comma-separated public key files to install for rack and root; blank uses the CLI/default key behavior.")
                     SecureField("rack password hash, or TDS_RACK_PASSWORD_HASH", text: $controller.ubuntuRackPasswordHash)
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Crypt password hash for the installed rack admin user; raw passwords are not accepted here.")
                     SecureField("root password hash, or TDS_ROOT_PASSWORD_HASH", text: $controller.ubuntuRootPasswordHash)
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Crypt password hash for root so hammertime/operator recovery access still works after install.")
                     HStack {
                         Button("Parse Network Plan") {
                             controller.refreshUbuntuNetworkPlan()
@@ -182,10 +189,13 @@ private struct BootstrapDeployerView: View {
                         .foregroundStyle(.secondary)
                     TextField("iLO URL, for example https://10.17.123.132", text: $controller.ubuntuOOBURL)
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("HTTPS address for the target server's iLO; the embedded WebView uses the configured OOB access profile.")
                     TextField("iLO username", text: $controller.ubuntuOOBUsername)
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Username used only for this iLO browser session.")
                     SecureField("iLO password (not saved)", text: $iloPassword)
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Password for the current iLO local-media attach; it is intentionally not persisted.")
                     HStack {
                         Button("Prepare Local Media Session") {
                             controller.planUbuntuLocalMediaSession()
@@ -247,6 +257,25 @@ private struct SectionCard<Content: View>: View {
     }
 }
 
+private struct FieldHelpModifier: ViewModifier {
+    let text: String
+
+    func body(content: Content) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            content
+            Text(text)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+private extension View {
+    func fieldHelp(_ text: String) -> some View {
+        modifier(FieldHelpModifier(text: text))
+    }
+}
+
 private struct SignInView: View {
     @EnvironmentObject private var controller: AppController
     @State private var username = ""
@@ -268,8 +297,11 @@ private struct SignInView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 TextField("Username", text: $username)
+                    .fieldHelp("Optional Core username label for a manually stored session; rax normally detects this from hammertime.")
                 TextField("Header Name", text: $headerName)
+                    .fieldHelp("HTTP header used for the Core session secret, usually Cookie unless Core docs say otherwise.")
                 SecureField("Cookie or bearer token", text: $secret)
+                    .fieldHelp("Manual Core auth material stored in Keychain; prefer hammertime session import on rax when available.")
                 HStack {
                     Button("Store Session") {
                         controller.importSession(username: username, headerName: headerName, secret: secret)
@@ -308,6 +340,7 @@ private struct InventoryView: View {
                 TextField("Account Number", text: $controller.accountNumber)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 220)
+                    .fieldHelp("Core account number to inventory; tds does not ship with a default real account.")
                 Button("Load Devices") {
                     Task { await controller.refreshInventory() }
                 }
@@ -320,6 +353,26 @@ private struct InventoryView: View {
                 Text("Showing \(controller.clusterEligibleDevices.count) physical server candidates. Filtered out \(controller.filteredDevices.count) non-server devices.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            SectionCard(title: "Lab Auto Assignment") {
+                Text("For end-to-end testing, enter a lab label from Core inventory. tds selects every matching physical server, assigns the selected deployer separately, marks controller-named hosts as control-plane nodes, and makes the rest workers.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(alignment: .top) {
+                    TextField("Lab label, for example lab2", text: $controller.labAssignmentLabel)
+                        .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Matched against normalized Core device names and metadata, so lab2 also matches lab-2.")
+                    TextField("Deployer device ID or name", text: $controller.labAssignmentDeployerID)
+                        .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Selected physical server that becomes Ubuntu deployer; it is not a Talos node.")
+                    TextField("Controller markers", text: $controller.labAssignmentControllerMarkers)
+                        .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Comma-separated markers used to detect control-plane nodes, such as controller,controlplane,master.")
+                    Button("Auto Assign Lab") {
+                        controller.applyLabRoleAssignment()
+                    }
+                }
             }
 
             Table(controller.clusterEligibleDevices) {
@@ -363,7 +416,7 @@ private struct InventoryView: View {
                                 var assignment = controller.binding(for: device)
                                 assignment.shouldInstallOS = $0
                                 if assignment.role.isDeployer && $0 {
-                                    assignment.helperMode = .bootstrap
+                                    assignment.deployerMode = .bootstrap
                                 }
                                 controller.updateAssignment(assignment)
                             }
@@ -395,11 +448,11 @@ private struct InventoryView: View {
                 }
             }
 
-            if let helper = controller.clusterEligibleDevices.first(where: {
+            if let deployer = controller.clusterEligibleDevices.first(where: {
                 let assignment = controller.binding(for: $0)
                 return assignment.role.isDeployer && assignment.shouldInstallOS
             }) {
-                DeployerWarningView(device: helper)
+                DeployerWarningView(device: deployer)
             }
         }
         .padding()
@@ -430,6 +483,7 @@ private struct DeployerWarningView: View {
                 )
             )
             .textFieldStyle(.roundedBorder)
+            .fieldHelp("Required only when reinstalling the selected deployer, because this destroys the current OS before the cluster can proceed.")
         }
         .padding()
         .background(.orange.opacity(0.12))
@@ -507,22 +561,27 @@ private struct DeviceNetworkEditor: View {
                     Text("Interface")
                     TextField("eno1", text: networkStringBinding(\.managementInterface))
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Final Talos management NIC name; use the captured/Core NIC or enter the expected post-boot interface.")
                     Text("Static CIDR")
                     TextField("172.22.220.196/22", text: networkStringBinding(\.managementAddressCIDR))
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Static management IP with prefix length for the Talos machine config; DHCP is only for live boot.")
                 }
                 GridRow {
                     Text("Gateway")
                     TextField("172.22.220.1", text: networkStringBinding(\.gateway))
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Default gateway for the final static Talos network.")
                     Text("DNS")
                     TextField("172.22.216.10,8.8.8.8", text: networkListBinding(\.nameservers))
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Comma-separated DNS servers rendered into the machine config.")
                 }
                 GridRow {
                     Text("Search Domains")
                     TextField("lab.example,example.test", text: networkListBinding(\.searchDomains))
                         .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Comma-separated DNS search domains for the node.")
                     Text("Manual Plan")
                     TextField("/path/to/network-plan.yaml", text: Binding(
                         get: { controller.binding(for: device).manualNetworkPlanPath },
@@ -533,6 +592,7 @@ private struct DeviceNetworkEditor: View {
                         }
                     ))
                     .textFieldStyle(.roundedBorder)
+                    .fieldHelp("Optional path to a reviewed network plan when Core/captured data is incomplete or needs overrides.")
                 }
             }
             ForEach(validation.errors, id: \.self) { error in
@@ -644,6 +704,7 @@ private struct SettingsRootView: View {
                             get: { controller.settings.accessProfiles[index].name },
                             set: { controller.settings.accessProfiles[index].name = $0 }
                         ))
+                        .fieldHelp("Operator-facing name for this access path, such as OOB corporate proxy or direct lab network.")
                         Picker("Type", selection: Binding(
                             get: { controller.settings.accessProfiles[index].kind },
                             set: { controller.settings.accessProfiles[index].kind = $0 }
@@ -668,18 +729,22 @@ private struct SettingsRootView: View {
                             get: { controller.settings.accessProfiles[index].proxyURL },
                             set: { controller.settings.accessProfiles[index].proxyURL = $0 }
                         ))
+                        .fieldHelp("HTTP/SOCKS proxy endpoint used by OOB browser sessions, for example https://proxy.example:3128 or socks5://127.0.0.1:1080.")
                         TextField("Proxy Username (optional)", text: Binding(
                             get: { controller.settings.accessProfiles[index].proxyUsername },
                             set: { controller.settings.accessProfiles[index].proxyUsername = $0 }
                         ))
+                        .fieldHelp("Optional proxy username; password is stored separately in Keychain.")
                         SecureField("Proxy Password (Keychain)", text: Binding(
                             get: { controller.accessProfileProxyPasswords[profile.id] ?? "" },
                             set: { controller.accessProfileProxyPasswords[profile.id] = $0 }
                         ))
+                        .fieldHelp("Optional proxy password stored in Keychain for this access profile.")
                         TextField("Hammertime via", text: Binding(
                             get: { controller.settings.accessProfiles[index].hammertimeVia },
                             set: { controller.settings.accessProfiles[index].hammertimeVia = $0 }
                         ))
+                        .fieldHelp("Optional hammertime/bastion routing hint for diagnostic actions; deployment does not depend on ht proxy.")
                         if profile.kind == .httpProxy {
                             Text("For OOB browser access, configure the corporate proxy URL here and optionally store credentials in Keychain. Environment variables TDS_OOB_PROXY_USER and TDS_OOB_PROXY_PASSWORD still work for headless testing.")
                                 .font(.caption)
@@ -698,31 +763,43 @@ private struct SettingsRootView: View {
             }
             Section("Core Session") {
                 TextField("Default Account", text: $controller.settings.core.defaultAccountNumber)
+                    .fieldHelp("Optional operator convenience default; leave blank unless you repeatedly work one account.")
                 Picker("Inventory Source", selection: $controller.settings.core.inventorySource) {
                     ForEach(InventorySource.allCases, id: \.self) { source in
                         Text(source.rawValue).tag(source)
                     }
                 }
                 TextField("Docs URL", text: $controller.settings.core.docsURL)
+                    .fieldHelp("Core documentation endpoint for operators running on rax.")
                 TextField("Service URL", text: $controller.settings.core.serviceURL)
+                    .fieldHelp("Base WS Core API endpoint used for account inventory and device details.")
             }
             Section("Hammertime") {
                 Toggle("Enabled", isOn: $controller.settings.hammertime.enabled)
                 Toggle("Skip device checks (--no-checks)", isOn: $controller.settings.hammertime.skipDeviceChecks)
                 TextField("Binary Path", text: $controller.settings.hammertime.binaryPath)
+                    .fieldHelp("Path to the ht executable on rax.")
                 TextField("Python Path (optional)", text: $controller.settings.hammertime.pythonPath)
+                    .fieldHelp("Optional Python interpreter for the bundled Core bridge; leave blank for system Python.")
                 TextField("Session Cache Path", text: $controller.settings.hammertime.sessionCachePath)
+                    .fieldHelp("Optional hammertime cache path to inspect for active Core auth; blank uses the default discovery paths.")
                 TextField("Default Fact Groups", text: Binding(
                     get: { controller.settings.hammertime.defaultFactGroups.joined(separator: ",") },
                     set: { controller.settings.hammertime.defaultFactGroups = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
                 ))
+                .fieldHelp("Comma-separated fact groups passed to ht raxfacts during optional live enrichment.")
                 Stepper("Timeout Seconds: \(controller.settings.hammertime.timeoutSeconds)", value: $controller.settings.hammertime.timeoutSeconds, in: 5...300)
+                    .fieldHelp("Maximum time tds waits for each hammertime command before treating enrichment as non-blocking failed data.")
             }
             Section("Talos Defaults") {
                 TextField("Talos Version", text: $controller.settings.talos.talosVersion)
+                    .fieldHelp("Talos release used for generated factory artifacts and talosctl pinning.")
                 TextField("Kubernetes Version", text: $controller.settings.talos.kubernetesVersion)
+                    .fieldHelp("Kubernetes version passed into generated Talos cluster config.")
                 TextField("Cluster Name", text: $controller.settings.talos.clusterName)
+                    .fieldHelp("Logical cluster name used for state paths and generated Talos config.")
                 TextField("Cluster Endpoint", text: $controller.settings.talos.clusterEndpoint)
+                    .fieldHelp("Final Kubernetes API endpoint URL rendered into Talos machine configs.")
                 TextField("System Extensions", text: Binding(
                     get: { controller.settings.talos.factory.selectedSystemExtensions.joined(separator: ",") },
                     set: {
@@ -731,16 +808,19 @@ private struct SettingsRootView: View {
                         controller.settings.talos.extensions = values
                     }
                 ))
+                .fieldHelp("Comma-separated Talos system extensions for Image Factory; defaults include Rackspace bare-metal storage/network utilities.")
                 TextField("Kernel Modules", text: Binding(
                     get: { controller.settings.talos.kernelModules.map { module in
                         module.parameters.isEmpty ? module.name : "\(module.name)(\(module.parameters.joined(separator: " ")))"
                     }.joined(separator: ",") },
                     set: { controller.settings.talos.kernelModules = parseKernelModules($0) }
                 ))
+                .fieldHelp("Comma-separated kernel modules rendered into machine configs, optionally name(param=value param2=value).")
                 TextField("Extra Kernel Args", text: Binding(
                     get: { controller.settings.talos.factory.extraKernelArgs.joined(separator: ",") },
                     set: { controller.settings.talos.factory.extraKernelArgs = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
                 ))
+                .fieldHelp("Comma-separated kernel args included in the Image Factory schematic.")
                 Picker("Installer Preference", selection: $controller.settings.talos.installerPreference) {
                     ForEach(InstallPreference.allCases, id: \.self) { preference in
                         Text(preference.rawValue).tag(preference)
@@ -750,20 +830,27 @@ private struct SettingsRootView: View {
             }
             Section("Talos Image Factory") {
                 TextField("Factory URL", text: $controller.settings.talos.factory.baseURL)
+                    .fieldHelp("Base Image Factory URL for metal ISO and installer artifacts.")
                 TextField("PXE Factory URL", text: $controller.settings.talos.factory.pxeBaseURL)
+                    .fieldHelp("Base Image Factory URL for PXE kernel/initramfs endpoints.")
                 TextField("Registry Host", text: $controller.settings.talos.factory.registryHost)
+                    .fieldHelp("Registry host for generated installer image references.")
                 TextField("Architecture", text: $controller.settings.talos.factory.architecture)
+                    .fieldHelp("Target Talos artifact architecture, normally amd64 for HPE/Dell bare metal.")
                 TextField("Platform", text: $controller.settings.talos.factory.platform)
+                    .fieldHelp("Talos platform identifier, normally metal for physical servers.")
                 TextField("Schematic ID", text: $controller.settings.talos.factory.schematicID)
+                    .fieldHelp("Optional prebuilt Image Factory schematic ID; blank/default uses selected extensions to render the schematic.")
                 Text("Image Factory creates ISO/PXE/installer artifacts from schematics and system extensions. Kernel modules are rendered into machine configs separately.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Section("Talos Provisioning") {
-                Toggle("Allow deployer-hosted media", isOn: $controller.settings.talos.provisioning.allowOverseerHostedMedia)
-                Toggle("Allow deployer PXE", isOn: $controller.settings.talos.provisioning.allowOverseerPXE)
+                Toggle("Allow deployer-hosted media", isOn: $controller.settings.talos.provisioning.allowDeployerHostedMedia)
+                Toggle("Allow deployer PXE", isOn: $controller.settings.talos.provisioning.allowDeployerPXE)
                 Toggle("Allow external OOB URL", isOn: $controller.settings.talos.provisioning.allowExternalOOBURL)
                 TextField("External OOB media base URL", text: $controller.settings.talos.provisioning.externalOOBMediaBaseURL)
+                    .fieldHelp("Base URL reachable from OOB controllers when using direct/external boot media instead of deployer hosting.")
                 TextField("Strategy order", text: Binding(
                     get: { controller.settings.talos.provisioning.preferredStrategies.map(\.rawValue).joined(separator: ",") },
                     set: {
@@ -772,6 +859,7 @@ private struct SettingsRootView: View {
                             .compactMap { TalosProvisioningStrategy(rawValue: $0.trimmingCharacters(in: .whitespaces)) }
                     }
                 ))
+                .fieldHelp("Comma-separated provisioning priorities; default is deployer-hosted media, deployer PXE, external OOB URL, operator local media.")
                 Text("After the Ubuntu deployer node is established, tds can use it for PXE/DHCP/HTTP media, or use direct/external OOB media when that is safer.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -785,26 +873,39 @@ private struct SettingsRootView: View {
                 Toggle("Require operator local media for greenfield", isOn: $controller.settings.bootstrapMedia.requireOperatorLocalMediaForGreenfield)
                 Toggle("Allow existing OS media host", isOn: $controller.settings.bootstrapMedia.allowExistingOSMediaHost)
                 TextField("OOB-reachable external media base URL", text: $controller.settings.bootstrapMedia.externalMediaBaseURL)
+                    .fieldHelp("External media URL for the first Ubuntu deployer only when the iLO/iDRAC network can fetch it.")
                 TextField("Existing media host device ID (explicit only)", text: $controller.settings.bootstrapMedia.mediaHostDeviceID)
+                    .fieldHelp("Device ID of an already-running host used to serve bootstrap media; leave blank for greenfield-safe local media.")
                 Text("Default is operator local media through the embedded OOB browser. Existing media hosts are intentionally opt-in because they do not work for all-bare-metal greenfield environments.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Section("Deployer Defaults") {
-                TextField("Deployer SSH User", text: $controller.settings.helper.sshUser)
-                TextField("State Root", text: $controller.settings.helper.stateRoot)
-                TextField("Hostname Suffix", text: $controller.settings.helper.hostnameSuffix)
-                TextField("PXE Address", text: $controller.settings.helper.pxeAddress)
-                TextField("HTTP Bind Address", text: $controller.settings.helper.httpBindAddress)
-                TextField("Media Directory Name", text: $controller.settings.helper.mediaDirectoryName)
-                TextField("PXE Directory Name", text: $controller.settings.helper.pxeDirectoryName)
-                TextField("Package Cache Root", text: $controller.settings.helper.packageCacheRoot)
-                TextField("Pinned talosctl Version", text: $controller.settings.helper.talosctlVersion)
-                Stepper("HTTP Port: \(controller.settings.helper.httpPort)", value: $controller.settings.helper.httpPort, in: 1...65535)
+                TextField("Deployer SSH User", text: $controller.settings.deployer.sshUser)
+                    .fieldHelp("SSH user tds uses after Ubuntu is installed or when preparing an existing deployer.")
+                TextField("State Root", text: $controller.settings.deployer.stateRoot)
+                    .fieldHelp("Durable deployer directory for cluster state, cached media, generated configs, and run logs.")
+                TextField("Hostname Suffix", text: $controller.settings.deployer.hostnameSuffix)
+                    .fieldHelp("Optional suffix appended to <deviceNumber>-deployer, for example lab2.")
+                TextField("PXE Address", text: $controller.settings.deployer.pxeAddress)
+                    .fieldHelp("Address/interface on the deployer that dnsmasq/PXE should serve when PXE is selected.")
+                TextField("HTTP Bind Address", text: $controller.settings.deployer.httpBindAddress)
+                    .fieldHelp("Bind address for the deployer-hosted range-capable media HTTP service.")
+                TextField("Media Directory Name", text: $controller.settings.deployer.mediaDirectoryName)
+                    .fieldHelp("Subdirectory under the deployer state root where ISO and installer media are cached.")
+                TextField("PXE Directory Name", text: $controller.settings.deployer.pxeDirectoryName)
+                    .fieldHelp("Subdirectory under the deployer state root for PXE assets and dnsmasq config.")
+                TextField("Package Cache Root", text: $controller.settings.deployer.packageCacheRoot)
+                    .fieldHelp("Cache directory for offline/repeat package and talosctl installs when the deployer has limited internet.")
+                TextField("Pinned talosctl Version", text: $controller.settings.deployer.talosctlVersion)
+                    .fieldHelp("talosctl version installed and managed by tds on the deployer.")
+                Stepper("HTTP Port: \(controller.settings.deployer.httpPort)", value: $controller.settings.deployer.httpPort, in: 1...65535)
+                    .fieldHelp("TCP port used by the deployer-hosted media HTTP service.")
             }
             Section("Safety") {
-                Toggle("Require typed confirmation for deployer reinstall", isOn: $controller.settings.safety.requireTypedConfirmationForHelperReinstall)
+                Toggle("Require typed confirmation for deployer reinstall", isOn: $controller.settings.safety.requireTypedConfirmationForDeployerReinstall)
                 TextField("Confirmation Prefix", text: $controller.settings.safety.destructiveConfirmationTextPrefix)
+                    .fieldHelp("Prefix used for destructive reinstall confirmation, combined with the selected deployer name.")
             }
             Button("Save Settings") {
                 controller.saveSettings()

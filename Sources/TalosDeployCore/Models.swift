@@ -23,20 +23,19 @@ public enum InventorySource: String, Codable, CaseIterable, Sendable {
 public enum DeviceRole: String, Codable, CaseIterable, Sendable {
     case unassigned
     case deployer
-    case helper
     case controlplane
     case worker
 }
 
 public extension DeviceRole {
     var isDeployer: Bool {
-        self == .deployer || self == .helper
+        self == .deployer
     }
 
     var displayName: String {
         switch self {
         case .unassigned: "unassigned"
-        case .deployer, .helper: "deployer"
+        case .deployer: "deployer"
         case .controlplane: "controlplane"
         case .worker: "worker"
         }
@@ -47,7 +46,7 @@ public extension DeviceRole {
     }
 }
 
-public enum HelperMode: String, Codable, CaseIterable, Sendable {
+public enum DeployerMode: String, Codable, CaseIterable, Sendable {
     case existing
     case bootstrap
 }
@@ -69,8 +68,8 @@ public enum InstallMethod: String, Codable, CaseIterable, Sendable {
 public enum TalosProvisioningStrategy: String, Codable, CaseIterable, Sendable {
     case automatic
     case operatorLocalMedia
-    case overseerHostedMedia
-    case overseerPXE
+    case deployerHostedMedia
+    case deployerPXE
     case externalOOBURL
     case directVirtualMedia
 }
@@ -79,7 +78,7 @@ public enum BootstrapMediaDeliveryMode: String, Codable, CaseIterable, Sendable 
     case operatorLocalMedia
     case oobReachableURL
     case existingOSMediaHost
-    case pxeAfterOverseerOnline
+    case pxeAfterDeployerOnline
 }
 
 public enum NetworkConfigurationSource: String, Codable, CaseIterable, Sendable {
@@ -517,7 +516,7 @@ extension DiscoveredDevice {
 public struct DeviceAssignment: Codable, Equatable, Sendable {
     public var deviceID: String
     public var role: DeviceRole
-    public var helperMode: HelperMode
+    public var deployerMode: DeployerMode
     public var shouldInstallOS: Bool
     public var preferredInstall: InstallPreference
     public var networkSource: NetworkConfigurationSource
@@ -528,7 +527,7 @@ public struct DeviceAssignment: Codable, Equatable, Sendable {
     public init(
         deviceID: String,
         role: DeviceRole = .unassigned,
-        helperMode: HelperMode = .existing,
+        deployerMode: DeployerMode = .existing,
         shouldInstallOS: Bool = false,
         preferredInstall: InstallPreference = .automatic,
         networkSource: NetworkConfigurationSource = .core,
@@ -538,7 +537,7 @@ public struct DeviceAssignment: Codable, Equatable, Sendable {
     ) {
         self.deviceID = deviceID
         self.role = role
-        self.helperMode = helperMode
+        self.deployerMode = deployerMode
         self.shouldInstallOS = shouldInstallOS
         self.preferredInstall = preferredInstall
         self.networkSource = networkSource
@@ -595,27 +594,27 @@ public struct TalosImageFactorySettings: Codable, Equatable, Sendable {
 
 public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
     public var preferredStrategies: [TalosProvisioningStrategy]
-    public var allowOverseerHostedMedia: Bool
-    public var allowOverseerPXE: Bool
+    public var allowDeployerHostedMedia: Bool
+    public var allowDeployerPXE: Bool
     public var allowExternalOOBURL: Bool
     public var externalOOBMediaBaseURL: String
 
     public init(
         preferredStrategies: [TalosProvisioningStrategy] = [
-            .overseerHostedMedia,
-            .overseerPXE,
+            .deployerHostedMedia,
+            .deployerPXE,
             .directVirtualMedia,
             .externalOOBURL,
             .operatorLocalMedia,
         ],
-        allowOverseerHostedMedia: Bool = true,
-        allowOverseerPXE: Bool = true,
+        allowDeployerHostedMedia: Bool = true,
+        allowDeployerPXE: Bool = true,
         allowExternalOOBURL: Bool = false,
         externalOOBMediaBaseURL: String = ""
     ) {
         self.preferredStrategies = preferredStrategies
-        self.allowOverseerHostedMedia = allowOverseerHostedMedia
-        self.allowOverseerPXE = allowOverseerPXE
+        self.allowDeployerHostedMedia = allowDeployerHostedMedia
+        self.allowDeployerPXE = allowDeployerPXE
         self.allowExternalOOBURL = allowExternalOOBURL
         self.externalOOBMediaBaseURL = externalOOBMediaBaseURL
     }
@@ -641,7 +640,7 @@ extension DeviceAssignment {
     enum CodingKeys: String, CodingKey {
         case deviceID
         case role
-        case helperMode
+        case deployerMode
         case shouldInstallOS
         case preferredInstall
         case networkSource
@@ -654,13 +653,137 @@ extension DeviceAssignment {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.deviceID = try container.decode(String.self, forKey: .deviceID)
         self.role = try container.decodeIfPresent(DeviceRole.self, forKey: .role) ?? .unassigned
-        self.helperMode = try container.decodeIfPresent(HelperMode.self, forKey: .helperMode) ?? .existing
+        self.deployerMode = try container.decodeIfPresent(DeployerMode.self, forKey: .deployerMode) ?? .existing
         self.shouldInstallOS = try container.decodeIfPresent(Bool.self, forKey: .shouldInstallOS) ?? false
         self.preferredInstall = try container.decodeIfPresent(InstallPreference.self, forKey: .preferredInstall) ?? .automatic
         self.networkSource = try container.decodeIfPresent(NetworkConfigurationSource.self, forKey: .networkSource) ?? .core
         self.staticNetwork = try container.decodeIfPresent(StaticNetworkConfig.self, forKey: .staticNetwork) ?? StaticNetworkConfig()
         self.manualNetworkPlanPath = try container.decodeIfPresent(String.self, forKey: .manualNetworkPlanPath) ?? ""
         self.typedConfirmation = try container.decodeIfPresent(String.self, forKey: .typedConfirmation) ?? ""
+    }
+}
+
+public struct LabRoleAssignmentResult: Codable, Equatable, Sendable {
+    public var labLabel: String
+    public var selectedDevices: [DiscoveredDevice]
+    public var assignments: [String: DeviceAssignment]
+    public var warnings: [String]
+
+    public init(
+        labLabel: String,
+        selectedDevices: [DiscoveredDevice],
+        assignments: [String: DeviceAssignment],
+        warnings: [String] = []
+    ) {
+        self.labLabel = labLabel
+        self.selectedDevices = selectedDevices
+        self.assignments = assignments
+        self.warnings = warnings
+    }
+}
+
+public struct LabRoleAssignmentPlanner: Sendable {
+    public static let defaultControllerMarkers = ["controller", "controlplane", "control-plane", "master"]
+
+    public init() {}
+
+    public func makeAssignments(
+        devices: [DiscoveredDevice],
+        labLabel: String,
+        deployerID: String,
+        controllerMarkers: [String] = Self.defaultControllerMarkers,
+        installSelectedNodes: Bool = true
+    ) -> LabRoleAssignmentResult {
+        let selectedDevices = devices
+            .filter(\.isClusterEligible)
+            .filter { matchesLab($0, labLabel: labLabel) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let deployerSelector = normalize(deployerID)
+        let markers = controllerMarkers.map(normalize).filter { !$0.isEmpty }
+        var assignments: [String: DeviceAssignment] = [:]
+        var warnings: [String] = []
+
+        guard !selectedDevices.isEmpty else {
+            return LabRoleAssignmentResult(
+                labLabel: labLabel,
+                selectedDevices: [],
+                assignments: [:],
+                warnings: ["No cluster-eligible physical servers matched lab label \(labLabel)."]
+            )
+        }
+
+        for device in selectedDevices {
+            let isDeployer = !deployerSelector.isEmpty && matchesDeviceSelector(device, normalizedSelector: deployerSelector)
+            let role: DeviceRole
+            if isDeployer {
+                role = .deployer
+            } else if isController(device, markers: markers) {
+                role = .controlplane
+            } else {
+                role = .worker
+            }
+
+            assignments[device.id] = DeviceAssignment(
+                deviceID: device.id,
+                role: role,
+                deployerMode: isDeployer ? .bootstrap : .existing,
+                shouldInstallOS: installSelectedNodes,
+                preferredInstall: .automatic,
+                networkSource: .core,
+                staticNetwork: StaticNetworkConfig(),
+                typedConfirmation: isDeployer ? "INSTALL \(device.name)" : ""
+            )
+        }
+
+        if deployerSelector.isEmpty {
+            warnings.append("No deployer device was provided. Select one lab server as deployer before deployment.")
+        } else if assignments.values.allSatisfy({ !$0.role.isDeployer }) {
+            warnings.append("Deployer \(deployerID) was not found in lab \(labLabel).")
+        }
+
+        let controlPlaneCount = assignments.values.filter { $0.role == .controlplane }.count
+        if controlPlaneCount != 1 && controlPlaneCount != 3 {
+            warnings.append("Lab \(labLabel) produced \(controlPlaneCount) control-plane assignments; tds requires exactly 1 or 3.")
+        }
+
+        return LabRoleAssignmentResult(
+            labLabel: labLabel,
+            selectedDevices: selectedDevices,
+            assignments: assignments,
+            warnings: warnings
+        )
+    }
+
+    private func matchesLab(_ device: DiscoveredDevice, labLabel: String) -> Bool {
+        let needle = normalize(labLabel)
+        guard !needle.isEmpty else { return false }
+        let haystack = normalize([
+            device.name,
+            device.platformName,
+            device.osType,
+            device.serviceLevel,
+            device.serviceTag,
+        ].joined(separator: " "))
+        return haystack.contains(needle)
+    }
+
+    private func isController(_ device: DiscoveredDevice, markers: [String]) -> Bool {
+        let haystack = normalize([device.name, device.platformName, device.osType].joined(separator: " "))
+        return markers.contains { marker in
+            !marker.isEmpty && haystack.contains(marker)
+        }
+    }
+
+    private func matchesDeviceSelector(_ device: DiscoveredDevice, normalizedSelector: String) -> Bool {
+        [device.id, device.name, device.serviceTag]
+            .map(normalize)
+            .contains { !$0.isEmpty && ($0 == normalizedSelector || $0.contains(normalizedSelector)) }
+    }
+
+    private func normalize(_ value: String) -> String {
+        value
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
     }
 }
 
@@ -747,7 +870,7 @@ extension TalosDefaults {
     }
 }
 
-public struct HelperDefaults: Codable, Equatable, Sendable {
+public struct DeployerDefaults: Codable, Equatable, Sendable {
     public var sshUser: String
     public var stateRoot: String
     public var pxeAddress: String
@@ -784,7 +907,7 @@ public struct HelperDefaults: Codable, Equatable, Sendable {
     }
 }
 
-extension HelperDefaults {
+extension DeployerDefaults {
     enum CodingKeys: String, CodingKey {
         case sshUser
         case stateRoot
@@ -835,7 +958,7 @@ public struct BootstrapMediaDefaults: Codable, Equatable, Sendable {
     }
 }
 
-public struct HelperMediaServiceConfiguration: Codable, Equatable, Sendable {
+public struct DeployerMediaServiceConfiguration: Codable, Equatable, Sendable {
     public var stateRoot: String
     public var mediaDirectoryName: String
     public var pxeDirectoryName: String
@@ -862,7 +985,7 @@ public struct HelperMediaServiceConfiguration: Codable, Equatable, Sendable {
         self.talosctlVersion = talosctlVersion
     }
 
-    public init(defaults: HelperDefaults) {
+    public init(defaults: DeployerDefaults) {
         self.init(
             stateRoot: defaults.stateRoot,
             mediaDirectoryName: defaults.mediaDirectoryName,
@@ -883,7 +1006,7 @@ public struct HelperMediaServiceConfiguration: Codable, Equatable, Sendable {
     }
 }
 
-public struct HelperMediaServicePlan: Codable, Equatable, Sendable {
+public struct DeployerMediaServicePlan: Codable, Equatable, Sendable {
     public var mediaRoot: String
     public var pxeRoot: String
     public var httpBindAddress: String
@@ -1021,14 +1144,14 @@ public struct HammertimeSettings: Codable, Equatable, Sendable {
 }
 
 public struct SafetySettings: Codable, Equatable, Sendable {
-    public var requireTypedConfirmationForHelperReinstall: Bool
+    public var requireTypedConfirmationForDeployerReinstall: Bool
     public var destructiveConfirmationTextPrefix: String
 
     public init(
-        requireTypedConfirmationForHelperReinstall: Bool = true,
+        requireTypedConfirmationForDeployerReinstall: Bool = true,
         destructiveConfirmationTextPrefix: String = "INSTALL"
     ) {
-        self.requireTypedConfirmationForHelperReinstall = requireTypedConfirmationForHelperReinstall
+        self.requireTypedConfirmationForDeployerReinstall = requireTypedConfirmationForDeployerReinstall
         self.destructiveConfirmationTextPrefix = destructiveConfirmationTextPrefix
     }
 }
@@ -1136,7 +1259,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var core: CoreAPISettings
     public var hammertime: HammertimeSettings
     public var talos: TalosDefaults
-    public var helper: HelperDefaults
+    public var deployer: DeployerDefaults
     public var bootstrapMedia: BootstrapMediaDefaults
     public var safety: SafetySettings
     public var accessProfiles: [AccessProfile]
@@ -1145,7 +1268,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         core: CoreAPISettings = CoreAPISettings(),
         hammertime: HammertimeSettings = HammertimeSettings(),
         talos: TalosDefaults = TalosDefaults(),
-        helper: HelperDefaults = HelperDefaults(),
+        deployer: DeployerDefaults = DeployerDefaults(),
         bootstrapMedia: BootstrapMediaDefaults = BootstrapMediaDefaults(),
         safety: SafetySettings = SafetySettings(),
         accessProfiles: [AccessProfile] = [.directDefault]
@@ -1153,7 +1276,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.core = core
         self.hammertime = hammertime
         self.talos = talos
-        self.helper = helper
+        self.deployer = deployer
         self.bootstrapMedia = bootstrapMedia
         self.safety = safety
         self.accessProfiles = accessProfiles
@@ -1165,7 +1288,7 @@ extension AppSettings {
         case core
         case hammertime
         case talos
-        case helper
+        case deployer
         case bootstrapMedia
         case safety
         case accessProfiles
@@ -1176,7 +1299,7 @@ extension AppSettings {
         self.core = try container.decodeIfPresent(CoreAPISettings.self, forKey: .core) ?? CoreAPISettings()
         self.hammertime = try container.decodeIfPresent(HammertimeSettings.self, forKey: .hammertime) ?? HammertimeSettings()
         self.talos = try container.decodeIfPresent(TalosDefaults.self, forKey: .talos) ?? TalosDefaults()
-        self.helper = try container.decodeIfPresent(HelperDefaults.self, forKey: .helper) ?? HelperDefaults()
+        self.deployer = try container.decodeIfPresent(DeployerDefaults.self, forKey: .deployer) ?? DeployerDefaults()
         self.bootstrapMedia = try container.decodeIfPresent(BootstrapMediaDefaults.self, forKey: .bootstrapMedia) ?? BootstrapMediaDefaults()
         self.safety = try container.decodeIfPresent(SafetySettings.self, forKey: .safety) ?? SafetySettings()
         self.accessProfiles = try container.decodeIfPresent([AccessProfile].self, forKey: .accessProfiles) ?? [.directDefault]
@@ -1200,7 +1323,7 @@ public struct DeploymentSpec: Codable, Equatable, Sendable {
     public var clusterEndpoint: String
     public var talosVersion: String
     public var kubernetesVersion: String
-    public var helperStateRoot: String
+    public var deployerStateRoot: String
     public var talosFactory: TalosImageFactorySettings
     public var talosProvisioning: TalosProvisioningDefaults
     public var talosKernelModules: [TalosKernelModule]
@@ -1213,7 +1336,7 @@ public struct DeploymentSpec: Codable, Equatable, Sendable {
         clusterEndpoint: String,
         talosVersion: String,
         kubernetesVersion: String,
-        helperStateRoot: String,
+        deployerStateRoot: String,
         talosFactory: TalosImageFactorySettings = TalosImageFactorySettings(),
         talosProvisioning: TalosProvisioningDefaults = TalosProvisioningDefaults(),
         talosKernelModules: [TalosKernelModule] = [],
@@ -1225,7 +1348,7 @@ public struct DeploymentSpec: Codable, Equatable, Sendable {
         self.clusterEndpoint = clusterEndpoint
         self.talosVersion = talosVersion
         self.kubernetesVersion = kubernetesVersion
-        self.helperStateRoot = helperStateRoot
+        self.deployerStateRoot = deployerStateRoot
         self.talosFactory = talosFactory
         self.talosProvisioning = talosProvisioning
         self.talosKernelModules = talosKernelModules
@@ -1241,7 +1364,7 @@ extension DeploymentSpec {
         case clusterEndpoint
         case talosVersion
         case kubernetesVersion
-        case helperStateRoot
+        case deployerStateRoot
         case talosFactory
         case talosProvisioning
         case talosKernelModules
@@ -1257,7 +1380,7 @@ extension DeploymentSpec {
             clusterEndpoint: try container.decode(String.self, forKey: .clusterEndpoint),
             talosVersion: try container.decode(String.self, forKey: .talosVersion),
             kubernetesVersion: try container.decodeIfPresent(String.self, forKey: .kubernetesVersion) ?? "v1.34.1",
-            helperStateRoot: try container.decodeIfPresent(String.self, forKey: .helperStateRoot) ?? "/var/lib/talos-deploy",
+            deployerStateRoot: try container.decodeIfPresent(String.self, forKey: .deployerStateRoot) ?? "/var/lib/talos-deploy",
             talosFactory: try container.decodeIfPresent(TalosImageFactorySettings.self, forKey: .talosFactory) ?? TalosImageFactorySettings(),
             talosProvisioning: try container.decodeIfPresent(TalosProvisioningDefaults.self, forKey: .talosProvisioning) ?? TalosProvisioningDefaults(),
             talosKernelModules: try container.decodeIfPresent([TalosKernelModule].self, forKey: .talosKernelModules) ?? [],
@@ -1301,7 +1424,7 @@ public struct DeploymentPhase: Identifiable, Codable, Equatable, Sendable {
 public struct DeploymentPlan: Codable, Equatable, Sendable {
     public var accountNumber: String
     public var clusterName: String
-    public var helper: PlannedDeviceInstall
+    public var deployer: PlannedDeviceInstall
     public var installs: [PlannedDeviceInstall]
     public var phases: [DeploymentPhase]
     public var talosArtifacts: TalosFactoryArtifacts
@@ -1312,7 +1435,7 @@ public struct DeploymentPlan: Codable, Equatable, Sendable {
     public init(
         accountNumber: String,
         clusterName: String,
-        helper: PlannedDeviceInstall,
+        deployer: PlannedDeviceInstall,
         installs: [PlannedDeviceInstall],
         phases: [DeploymentPhase],
         talosArtifacts: TalosFactoryArtifacts = TalosFactoryArtifacts(
@@ -1328,7 +1451,7 @@ public struct DeploymentPlan: Codable, Equatable, Sendable {
     ) {
         self.accountNumber = accountNumber
         self.clusterName = clusterName
-        self.helper = helper
+        self.deployer = deployer
         self.installs = installs
         self.phases = phases
         self.talosArtifacts = talosArtifacts
@@ -1342,7 +1465,7 @@ extension DeploymentPlan {
     enum CodingKeys: String, CodingKey {
         case accountNumber
         case clusterName
-        case helper
+        case deployer
         case installs
         case phases
         case talosArtifacts
@@ -1356,7 +1479,7 @@ extension DeploymentPlan {
         self.init(
             accountNumber: try container.decode(String.self, forKey: .accountNumber),
             clusterName: try container.decode(String.self, forKey: .clusterName),
-            helper: try container.decode(PlannedDeviceInstall.self, forKey: .helper),
+            deployer: try container.decode(PlannedDeviceInstall.self, forKey: .deployer),
             installs: try container.decode([PlannedDeviceInstall].self, forKey: .installs),
             phases: try container.decode([DeploymentPhase].self, forKey: .phases),
             talosArtifacts: try container.decodeIfPresent(TalosFactoryArtifacts.self, forKey: .talosArtifacts) ?? TalosFactoryClient().artifactURLs(settings: TalosImageFactorySettings(), talosVersion: "v1.11.3"),
@@ -1384,7 +1507,7 @@ public struct DeploymentState: Codable, Equatable, Sendable {
     public var plan: DeploymentPlan
     public var events: [DeploymentEvent]
     public var localStateDirectory: String
-    public var helperSynchronized: Bool
+    public var deployerSynchronized: Bool
 
     public init(
         id: UUID = UUID(),
@@ -1393,7 +1516,7 @@ public struct DeploymentState: Codable, Equatable, Sendable {
         plan: DeploymentPlan,
         events: [DeploymentEvent],
         localStateDirectory: String,
-        helperSynchronized: Bool
+        deployerSynchronized: Bool
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -1401,12 +1524,12 @@ public struct DeploymentState: Codable, Equatable, Sendable {
         self.plan = plan
         self.events = events
         self.localStateDirectory = localStateDirectory
-        self.helperSynchronized = helperSynchronized
+        self.deployerSynchronized = deployerSynchronized
     }
 }
 
 public extension DeploymentSpec {
-    var helperNode: DeploymentNodeSpec? {
+    var deployerNode: DeploymentNodeSpec? {
         nodes.first(where: { $0.assignment.role.isDeployer })
     }
 }

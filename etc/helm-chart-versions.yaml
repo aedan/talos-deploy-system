@@ -1,4 +1,0 @@
-# Helm Chart Versions
-# This file defines the versions of Helm charts to install
-
-cert-manager: v1.16.2

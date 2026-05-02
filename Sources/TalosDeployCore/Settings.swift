@@ -3,7 +3,6 @@ import Security
 
 public struct AppPaths: Sendable {
     public let homeDirectory: URL
-    public let legacyHomeDirectory: URL
     public let applicationSupportDirectory: URL
     public let settingsFile: URL
     public let sessionFile: URL
@@ -13,11 +12,8 @@ public struct AppPaths: Sendable {
     public init(fileManager: FileManager = .default) {
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.homeDirectoryForCurrentUser.appending(path: "Library/Application Support", directoryHint: .isDirectory)
-        self.legacyHomeDirectory = base.appending(path: "TalosDeploy", directoryHint: .isDirectory)
 
         if let override = ProcessInfo.processInfo.environment["TDS_HOME"], !override.isEmpty {
-            self.homeDirectory = URL(fileURLWithPath: override, isDirectory: true)
-        } else if let override = ProcessInfo.processInfo.environment["TALOS_DEPLOY_HOME"], !override.isEmpty {
             self.homeDirectory = URL(fileURLWithPath: override, isDirectory: true)
         } else {
             self.homeDirectory = base.appending(path: "tds", directoryHint: .isDirectory)
@@ -33,23 +29,6 @@ public struct AppPaths: Sendable {
         try fileManager.createDirectory(at: applicationSupportDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: stateDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: talosctlDirectory, withIntermediateDirectories: true)
-        try migrateLegacyFileIfNeeded(
-            from: legacyHomeDirectory.appending(path: "settings.json"),
-            to: settingsFile,
-            fileManager: fileManager
-        )
-        try migrateLegacyFileIfNeeded(
-            from: legacyHomeDirectory.appending(path: "core-session.json"),
-            to: sessionFile,
-            fileManager: fileManager
-        )
-    }
-
-    private func migrateLegacyFileIfNeeded(from legacyURL: URL, to newURL: URL, fileManager: FileManager) throws {
-        guard homeDirectory.path != legacyHomeDirectory.path else { return }
-        guard fileManager.fileExists(atPath: legacyURL.path) else { return }
-        guard !fileManager.fileExists(atPath: newURL.path) else { return }
-        try fileManager.copyItem(at: legacyURL, to: newURL)
     }
 }
 
@@ -131,11 +110,9 @@ public enum SecretStoreError: Error, LocalizedError {
 
 public final class KeychainSecretStore: @unchecked Sendable {
     private let service: String
-    private let legacyService: String?
 
-    public init(service: String = "com.aedan.tds", legacyService: String? = "com.aedan.talos-deploy-system") {
+    public init(service: String = "com.aedan.tds") {
         self.service = service
-        self.legacyService = legacyService
     }
 
     public func setSecret(_ value: String, for key: String) throws {
@@ -159,28 +136,25 @@ public final class KeychainSecretStore: @unchecked Sendable {
     }
 
     public func getSecret(for key: String) throws -> String {
-        for candidateService in [service, legacyService].compactMap({ $0 }) {
-            let query: [CFString: Any] = [
-                kSecClass: kSecClassGenericPassword,
-                kSecAttrService: candidateService,
-                kSecAttrAccount: key,
-                kSecMatchLimit: kSecMatchLimitOne,
-                kSecReturnData: true,
-            ]
-            var item: CFTypeRef?
-            let status = SecItemCopyMatching(query as CFDictionary, &item)
-            if status == errSecItemNotFound {
-                continue
-            }
-            guard status == errSecSuccess else {
-                throw SecretStoreError.unexpectedStatus(status)
-            }
-            guard let data = item as? Data, let string = String(data: data, encoding: .utf8) else {
-                throw SecretStoreError.missingSecret(key)
-            }
-            return string
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: key,
+            kSecMatchLimit: kSecMatchLimitOne,
+            kSecReturnData: true,
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status != errSecItemNotFound else {
+            throw SecretStoreError.missingSecret(key)
         }
-        throw SecretStoreError.missingSecret(key)
+        guard status == errSecSuccess else {
+            throw SecretStoreError.unexpectedStatus(status)
+        }
+        guard let data = item as? Data, let string = String(data: data, encoding: .utf8) else {
+            throw SecretStoreError.missingSecret(key)
+        }
+        return string
     }
 
     public func deleteSecret(for key: String) throws {
