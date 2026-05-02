@@ -1,7 +1,3 @@
-# Ansible
-*.retry
-inventory.yml
-
 # Temporary files
 *.tmp
 *.bak
@@ -20,20 +16,10 @@ talos-schematic.yaml
 # Talos configurations (contain secrets)
 talos-configs/
 *.yaml
-!templates/*.yaml.j2
-!inventory.yml.example
-!playbooks/*.yml
-!etc/helm-chart-versions.yaml
-!extras/**/*.yaml
 
 # PXE boot logs
 pxe-boot-*.log
 maintenance-reset-*.log
-
-# Helm config overrides (user customizations)
-etc/helm-configs/global_overrides/*.yaml
-etc/helm-configs/*/
-!etc/helm-configs/.gitkeep
 
 # Python
 __pycache__/
