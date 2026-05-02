@@ -10,6 +10,9 @@ inventory.yml
 
 # Generated files
 /tmp/
+build-cache/
+captures/
+*.class
 
 # Schematic files (may contain sensitive info)
 talos-schematic.yaml
@@ -52,3 +55,8 @@ __pycache__/
 .idea/
 *.sublime-project
 *.sublime-workspace
+
+# Swift
+.build/
+.swiftpm/
+Package.resolved

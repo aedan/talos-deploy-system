@@ -1,4 +1,85 @@
-# Talos Deploy System - dnsmasq PXE Boot with Image Factory
+# tds
+
+Swift-first Rackspace Talos deployment tooling for macOS, with a shared core library, a desktop UI, and a CLI for `rax`-side testing and automation.
+
+## Current Architecture
+
+- `TalosDeployCore`: shared models, settings, Core/Hammertime adapters, deployment planning, Ubuntu bootstrap media, helper-state staging, and Talos artifact rendering
+- `tds`: automation-friendly CLI for testing on `rax`
+- `tds.app`: SwiftUI desktop interface for account lookup, role assignment, helper bootstrap, local-media attach, deployment staging, resume, and settings
+- bundled Core bridge: a Python helper shipped with `TalosDeployCore` that reuses the active hammertime cache on `rax` and queries Core inventory through the same authenticated environment
+- `legacy` Ansible flow: the existing playbooks/templates remain in this repo as migration references and are not a runtime dependency of the new implementation
+
+## Development Workflow
+
+- Develop and build on this machine with Xcode or `swift build`
+- Use git to move changes to `rax`: commit or stash locally, then `git pull` from the matching repo path on `rax`
+
+### Local Commands
+
+```bash
+swift test
+swift build --product tds
+swift build --product tds-app
+swift run tds plan --spec examples/deployment-spec.example.json
+swift run tds deploy --spec examples/deployment-spec.example.json
+scripts/build-tds-app-bundle.sh build-cache/tds.app
+open build-cache/tds.app
+```
+
+### Run On `rax`
+
+```bash
+ssh rax 'cd ~/Documents/GitHub/talos-deploy-system && git pull'
+ssh rax 'cd ~/Documents/GitHub/talos-deploy-system && swift run tds plan --spec examples/deployment-spec.example.json'
+```
+
+## Settings Coverage
+
+The Swift implementation includes first-pass support for:
+
+- Access profiles: direct, HTTP proxy, SOCKS proxy, SSH dynamic SOCKS, and Hammertime-routed profiles
+- Core session storage in the macOS Keychain plus automatic detection of the active hammertime-backed session on `rax`
+- Hammertime defaults including binary path, optional Python override, session cache path, fact groups, and command timeout
+- Talos defaults for version, Kubernetes version, cluster name, and endpoint
+- Helper defaults including SSH user and durable state root
+- Safety settings for destructive helper reinstall confirmation
+
+## Helper Bootstrap Flow
+
+If the selected helper/overseer is marked for reinstall:
+
+1. temporary deployment state is staged on `rax`
+2. the helper is planned first
+3. the helper must come back with SSH access
+4. durable state is synchronized to the helper root
+5. the remaining cluster nodes are then provisioned
+
+## Hammertime Notes
+
+- Inventory now prefers the bundled Core bridge on `rax`, which reads hammertime's cached auth and queries Core directly instead of relying on `ht info`
+- Live facts still use `ht raxfacts`
+- Hammertime calls now default to `--no-checks` so old or misclassified OS records do not block pre-provision access workflows
+- `tds login --source hammertime` imports the active `rax` session into the local store when needed
+- CLI Hammertime calls run in `--batch --no-colors` mode and now time out cleanly instead of hanging indefinitely
+- Missing live facts are non-blocking by design, which keeps bare-metal installs possible even when a node has no current OS
+
+## Ubuntu Reinstall Lessons
+
+- `tds ubuntu snapshot` captures the current host state before a destructive helper reinstall.
+- `tds ubuntu build-iso` now creates a proper NoCloud ISO with `/nocloud/user-data`, `/nocloud/meta-data`, and `/nocloud/90-tds-preserved.yaml`, then patches GRUB with `autoinstall ds=nocloud\\;s=/cdrom/nocloud/`.
+- `tds ubuntu validate-iso` extracts the rebuilt ISO and verifies the NoCloud seed, GRUB patch, `rack` user, root access, and install evidence hooks.
+- Local VM experiments are development-only checks and are not part of `tds.app`, the `tds` CLI, or the supported deployment workflow.
+- Preserve the exact physical networking only: routed NICs, bridge members, VLAN subinterfaces, DNS, and static routes. Do not recreate transient `vnet*` or libvirt bridges when the goal is only host recovery.
+- Keep URL-based iLO virtual media on a stable external host such as `rax`, not on the machine being reinstalled. If the target reboots while serving its own ISO, the install media disappears mid-boot.
+- Enable iLO VSP logging before the destructive reboot so post-reboot console capture is available if SSH does not come back.
+- Recovery-oriented Ubuntu autoinstall should preserve post-install access for both the environment tooling and operators. In practice that means keeping a working `rack` user, setting a root password intentionally, and retaining SSH key access.
+
+## Legacy Ansible Workflow
+
+The remainder of this README documents the original Ansible-based PXE flow that is still useful as implementation reference material while the Swift system reaches feature parity.
+
+### Legacy Overview
 
 Automated Ansible playbook that deploys and configures dnsmasq to provide DHCP and PXE boot services with integrated Talos Linux Image Factory support for custom image generation.
 

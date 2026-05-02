@@ -1,0 +1,85 @@
+{
+  "accountNumber" : "0000000",
+  "clusterEndpoint" : "https://talos-api.example.com:6443",
+  "clusterName" : "cluster.local",
+  "helperStateRoot" : "/var/lib/talos-deploy",
+  "kubernetesVersion" : "v1.34.1",
+  "nodes" : [
+    {
+      "assignment" : {
+        "deviceID" : "helper-1",
+        "helperMode" : "bootstrap",
+        "preferredInstall" : "automatic",
+        "role" : "helper",
+        "shouldInstallOS" : true,
+        "typedConfirmation" : "INSTALL helper-node"
+      },
+      "device" : {
+        "accountNumber" : "0000000",
+        "credentialReference" : "",
+        "id" : "helper-1",
+        "installDisk" : "/dev/sda",
+        "name" : "helper-node",
+        "networkInterfaces" : [
+          {
+            "addresses" : [
+              "192.168.10.10/24"
+            ],
+            "id" : "0D6350CA-4E38-4554-B43E-51153BBE5454",
+            "macAddress" : "00:11:22:33:44:55",
+            "mtu" : 1500,
+            "name" : "eno1"
+          }
+        ],
+        "oob" : {
+          "address" : "192.168.50.10",
+          "credentialReference" : "helper-oob",
+          "username" : "Administrator",
+          "vendor" : "ilo"
+        },
+        "primaryIP" : "192.168.10.10",
+        "privateIP" : "",
+        "serviceTag" : ""
+      }
+    },
+    {
+      "assignment" : {
+        "deviceID" : "cp-1",
+        "helperMode" : "existing",
+        "preferredInstall" : "automatic",
+        "role" : "controlplane",
+        "shouldInstallOS" : true,
+        "typedConfirmation" : ""
+      },
+      "device" : {
+        "accountNumber" : "0000000",
+        "credentialReference" : "",
+        "id" : "cp-1",
+        "installDisk" : "/dev/sda",
+        "name" : "controlplane-1",
+        "networkInterfaces" : [
+          {
+            "addresses" : [
+              "192.168.10.11/24"
+            ],
+            "id" : "30FE15E9-1A0B-4E30-A519-1EE60B95424C",
+            "macAddress" : "00:11:22:33:44:66",
+            "mtu" : 1500,
+            "name" : "eno1"
+          }
+        ],
+        "oob" : {
+          "address" : "192.168.50.11",
+          "credentialReference" : "cp1-oob",
+          "supportsVirtualMedia" : true,
+          "username" : "Administrator",
+          "vendor" : "ilo"
+        },
+        "primaryIP" : "192.168.10.11",
+        "privateIP" : "",
+        "serviceTag" : ""
+      }
+    }
+  ],
+  "talosVersion" : "v1.11.3"
+}
