@@ -124,7 +124,7 @@ tds ubuntu build-iso --capture ~/tds-captures/0000000/100001/snapshot.json --sou
 tds ubuntu validate-iso --iso ~/iso/tds-100001-ubuntu.iso
 tds ubuntu bootstrap-deployer --capture ~/tds-captures/0000000/100001/snapshot.json --source-iso ~/iso/ubuntu-24.04-live-server-amd64.iso --output-iso ~/iso/tds-100001-ubuntu.iso --oob-url https://192.0.2.10
 tds talos versions --output table
-tds talos artifacts --version v1.12.1 --arch amd64
+tds talos artifacts --version v1.13.0 --arch amd64
 tds deploy plan --spec examples/deployment-spec.example.json
 tds deploy run --spec examples/deployment-spec.example.json --dry-run true
 tds deploy run --spec examples/deployment-spec.example.json --execute true --deployer-host 192.0.2.20 --deployer-user rack
@@ -154,7 +154,7 @@ tds devices --account 0000000 --source auto --output table
 
 ```bash
 tds talos versions --output table
-tds talos artifacts --version v1.12.1 --arch amd64
+tds talos artifacts --version v1.13.0 --arch amd64
 ```
 
 4. Capture the deployer before destroying its OS:

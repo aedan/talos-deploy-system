@@ -712,7 +712,7 @@ public struct TalosDefaults: Codable, Equatable, Sendable {
     public var enableLonghornExtraMounts: Bool
 
     public init(
-        talosVersion: String = "v1.11.3",
+        talosVersion: String = "v1.13.0",
         kubernetesVersion: String = "v1.34.1",
         clusterName: String = "cluster.local",
         clusterEndpoint: String = "https://talos-api.example.com:6443",
@@ -768,7 +768,7 @@ extension TalosDefaults {
         let factory = try container.decodeIfPresent(TalosImageFactorySettings.self, forKey: .factory)
             ?? TalosImageFactorySettings(selectedSystemExtensions: extensions)
         self.init(
-            talosVersion: try container.decodeIfPresent(String.self, forKey: .talosVersion) ?? "v1.11.3",
+            talosVersion: try container.decodeIfPresent(String.self, forKey: .talosVersion) ?? "v1.13.0",
             kubernetesVersion: try container.decodeIfPresent(String.self, forKey: .kubernetesVersion) ?? "v1.34.1",
             clusterName: try container.decodeIfPresent(String.self, forKey: .clusterName) ?? "cluster.local",
             clusterEndpoint: try container.decodeIfPresent(String.self, forKey: .clusterEndpoint) ?? "https://talos-api.example.com:6443",
@@ -1394,7 +1394,7 @@ extension DeploymentPlan {
             deployer: try container.decode(PlannedDeviceInstall.self, forKey: .deployer),
             installs: try container.decode([PlannedDeviceInstall].self, forKey: .installs),
             phases: try container.decode([DeploymentPhase].self, forKey: .phases),
-            talosArtifacts: try container.decodeIfPresent(TalosFactoryArtifacts.self, forKey: .talosArtifacts) ?? TalosFactoryClient().artifactURLs(settings: TalosImageFactorySettings(), talosVersion: "v1.11.3"),
+            talosArtifacts: try container.decodeIfPresent(TalosFactoryArtifacts.self, forKey: .talosArtifacts) ?? TalosFactoryClient().artifactURLs(settings: TalosImageFactorySettings(), talosVersion: "v1.13.0"),
             networkValidation: try container.decodeIfPresent([StaticNetworkValidationResult].self, forKey: .networkValidation) ?? [],
             tempStateDirectory: try container.decode(String.self, forKey: .tempStateDirectory),
             durableStateDirectory: try container.decode(String.self, forKey: .durableStateDirectory)

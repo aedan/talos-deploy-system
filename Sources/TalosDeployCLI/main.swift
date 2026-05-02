@@ -591,7 +591,7 @@ struct TalosDeployCLI {
             tds commands:
               login [--source hammertime] | --username USER --secret VALUE [--header-name Cookie]
               talos schematic [--extensions ext1,ext2] [--extra-kernel-args arg1,arg2]
-              talos artifacts [--version v1.12.1] [--schematic-id ID] [--arch amd64]
+              talos artifacts [--version v1.13.0] [--schematic-id ID] [--arch amd64]
               talos versions [--factory-url URL] [--output table|json]
               ubuntu snapshot --account ACCOUNT --device DEVICE [--source auto|core|hammertime] [--output-dir DIR]
               ubuntu build-iso --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO [--rack-password-hash HASH]
@@ -637,7 +637,7 @@ struct TalosDeployCLI {
             """
             tds talos commands:
               schematic [--extensions ext1,ext2] [--extra-kernel-args arg1,arg2]
-              artifacts [--version v1.12.1] [--schematic-id ID] [--arch amd64] [--platform metal]
+              artifacts [--version v1.13.0] [--schematic-id ID] [--arch amd64] [--platform metal]
               versions [--factory-url URL] [--output table|json]
 
             The artifact URLs follow the Talos Image Factory model. Extensions affect the image schematic;

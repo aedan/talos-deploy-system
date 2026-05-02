@@ -423,6 +423,10 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(TalosDefaults().installerPreference == .virtualMedia)
     }
 
+    func testTalosDefaultsUseCurrentStableFactoryVersion() {
+        XCTAssertEqual(TalosDefaults().talosVersion, "v1.13.0")
+    }
+
     func testTalosFactoryArtifactsRenderSelectedExtensions() {
         let settings = TalosImageFactorySettings(
             architecture: "amd64",
