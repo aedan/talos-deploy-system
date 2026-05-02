@@ -864,6 +864,25 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertEqual(result.exitCode, 0)
     }
 
+    func testSSHRouterUsesNonInteractiveTimeouts() async throws {
+        let runner = MockCommandRunner(
+            responses: [
+                CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0),
+            ]
+        )
+        let router = SSHCommandRouter(runner: runner)
+
+        _ = try await router.run(
+            connection: SSHConnection(host: "192.0.2.10", user: "rack"),
+            remoteCommand: "true"
+        )
+
+        let invocation = try XCTUnwrap(runner.invocations.first)
+        XCTAssertEqual(invocation.timeout, 60)
+        XCTAssertTrue(invocation.arguments.contains("BatchMode=yes"))
+        XCTAssertTrue(invocation.arguments.contains("ConnectTimeout=10"))
+    }
+
 }
 
 private func temporarySettingsController() -> SettingsController {

@@ -209,25 +209,31 @@ public final class SSHCommandRouter: @unchecked Sendable {
         if delete {
             arguments.append("--delete")
         }
+        let sshOptions = "-o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10"
         if !connection.identityFile.isEmpty {
-            arguments.append(contentsOf: ["-e", "ssh -i \(connection.identityFile) -p \(connection.port)"])
+            arguments.append(contentsOf: ["-e", "ssh \(sshOptions) -i \(connection.identityFile) -p \(connection.port)"])
         } else {
-            arguments.append(contentsOf: ["-e", "ssh -p \(connection.port)"])
+            arguments.append(contentsOf: ["-e", "ssh \(sshOptions) -p \(connection.port)"])
         }
         arguments.append(localPath.path + "/")
         arguments.append("\(connection.user)@\(connection.host):\(remotePath)/")
-        _ = try await runner.run("/usr/bin/rsync", arguments: arguments, environment: [:], currentDirectory: nil)
+        _ = try await runner.run("/usr/bin/rsync", arguments: arguments, environment: [:], currentDirectory: nil, timeout: 300)
     }
 
     @discardableResult
     public func run(connection: SSHConnection, remoteCommand: String) async throws -> CommandResult {
-        var arguments = ["-p", "\(connection.port)"]
+        var arguments = [
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=10",
+            "-p", "\(connection.port)",
+        ]
         if !connection.identityFile.isEmpty {
             arguments.append(contentsOf: ["-i", connection.identityFile])
         }
         arguments.append("\(connection.user)@\(connection.host)")
         arguments.append(remoteCommand)
-        return try await runner.run("/usr/bin/ssh", arguments: arguments, environment: [:], currentDirectory: nil)
+        return try await runner.run("/usr/bin/ssh", arguments: arguments, environment: [:], currentDirectory: nil, timeout: 60)
     }
 }
 
