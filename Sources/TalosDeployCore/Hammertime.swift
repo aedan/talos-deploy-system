@@ -221,6 +221,7 @@ public struct OOBBootURLRequest: Codable, Equatable, Sendable {
     public var imageURL: String
     public var connectMedia: Bool
     public var bootOnce: Bool
+    public var oneTimeBoot: String?
     public var reboot: Bool
     public var proxyVia: String?
 
@@ -229,6 +230,7 @@ public struct OOBBootURLRequest: Codable, Equatable, Sendable {
         imageURL: String,
         connectMedia: Bool = true,
         bootOnce: Bool = true,
+        oneTimeBoot: String? = nil,
         reboot: Bool = false,
         proxyVia: String? = nil
     ) {
@@ -236,6 +238,7 @@ public struct OOBBootURLRequest: Codable, Equatable, Sendable {
         self.imageURL = imageURL
         self.connectMedia = connectMedia
         self.bootOnce = bootOnce
+        self.oneTimeBoot = oneTimeBoot
         self.reboot = reboot
         self.proxyVia = proxyVia
     }
@@ -300,6 +303,9 @@ public final class HammertimeOOBBooter: @unchecked Sendable {
         }
         if request.bootOnce {
             steps.append(try await runOOBCommand(name: "boot-once", command: "vm cdrom set boot_once", request: request))
+        }
+        if let oneTimeBoot = request.oneTimeBoot, !oneTimeBoot.isEmpty {
+            steps.append(try await runOOBCommand(name: "one-time-boot", command: "onetimeboot \(oneTimeBoot)", request: request))
         }
         steps.append(try await runOOBCommand(name: "media-status", command: "vm cdrom get", request: request))
         if request.reboot {

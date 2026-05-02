@@ -294,6 +294,7 @@ struct TalosDeployCLI {
                 imageURL: imageURL,
                 connectMedia: parseBool(options["connect"]) ?? true,
                 bootOnce: parseBool(options["boot-once"]) ?? true,
+                oneTimeBoot: options["one-time-boot"],
                 reboot: parseBool(options["reboot"]) ?? false,
                 proxyVia: options["proxy-via"] ?? options["via"]
             )
@@ -478,7 +479,7 @@ struct TalosDeployCLI {
               ubuntu build-iso --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO [--rack-password-hash HASH]
               ubuntu validate-iso --iso ISO
               ubuntu bootstrap-helper --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url URL
-              ubuntu oob-boot-url --device DEVICE_ID --url IMAGE_URL [--reboot true]
+              ubuntu oob-boot-url --device DEVICE_ID --url IMAGE_URL [--one-time-boot usb] [--reboot true]
               devices --account ACCOUNT [--source auto|core|hammertime] [--output table|json]
               facts --account ACCOUNT [--source auto|core|hammertime] [device-id...]
               snapshot --account ACCOUNT --device DEVICE [--source auto|core|hammertime] [--output-dir DIR]
@@ -498,7 +499,7 @@ struct TalosDeployCLI {
               build-iso --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO [--rack-password-hash HASH] [--root-password-hash HASH]
               validate-iso --iso ISO
               bootstrap-helper --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url https://ILO/
-              oob-boot-url --device DEVICE_ID --url http://helper/installer.iso [--reboot true]
+              oob-boot-url --device DEVICE_ID --url http://helper/installer.iso [--one-time-boot usb] [--reboot true]
 
             Password hashes may also be supplied with TDS_RACK_PASSWORD_HASH and TDS_ROOT_PASSWORD_HASH.
             SSH public keys default to ~/.ssh/*.pub unless --no-default-ssh-keys true is set.
