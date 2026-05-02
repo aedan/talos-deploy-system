@@ -419,6 +419,25 @@ public final class AppController: ObservableObject {
         }
     }
 
+    public func addAccessProfile(kind: AccessProfileKind = .httpProxy, scope: AccessScope = .oob) {
+        let shouldBecomeDefault = settings.accessProfiles.allSatisfy { !$0.isDefault || $0.kind == .direct }
+        settings.accessProfiles.append(
+            AccessProfile(
+                name: kind == .socksProxy ? "OOB SOCKS Proxy" : "OOB HTTP Proxy",
+                kind: kind,
+                scope: scope,
+                isDefault: shouldBecomeDefault
+            )
+        )
+        statusMessage = "Added \(kind.rawValue) access profile."
+    }
+
+    public func setAccessProfileDefault(id: UUID, isDefault: Bool) {
+        for index in settings.accessProfiles.indices {
+            settings.accessProfiles[index].isDefault = settings.accessProfiles[index].id == id ? isDefault : false
+        }
+    }
+
     public func importSession(username: String, headerName: String, secret: String) {
         let secretReference = "core-session-\(UUID().uuidString)"
         let session = CoreSession(username: username, headerName: headerName, secretReference: secretReference)

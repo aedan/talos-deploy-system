@@ -216,10 +216,134 @@ public final class DefaultHammertimeAdapter: HammertimeAdapter, @unchecked Senda
     }
 }
 
+public struct OOBBootURLRequest: Codable, Equatable, Sendable {
+    public var deviceID: String
+    public var imageURL: String
+    public var connectMedia: Bool
+    public var bootOnce: Bool
+    public var reboot: Bool
+    public var proxyVia: String?
+
+    public init(
+        deviceID: String,
+        imageURL: String,
+        connectMedia: Bool = true,
+        bootOnce: Bool = true,
+        reboot: Bool = false,
+        proxyVia: String? = nil
+    ) {
+        self.deviceID = deviceID
+        self.imageURL = imageURL
+        self.connectMedia = connectMedia
+        self.bootOnce = bootOnce
+        self.reboot = reboot
+        self.proxyVia = proxyVia
+    }
+}
+
+public struct OOBBootURLStep: Codable, Equatable, Sendable {
+    public var name: String
+    public var stdout: String
+
+    public init(name: String, stdout: String) {
+        self.name = name
+        self.stdout = stdout
+    }
+}
+
+public struct OOBBootURLResult: Codable, Equatable, Sendable {
+    public var deviceID: String
+    public var imageURL: String
+    public var connected: Bool
+    public var bootOnce: Bool
+    public var rebooted: Bool
+    public var steps: [OOBBootURLStep]
+
+    public init(
+        deviceID: String,
+        imageURL: String,
+        connected: Bool,
+        bootOnce: Bool,
+        rebooted: Bool,
+        steps: [OOBBootURLStep]
+    ) {
+        self.deviceID = deviceID
+        self.imageURL = imageURL
+        self.connected = connected
+        self.bootOnce = bootOnce
+        self.rebooted = rebooted
+        self.steps = steps
+    }
+}
+
+public final class HammertimeOOBBooter: @unchecked Sendable {
+    private let settings: HammertimeSettings
+    private let runner: CommandRunning
+
+    public init(settings: HammertimeSettings = HammertimeSettings(), runner: CommandRunning = LocalCommandRunner()) {
+        self.settings = settings
+        self.runner = runner
+    }
+
+    public func bootURL(_ request: OOBBootURLRequest) async throws -> OOBBootURLResult {
+        guard !request.deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw HammertimeError.missingDeviceID
+        }
+        guard !request.imageURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw HammertimeError.missingImageURL
+        }
+
+        var steps: [OOBBootURLStep] = []
+        steps.append(try await runOOBCommand(name: "insert-url", command: "vm cdrom insert \(request.imageURL)", request: request))
+        if request.connectMedia {
+            steps.append(try await runOOBCommand(name: "connect-media", command: "vm cdrom set connect", request: request))
+        }
+        if request.bootOnce {
+            steps.append(try await runOOBCommand(name: "boot-once", command: "vm cdrom set boot_once", request: request))
+        }
+        steps.append(try await runOOBCommand(name: "media-status", command: "vm cdrom get", request: request))
+        if request.reboot {
+            steps.append(try await runOOBCommand(name: "power-reset", command: "power reset", request: request))
+        }
+
+        let status = steps.last(where: { $0.name == "media-status" })?.stdout ?? ""
+        return OOBBootURLResult(
+            deviceID: request.deviceID,
+            imageURL: request.imageURL,
+            connected: status.localizedCaseInsensitiveContains("Image Connected = Yes"),
+            bootOnce: status.localizedCaseInsensitiveContains("Boot Option = BOOT_ONCE"),
+            rebooted: request.reboot,
+            steps: steps
+        )
+    }
+
+    private func runOOBCommand(name: String, command: String, request: OOBBootURLRequest) async throws -> OOBBootURLStep {
+        var arguments = ["--batch", "--no-colors"]
+        if settings.skipDeviceChecks {
+            arguments.append("--no-checks")
+        }
+        arguments.append("oobm")
+        if let proxyVia = request.proxyVia, !proxyVia.isEmpty {
+            arguments.append(contentsOf: ["--proxy-via", proxyVia])
+        }
+        arguments.append(contentsOf: ["--command", command, request.deviceID])
+        let result = try await runner.run(
+            settings.binaryPath.expandingTildeInPath(),
+            arguments: arguments,
+            environment: [:],
+            currentDirectory: nil,
+            timeout: TimeInterval(settings.timeoutSeconds)
+        )
+        return OOBBootURLStep(name: name, stdout: result.stdout)
+    }
+}
+
 public enum HammertimeError: Error, LocalizedError {
     case disabled
     case invalidOutput
     case missingFacts(String)
+    case missingDeviceID
+    case missingImageURL
 
     public var errorDescription: String? {
         switch self {
@@ -229,6 +353,10 @@ public enum HammertimeError: Error, LocalizedError {
             return "Unexpected hammertime output."
         case .missingFacts(let name):
             return "No live facts were returned for \(name)."
+        case .missingDeviceID:
+            return "OOB boot requires --device DEVICE_ID."
+        case .missingImageURL:
+            return "OOB boot requires --url IMAGE_URL."
         }
     }
 }

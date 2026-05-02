@@ -1,4 +1,5 @@
 import AppKit
+import Network
 import SwiftUI
 import TalosDeployCore
 import UniformTypeIdentifiers
@@ -197,11 +198,21 @@ private struct BootstrapHelperView: View {
                                 .font(.caption)
                         }
                     }
+                    if let profile = controller.defaultOOBAccessProfile {
+                        Text("WebView access profile: \(profile.name) (\(profile.kind.rawValue))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("WebView access profile: direct")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     IloLocalMediaWebView(
                         urlString: $controller.ubuntuOOBURL,
                         username: $controller.ubuntuOOBUsername,
                         password: $iloPassword,
                         isoPath: controller.ubuntuLastArtifacts?.outputISOPath ?? controller.ubuntuOutputISOPath,
+                        accessProfile: controller.defaultOOBAccessProfile,
                         statusMessage: $controller.statusMessage
                     )
                     .frame(minHeight: 520)
@@ -494,6 +505,18 @@ private struct SettingsRootView: View {
                                 Text(kind.rawValue).tag(kind)
                             }
                         }
+                        Picker("Scope", selection: Binding(
+                            get: { controller.settings.accessProfiles[index].scope },
+                            set: { controller.settings.accessProfiles[index].scope = $0 }
+                        )) {
+                            ForEach(AccessScope.allCases, id: \.self) { scope in
+                                Text(scope.rawValue).tag(scope)
+                            }
+                        }
+                        Toggle("Default for this scope", isOn: Binding(
+                            get: { controller.settings.accessProfiles[index].isDefault },
+                            set: { controller.setAccessProfileDefault(id: profile.id, isDefault: $0) }
+                        ))
                         TextField("Proxy URL", text: Binding(
                             get: { controller.settings.accessProfiles[index].proxyURL },
                             set: { controller.settings.accessProfiles[index].proxyURL = $0 }
@@ -502,6 +525,19 @@ private struct SettingsRootView: View {
                             get: { controller.settings.accessProfiles[index].hammertimeVia },
                             set: { controller.settings.accessProfiles[index].hammertimeVia = $0 }
                         ))
+                        if profile.kind == .httpProxy {
+                            Text("For OOB browser access, use http://127.0.0.1:18081 for the local cproxy relay or https://cproxy.iad3.corp.rackspace.net:3128 on rax. Proxy credentials can come from TDS_OOB_PROXY_USER and TDS_OOB_PROXY_PASSWORD.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                HStack {
+                    Button("Add OOB HTTP Proxy") {
+                        controller.addAccessProfile(kind: .httpProxy, scope: .oob)
+                    }
+                    Button("Add OOB SOCKS Proxy") {
+                        controller.addAccessProfile(kind: .socksProxy, scope: .oob)
                     }
                 }
             }
@@ -561,6 +597,7 @@ private struct IloLocalMediaWebView: NSViewRepresentable {
     @Binding var username: String
     @Binding var password: String
     let isoPath: String
+    let accessProfile: AccessProfile?
     @Binding var statusMessage: String
 
     func makeCoordinator() -> Coordinator {
@@ -570,6 +607,7 @@ private struct IloLocalMediaWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+        context.coordinator.configureProxy(on: configuration)
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
@@ -589,6 +627,17 @@ private struct IloLocalMediaWebView: NSViewRepresentable {
 
         init(_ parent: IloLocalMediaWebView) {
             self.parent = parent
+        }
+
+        func configureProxy(on configuration: WKWebViewConfiguration) {
+            guard #available(macOS 14.0, *) else { return }
+            guard let profile = parent.accessProfile,
+                  let proxy = WebViewProxyConfiguration(profile: profile)
+            else { return }
+
+            let dataStore = WKWebsiteDataStore.nonPersistent()
+            dataStore.proxyConfigurations = [proxy.configuration]
+            configuration.websiteDataStore = dataStore
         }
 
         func loadIfPossible(_ webView: WKWebView) {
@@ -666,6 +715,83 @@ private struct IloLocalMediaWebView: NSViewRepresentable {
             })();
             """
             webView.evaluateJavaScript(script)
+        }
+    }
+}
+
+@available(macOS 14.0, *)
+private struct WebViewProxyConfiguration {
+    let configuration: ProxyConfiguration
+
+    init?(profile: AccessProfile) {
+        switch profile.kind {
+        case .httpProxy:
+            guard let parsed = ParsedProxyURL(rawValue: profile.proxyURL) else { return nil }
+            let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(parsed.host), port: NWEndpoint.Port(rawValue: parsed.port) ?? 8080)
+            var proxy = ProxyConfiguration(
+                httpCONNECTProxy: endpoint,
+                tlsOptions: parsed.usesTLS ? NWProtocolTLS.Options() : nil
+            )
+            proxy.allowFailover = false
+            Self.applyCredential(to: &proxy, parsed: parsed)
+            self.configuration = proxy
+        case .socksProxy, .sshDynamicSocks:
+            guard let parsed = ParsedProxyURL(rawValue: profile.proxyURL) else { return nil }
+            let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(parsed.host), port: NWEndpoint.Port(rawValue: parsed.port) ?? 1080)
+            var proxy = ProxyConfiguration(socksv5Proxy: endpoint)
+            proxy.allowFailover = false
+            Self.applyCredential(to: &proxy, parsed: parsed)
+            self.configuration = proxy
+        case .direct, .hammertimeProxy:
+            return nil
+        }
+    }
+
+    private static func applyCredential(to proxy: inout ProxyConfiguration, parsed: ParsedProxyURL) {
+        let environment = ProcessInfo.processInfo.environment
+        let username = firstNonEmpty(parsed.username, environment["TDS_OOB_PROXY_USER"] ?? "")
+        let password = firstNonEmpty(parsed.password, environment["TDS_OOB_PROXY_PASSWORD"] ?? "")
+        if !username.isEmpty || !password.isEmpty {
+            proxy.applyCredential(username: username, password: password)
+        }
+    }
+}
+
+private struct ParsedProxyURL {
+    let host: String
+    let port: UInt16
+    let usesTLS: Bool
+    let username: String
+    let password: String
+
+    init?(rawValue: String) {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let normalized = trimmed.contains("://") ? trimmed : "http://\(trimmed)"
+        guard let components = URLComponents(string: normalized),
+              let host = components.host,
+              !host.isEmpty
+        else { return nil }
+
+        let scheme = components.scheme?.lowercased()
+        self.host = host
+        self.port = UInt16(components.port ?? (scheme == "https" ? 443 : 8080))
+        self.usesTLS = scheme == "https"
+        self.username = components.user ?? ""
+        self.password = components.password ?? ""
+    }
+}
+
+private func firstNonEmpty(_ values: String...) -> String {
+    values.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+}
+
+private extension AppController {
+    var defaultOOBAccessProfile: AccessProfile? {
+        settings.accessProfiles.first {
+            $0.isDefault && ($0.scope == .oob || $0.scope == .both) && $0.kind != .direct
+        } ?? settings.accessProfiles.first {
+            ($0.scope == .oob || $0.scope == .both) && $0.kind != .direct
         }
     }
 }

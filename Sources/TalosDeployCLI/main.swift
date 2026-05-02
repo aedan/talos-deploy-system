@@ -213,6 +213,8 @@ struct TalosDeployCLI {
             try await handleUbuntuBootstrapHelper(arguments: remaining)
         case "network-plan":
             try handleUbuntuNetworkPlan(arguments: remaining)
+        case "oob-boot-url":
+            try await handleUbuntuOOBBootURL(arguments: remaining)
         default:
             printUbuntuUsage()
         }
@@ -274,6 +276,29 @@ struct TalosDeployCLI {
             return
         }
         let data = try JSONEncoder.pretty.encode(plan)
+        print(String(decoding: data, as: UTF8.self))
+    }
+
+    private static func handleUbuntuOOBBootURL(arguments: [String]) async throws {
+        let options = parseOptions(arguments)
+        guard let deviceID = options["device"] ?? options["device-id"] else {
+            throw CLIError.missingRequired("ubuntu oob-boot-url requires --device DEVICE_ID")
+        }
+        guard let imageURL = options["url"] ?? options["image-url"] ?? options["iso-url"] else {
+            throw CLIError.missingRequired("ubuntu oob-boot-url requires --url IMAGE_URL")
+        }
+        let settings = (try? SettingsController().load()) ?? AppSettings()
+        let result = try await HammertimeOOBBooter(settings: settings.hammertime).bootURL(
+            OOBBootURLRequest(
+                deviceID: deviceID,
+                imageURL: imageURL,
+                connectMedia: parseBool(options["connect"]) ?? true,
+                bootOnce: parseBool(options["boot-once"]) ?? true,
+                reboot: parseBool(options["reboot"]) ?? false,
+                proxyVia: options["proxy-via"] ?? options["via"]
+            )
+        )
+        let data = try JSONEncoder.pretty.encode(result)
         print(String(decoding: data, as: UTF8.self))
     }
 
@@ -453,6 +478,7 @@ struct TalosDeployCLI {
               ubuntu build-iso --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO [--rack-password-hash HASH]
               ubuntu validate-iso --iso ISO
               ubuntu bootstrap-helper --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url URL
+              ubuntu oob-boot-url --device DEVICE_ID --url IMAGE_URL [--reboot true]
               devices --account ACCOUNT [--source auto|core|hammertime] [--output table|json]
               facts --account ACCOUNT [--source auto|core|hammertime] [device-id...]
               snapshot --account ACCOUNT --device DEVICE [--source auto|core|hammertime] [--output-dir DIR]
@@ -472,6 +498,7 @@ struct TalosDeployCLI {
               build-iso --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO [--rack-password-hash HASH] [--root-password-hash HASH]
               validate-iso --iso ISO
               bootstrap-helper --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url https://ILO/
+              oob-boot-url --device DEVICE_ID --url http://helper/installer.iso [--reboot true]
 
             Password hashes may also be supplied with TDS_RACK_PASSWORD_HASH and TDS_ROOT_PASSWORD_HASH.
             SSH public keys default to ~/.ssh/*.pub unless --no-default-ssh-keys true is set.
