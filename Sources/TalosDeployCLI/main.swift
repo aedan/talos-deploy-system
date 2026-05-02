@@ -25,7 +25,7 @@ struct TalosDeployCLI {
         case "ubuntu":
             try await handleUbuntu(arguments: Array(arguments.dropFirst()))
         case "talos":
-            try handleTalos(arguments: Array(arguments.dropFirst()))
+            try await handleTalos(arguments: Array(arguments.dropFirst()))
         case "devices":
             try await handleDevices(arguments: Array(arguments.dropFirst()))
         case "facts":
@@ -71,7 +71,7 @@ struct TalosDeployCLI {
         }
 
         guard let username = options["username"], let secret = options["secret"] else {
-            throw CLIError.missingRequired("login requires --username and --secret, or use --source hammertime on rax")
+            throw CLIError.missingRequired("login requires --username and --secret, or use --source hammertime on a workstation with an active hammertime session")
         }
         let headerName = options["header-name"] ?? "Cookie"
         let session = CoreSession(
@@ -232,7 +232,7 @@ struct TalosDeployCLI {
         print(String(decoding: data, as: UTF8.self))
     }
 
-    private static func handleTalos(arguments: [String]) throws {
+    private static func handleTalos(arguments: [String]) async throws {
         guard let subcommand = arguments.first else {
             printTalosUsage()
             return
@@ -261,6 +261,16 @@ struct TalosDeployCLI {
             let artifacts = TalosFactoryClient().artifactURLs(settings: factory, talosVersion: version)
             let data = try JSONEncoder.pretty.encode(artifacts)
             print(String(decoding: data, as: UTF8.self))
+        case "versions":
+            let catalog = try await TalosFactoryClient().fetchVersions(baseURL: factory.baseURL)
+            if options["output"] == "json" {
+                let data = try JSONEncoder.pretty.encode(catalog)
+                print(String(decoding: data, as: UTF8.self))
+                return
+            }
+            for version in catalog.versions {
+                print(version.displayName)
+            }
         default:
             printTalosUsage()
         }
@@ -582,6 +592,7 @@ struct TalosDeployCLI {
               login [--source hammertime] | --username USER --secret VALUE [--header-name Cookie]
               talos schematic [--extensions ext1,ext2] [--extra-kernel-args arg1,arg2]
               talos artifacts [--version v1.12.1] [--schematic-id ID] [--arch amd64]
+              talos versions [--factory-url URL] [--output table|json]
               ubuntu snapshot --account ACCOUNT --device DEVICE [--source auto|core|hammertime] [--output-dir DIR]
               ubuntu build-iso --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO [--rack-password-hash HASH]
               ubuntu validate-iso --iso ISO
@@ -627,6 +638,7 @@ struct TalosDeployCLI {
             tds talos commands:
               schematic [--extensions ext1,ext2] [--extra-kernel-args arg1,arg2]
               artifacts [--version v1.12.1] [--schematic-id ID] [--arch amd64] [--platform metal]
+              versions [--factory-url URL] [--output table|json]
 
             The artifact URLs follow the Talos Image Factory model. Extensions affect the image schematic;
             kernel modules are rendered into machine configs during deployment planning.

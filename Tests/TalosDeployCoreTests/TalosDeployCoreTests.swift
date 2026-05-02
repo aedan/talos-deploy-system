@@ -7,7 +7,7 @@ final class TalosDeployCoreTests: XCTestCase {
         id: String = "cp1",
         name: String = "cp-1",
         primaryIP: String = "198.51.100.10",
-        privateIP: String = "172.22.220.10",
+        privateIP: String = "198.51.100.10",
         oob: OOBEndpoint? = nil
     ) -> DiscoveredDevice {
         DiscoveredDevice(
@@ -33,8 +33,8 @@ final class TalosDeployCoreTests: XCTestCase {
             role: role,
             shouldInstallOS: shouldInstallOS,
             staticNetwork: StaticNetworkConfig(
-                gateway: "172.22.220.1",
-                nameservers: ["172.22.216.10"],
+                gateway: "198.51.100.1",
+                nameservers: ["198.51.101.10"],
                 searchDomains: ["example.test"]
             )
         )
@@ -200,7 +200,7 @@ final class TalosDeployCoreTests: XCTestCase {
     func testTalosBuilderCreatesArtifacts() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
-        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "172.22.220.10")
+        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
         var deployerAssignment = DeviceAssignment(deviceID: "deployer", role: .deployer, deployerMode: .existing)
         deployerAssignment.typedConfirmation = ""
         let spec = DeploymentSpec(
@@ -230,16 +230,16 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("image: factory.talos.dev/installer/abc123:v1.11.3"))
         XCTAssertTrue(patch.contains("name: br_netfilter"))
         XCTAssertTrue(patch.contains("zfs_arc_max=123"))
-        XCTAssertTrue(patch.contains("addresses:\n          - 172.22.220.10/22"))
+        XCTAssertTrue(patch.contains("addresses:\n          - 198.51.100.10/22"))
         XCTAssertTrue(patch.contains("network: 0.0.0.0/0"))
-        XCTAssertTrue(patch.contains("gateway: 172.22.220.1"))
+        XCTAssertTrue(patch.contains("gateway: 198.51.100.1"))
         XCTAssertTrue(patch.contains("destination: /var/lib/longhorn"))
     }
 
     func testTalosBuilderRendersManualVLANsAndBridges() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
-        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "172.22.220.10")
+        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
         var deployerAssignment = DeviceAssignment(deviceID: "deployer", role: .deployer, deployerMode: .existing)
         let cpAssignment = DeviceAssignment(
             deviceID: "cp1",
@@ -248,22 +248,22 @@ final class TalosDeployCoreTests: XCTestCase {
             networkSource: .manual,
             staticNetwork: StaticNetworkConfig(
                 managementInterface: "eno1",
-                managementAddressCIDR: "172.22.220.10/22",
-                gateway: "172.22.220.1",
-                nameservers: ["69.20.0.196", "69.20.0.164"],
+                managementAddressCIDR: "198.51.100.10/22",
+                gateway: "198.51.100.1",
+                nameservers: ["203.0.113.196", "203.0.113.164"],
                 searchDomains: ["rpc.rackspace.com"],
-                routes: [StaticNetworkRoute(to: "default", via: "172.22.220.1")],
+                routes: [StaticNetworkRoute(to: "default", via: "198.51.100.1")],
                 vlans: [
                     NetworkInterface(name: "eno3.901", vlanID: 901, parentInterface: "eno3"),
                     NetworkInterface(name: "eno50.1326", vlanID: 1326, parentInterface: "eno50"),
                 ],
                 bridges: [
-                    NetworkInterface(name: "br-ipmi", addresses: ["10.17.123.180/26"], bridgePorts: ["eno3.901"]),
+                    NetworkInterface(name: "br-ipmi", addresses: ["192.0.2.180/26"], bridgePorts: ["eno3.901"]),
                     NetworkInterface(
                         name: "br-ctlplane",
-                        addresses: ["172.22.216.10/22"],
+                        addresses: ["198.51.101.10/22"],
                         bridgePorts: ["eno49"],
-                        routes: [StaticNetworkRoute(to: "192.168.100.0/24", via: "172.22.216.36")]
+                        routes: [StaticNetworkRoute(to: "192.168.100.0/24", via: "198.51.101.36")]
                     ),
                 ]
             )
@@ -293,7 +293,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("      - interface: br-ctlplane"))
         XCTAssertTrue(patch.contains("          - eno49"))
         XCTAssertTrue(patch.contains("network: 192.168.100.0/24"))
-        XCTAssertTrue(patch.contains("gateway: 172.22.216.36"))
+        XCTAssertTrue(patch.contains("gateway: 198.51.101.36"))
     }
 
     func testBridgeSessionDetectionParsesHammertimeCachePayload() async throws {
@@ -357,7 +357,7 @@ final class TalosDeployCoreTests: XCTestCase {
                           ],
                           "oob": {
                             "vendor": "idrac",
-                            "address": "10.17.123.153",
+                            "address": "192.0.2.153",
                             "username": "",
                             "credential_reference": "",
                             "supports_virtual_media": null,
@@ -384,7 +384,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(devices.count == 1)
         XCTAssertTrue(devices.first?.id == "123452")
         XCTAssertTrue(devices.first?.platformName == "Load-Balancer")
-        XCTAssertTrue(devices.first?.oob?.address == "10.17.123.153")
+        XCTAssertTrue(devices.first?.oob?.address == "192.0.2.153")
         XCTAssertTrue(devices.first?.networkInterfaces.first?.vlanID == 1220)
         XCTAssertTrue(devices.first?.isClusterEligible == false)
         XCTAssertTrue(runner.invocations.first?.arguments.contains("account-devices") == true)
@@ -439,6 +439,28 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(artifacts.installerImage == "factory.talos.dev/installer/abc123:v1.12.1")
         XCTAssertTrue(artifacts.schematicYAML.contains("siderolabs/zfs"))
         XCTAssertTrue(artifacts.schematicYAML.contains("extraKernelArgs:"))
+    }
+
+    func testTalosFactoryVersionCatalogSortsAndPrefersNewestStable() throws {
+        let data = #"["v1.11.7","v1.12.0-beta.1","v1.12.0","v1.12.1"]"#.data(using: .utf8)!
+
+        let catalog = try TalosFactoryClient().parseVersions(data: data)
+
+        XCTAssertEqual(catalog.versions.map(\.value), ["v1.12.1", "v1.12.0", "v1.12.0-beta.1", "v1.11.7"])
+        XCTAssertEqual(catalog.newestStable?.value, "v1.12.1")
+        XCTAssertEqual(catalog.preferredVersion(preserving: "v1.11.7")?.value, "v1.11.7")
+        XCTAssertEqual(catalog.preferredVersion(preserving: "v1.10.0")?.value, "v1.12.1")
+        XCTAssertEqual(catalog.versions.first { $0.value == "v1.12.0-beta.1" }?.displayName, "v1.12.0-beta.1 (prerelease)")
+    }
+
+    func testTalosFactoryVersionCatalogRejectsEmptyResponse() throws {
+        let data = #"[]"#.data(using: .utf8)!
+
+        XCTAssertThrowsError(try TalosFactoryClient().parseVersions(data: data)) { error in
+            guard case TalosFactoryError.emptyVersionCatalog = error else {
+                return XCTFail("Expected emptyVersionCatalog, got \(error)")
+            }
+        }
     }
 
     func testAutomaticTalosProvisioningPrefersDeployerHostedMedia() throws {
@@ -500,8 +522,8 @@ final class TalosDeployCoreTests: XCTestCase {
         let result = StaticNetworkPlanner().validate(node: node)
 
         XCTAssertTrue(result.isValid)
-        XCTAssertTrue(result.config.managementAddressCIDR == "172.22.220.10/22")
-        XCTAssertTrue(result.config.routes.first == StaticNetworkRoute(to: "default", via: "172.22.220.1"))
+        XCTAssertTrue(result.config.managementAddressCIDR == "198.51.100.10/22")
+        XCTAssertTrue(result.config.routes.first == StaticNetworkRoute(to: "default", via: "198.51.100.1"))
     }
 
     func testTalosDefaultsIncludeRackspaceExtensionsAndLonghorn() {
@@ -513,6 +535,50 @@ final class TalosDeployCoreTests: XCTestCase {
             "siderolabs/bnx2-bnx2x",
         ])
         XCTAssertTrue(defaults.enableLonghornExtraMounts)
+    }
+
+    @MainActor
+    func testInventoryFilterMatchesNameIPPlatformOOBAndRoleWithoutChangingAssignments() {
+        let controller = AppController(
+            settingsController: temporarySettingsController(),
+            authProvider: StaticAuthProvider(),
+            coreClient: StaticCoreClient(devices: []),
+            hammertime: StaticHammertimeAdapter(devices: [])
+        )
+        let controlPlane = DiscoveredDevice(
+            id: "100002",
+            accountNumber: "0000000",
+            name: "100002-lab-controller01.example.test",
+            primaryIP: "198.51.100.20",
+            privateIP: "198.51.100.20",
+            platformName: "HP DL380 G9 OpenStack",
+            oob: OOBEndpoint(vendor: .ilo, address: "192.0.2.20")
+        )
+        let worker = DiscoveredDevice(
+            id: "100003",
+            accountNumber: "0000000",
+            name: "100003-lab-compute01.example.test",
+            primaryIP: "198.51.100.21",
+            privateIP: "198.51.100.21",
+            platformName: "Dell PowerEdge R730",
+            oob: OOBEndpoint(vendor: .idrac, address: "192.0.2.21")
+        )
+        controller.devices = [controlPlane, worker]
+        controller.updateAssignment(DeviceAssignment(deviceID: controlPlane.id, role: .controlplane))
+        controller.updateAssignment(DeviceAssignment(deviceID: worker.id, role: .worker))
+
+        controller.inventoryFilterText = "192.0.2.21"
+        XCTAssertEqual(controller.filteredClusterEligibleDevices.map(\.id), [worker.id])
+
+        controller.inventoryFilterText = "controlplane"
+        XCTAssertEqual(controller.filteredClusterEligibleDevices.map(\.id), [controlPlane.id])
+
+        controller.inventoryFilterText = "dl380"
+        XCTAssertEqual(controller.filteredClusterEligibleDevices.map(\.id), [controlPlane.id])
+
+        controller.inventoryFilterText = ""
+        XCTAssertEqual(Set(controller.filteredClusterEligibleDevices.map(\.id)), Set([controlPlane.id, worker.id]))
+        XCTAssertEqual(controller.binding(for: worker).role, .worker)
     }
 
     func testDeployerServicePlanIncludesManagedPackagesAndUnits() {
@@ -531,9 +597,9 @@ final class TalosDeployCoreTests: XCTestCase {
             accountNumber: "0000000",
             name: "123456-lab2-director.example.test",
             primaryIP: "69.20.118.196",
-            privateIP: "172.22.220.196",
+            privateIP: "198.51.100.196",
             platformName: "HP DL380 G9 OpenStack",
-            oob: OOBEndpoint(vendor: .ilo, address: "10.17.123.132", username: "root")
+            oob: OOBEndpoint(vendor: .ilo, address: "192.0.2.132", username: "root")
         )
 
         let responses: [CommandResult] = [
@@ -561,9 +627,9 @@ final class TalosDeployCoreTests: XCTestCase {
                 stderr: "",
                 exitCode: 0
             ),
-            CommandResult(executable: "/tmp/ht", arguments: [], stdout: "eno1 UP 172.22.220.196/22\nbr-ipmi UP 10.17.123.182/26\n", stderr: "", exitCode: 0),
+            CommandResult(executable: "/tmp/ht", arguments: [], stdout: "eno1 UP 198.51.100.196/22\nbr-ipmi UP 192.0.2.182/26\n", stderr: "", exitCode: 0),
             CommandResult(executable: "/tmp/ht", arguments: [], stdout: "2: eno1: <BROADCAST>", stderr: "", exitCode: 0),
-            CommandResult(executable: "/tmp/ht", arguments: [], stdout: "default via 172.22.220.1 dev eno1\n10.17.123.128/26 dev br-ipmi\n", stderr: "", exitCode: 0),
+            CommandResult(executable: "/tmp/ht", arguments: [], stdout: "default via 198.51.100.1 dev eno1\n192.0.2.128/26 dev br-ipmi\n", stderr: "", exitCode: 0),
             CommandResult(executable: "/tmp/ht", arguments: [], stdout: "0: from all lookup local\n32766: from all lookup main\n", stderr: "", exitCode: 0),
             CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "", exitCode: 0),
             CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "", exitCode: 0),
@@ -580,8 +646,8 @@ final class TalosDeployCoreTests: XCTestCase {
                 127.0.0.1 localhost
                 ---RESOLV---
                 search lab.example maas example.test
-                nameserver 172.22.216.10
-                nameserver 69.20.0.164
+                nameserver 198.51.101.10
+                nameserver 203.0.113.164
                 """,
                 stderr: "",
                 exitCode: 0
@@ -607,8 +673,8 @@ final class TalosDeployCoreTests: XCTestCase {
 
         XCTAssertTrue(snapshot.device.id == "123456")
         XCTAssertTrue(snapshot.summary.hostname == "123456-lab2-director.example.test")
-        XCTAssertTrue(snapshot.summary.oobIP == "10.17.123.132")
-        XCTAssertTrue(snapshot.summary.dnsServers == ["172.22.216.10", "69.20.0.164"])
+        XCTAssertTrue(snapshot.summary.oobIP == "192.0.2.132")
+        XCTAssertTrue(snapshot.summary.dnsServers == ["198.51.101.10", "203.0.113.164"])
         XCTAssertTrue(FileManager.default.fileExists(atPath: URL(fileURLWithPath: snapshot.directory).appending(path: "snapshot.json").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: URL(fileURLWithPath: snapshot.directory).appending(path: "captures").appending(path: "hostnamectl.json").path))
         XCTAssertTrue(runner.invocations.first?.arguments.contains("--no-checks") == true)
@@ -620,7 +686,7 @@ final class TalosDeployCoreTests: XCTestCase {
             device: DiscoveredDevice(id: "123456", accountNumber: "0000000", name: "director"),
             summary: NetworkPreservationSummary(
                 hostname: "123456-lab2-director.example.test",
-                dnsServers: ["172.22.216.10", "69.20.0.164", "8.8.8.8"],
+                dnsServers: ["198.51.101.10", "203.0.113.164", "8.8.8.8"],
                 searchDomains: ["lab.example", "maas", "example.test"]
             ),
             captures: [
@@ -647,9 +713,9 @@ final class TalosDeployCoreTests: XCTestCase {
                     ---FILE:/etc/sysconfig/network-scripts/ifcfg-eno1---
                     DEVICE=eno1
                     TYPE=Ethernet
-                    IPADDR=172.22.220.196
+                    IPADDR=198.51.100.196
                     PREFIX=22
-                    GATEWAY=172.22.220.1
+                    GATEWAY=198.51.100.1
                     ONBOOT=yes
                     ---FILE:/etc/sysconfig/network-scripts/ifcfg-eno49---
                     DEVICE=eno49
@@ -664,17 +730,17 @@ final class TalosDeployCoreTests: XCTestCase {
                     ---FILE:/etc/sysconfig/network-scripts/ifcfg-br-ctlplane---
                     DEVICE=br-ctlplane
                     TYPE=Bridge
-                    IPADDR=172.22.216.9
+                    IPADDR=198.51.101.9
                     PREFIX=22
                     ONBOOT=yes
                     ---FILE:/etc/sysconfig/network-scripts/ifcfg-br-ipmi---
                     DEVICE=br-ipmi
                     TYPE=Bridge
-                    IPADDR=10.17.123.182
+                    IPADDR=192.0.2.182
                     PREFIX=26
                     ONBOOT=yes
                     ---FILE:/etc/sysconfig/network-scripts/route-br-ctlplane---
-                    192.168.100.0/24 via 172.22.216.36
+                    192.168.100.0/24 via 198.51.101.36
                     """,
                     stderr: "",
                     exitCode: 0
@@ -692,8 +758,8 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(eno1?.macAddress == "94:57:a5:6d:9c:c0")
         XCTAssertTrue(plan.vlans.contains(NetplanVLAN(name: "eno3.901", id: 901, link: "eno3")))
         XCTAssertTrue(brIPMI?.interfaces == ["eno3.901"])
-        XCTAssertTrue(brIPMI?.addresses == ["10.17.123.182/26"])
-        XCTAssertTrue(brCtlplane?.routes.contains(NetplanRoute(to: "192.168.100.0/24", via: "172.22.216.36")) == true)
+        XCTAssertTrue(brIPMI?.addresses == ["192.0.2.182/26"])
+        XCTAssertTrue(brCtlplane?.routes.contains(NetplanRoute(to: "192.168.100.0/24", via: "198.51.101.36")) == true)
         XCTAssertTrue(plan.bridges.contains(where: { $0.name == "virbr0" }) == false)
         XCTAssertTrue(plan.renderNetplanYAML().contains("nameservers:"))
     }
@@ -720,14 +786,14 @@ final class TalosDeployCoreTests: XCTestCase {
                 NetplanEthernet(
                     name: "eno1",
                     macAddress: "94:57:a5:6d:9c:c0",
-                    addresses: ["172.22.220.196/22"],
-                    routes: [NetplanRoute(to: "default", via: "172.22.220.1")],
-                    nameservers: ["172.22.216.10"],
+                    addresses: ["198.51.100.196/22"],
+                    routes: [NetplanRoute(to: "default", via: "198.51.100.1")],
+                    nameservers: ["198.51.101.10"],
                     searchDomains: ["example.test"]
                 ),
             ],
             vlans: [NetplanVLAN(name: "eno3.901", id: 901, link: "eno3")],
-            bridges: [NetplanBridge(name: "br-ipmi", interfaces: ["eno3.901"], addresses: ["10.17.123.182/26"])]
+            bridges: [NetplanBridge(name: "br-ipmi", interfaces: ["eno3.901"], addresses: ["192.0.2.182/26"])]
         )
 
         let artifacts = try UbuntuAutoinstallBuilder().writeSeed(spec: spec, networkPlan: plan)
@@ -743,6 +809,39 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(metaData.contains("instance-id: tds-0000000-123456-director"))
     }
 
+    func testUserFacingTextDoesNotNameSpecificRuntimeHost() throws {
+        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let files = [
+            "README.md",
+            "Sources/TalosDeployApp/TalosDeployApp.swift",
+            "Sources/TalosDeployCLI/main.swift",
+            "Sources/TalosDeployCore/Deployment.swift",
+        ]
+        let forbidden = try NSRegularExpression(pattern: #"(?i)\brax\b|rax-temp"#)
+        for file in files {
+            let text = try String(contentsOf: root.appending(path: file), encoding: .utf8)
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            let matches = forbidden.matches(in: text, range: range)
+            XCTAssertTrue(matches.isEmpty, "Found host-specific runtime text in \(file)")
+        }
+    }
+
+}
+
+private func temporarySettingsController() -> SettingsController {
+    let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    setenv("TDS_HOME", base.path, 1)
+    return SettingsController(paths: AppPaths())
+}
+
+private struct StaticAuthProvider: AuthProvider {
+    func currentSession() throws -> CoreSession? {
+        nil
+    }
+
+    func storeSession(_ session: CoreSession, secret: String) throws {}
+
+    func clearSession() throws {}
 }
 
 private final class MockCommandRunner: CommandRunning, @unchecked Sendable {

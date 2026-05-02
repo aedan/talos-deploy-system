@@ -3,6 +3,9 @@ set -euo pipefail
 
 CONFIGURATION="${CONFIGURATION:-debug}"
 OUTPUT_APP="${1:-build-cache/tds.app}"
+VERSION="${TDS_VERSION:-$(cat VERSION 2>/dev/null || echo 0.1.0-alpha.1)}"
+BUNDLE_SHORT_VERSION="${TDS_BUNDLE_SHORT_VERSION:-${VERSION%%-*}}"
+BUNDLE_BUILD_NUMBER="${TDS_BUNDLE_BUILD_NUMBER:-1}"
 
 swift build --product tds-app -c "$CONFIGURATION"
 
@@ -38,9 +41,9 @@ cat >"$OUTPUT_APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>__BUNDLE_SHORT_VERSION__</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>__BUNDLE_BUILD_NUMBER__</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>
@@ -48,5 +51,16 @@ cat >"$OUTPUT_APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+
+python3 - "$OUTPUT_APP/Contents/Info.plist" "$BUNDLE_SHORT_VERSION" "$BUNDLE_BUILD_NUMBER" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+text = text.replace("__BUNDLE_SHORT_VERSION__", sys.argv[2])
+text = text.replace("__BUNDLE_BUILD_NUMBER__", sys.argv[3])
+path.write_text(text)
+PY
 
 echo "Built $OUTPUT_APP"

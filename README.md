@@ -1,19 +1,32 @@
 # tds
 
-`tds` is a macOS-first Rackspace bare-metal Talos deployment tool. The desktop app is the primary operator experience, and the CLI exists for `rax`-side testing, automation, and repeatable end-to-end runs.
+`tds` is a macOS-first Rackspace bare-metal Talos deployment tool. The desktop app is the primary operator experience, and the CLI exists for testing, automation, and repeatable deployment runs from any Core-capable Mac workstation.
 
 The deployer is a selected physical server that receives Ubuntu first and then manages Talos artifacts, PXE/media services, machine configs, cluster bootstrap, and health checks. The deployer is not a Talos node.
 
+## Prerequisites
+
+- macOS 14 or newer.
+- Xcode or Xcode Command Line Tools for source builds.
+- Git for source checkout and updates.
+- Network access from the operator workstation to Core, Hammertime-backed Core auth, OOB/iLO/iDRAC access paths, and any configured proxy.
+- `ht` when using Hammertime/Core bridge inventory or live facts.
+- `xorriso` for Ubuntu autoinstall ISO rebuild and validation.
+- Stock Ubuntu 24.04 server ISO for deployer bootstrap installs.
+- SSH access to the Ubuntu deployer after install for service preparation and Talos execution.
+- `TDS_RACK_PASSWORD_HASH` and `TDS_ROOT_PASSWORD_HASH`, or equivalent secure UI input, when building Ubuntu deployer media.
+- Optional access-profile credentials for HTTP/SOCKS proxies or bastions that reach OOB networks.
+
+Release artifacts are unsigned and not notarized during alpha. macOS may require opening the app from Finder with an explicit trust action or clearing quarantine for local testing.
+
 ## Components
 
-- `tds.app`: SwiftUI desktop UI for Core session discovery, account lookup, physical-server filtering, role assignment, deployer bootstrap, OOB local media, static networking, deployment staging, resume, and settings.
-- `tds`: CLI for `rax` testing and automation.
-- `TalosDeployCore`: shared Swift core for Core inventory, hammertime integration, OOB planning, Ubuntu autoinstall media, deployer service planning, Talos artifact rendering, and deployment orchestration.
-- Core bridge: bundled Python bridge used on `rax` to query Core through the active hammertime-authenticated environment.
+- `tds.app`: SwiftUI desktop UI for Core session discovery, account lookup, physical-server filtering/search, role assignment, deployer bootstrap, OOB local media, static networking, Talos version selection, deployment staging, resume, and settings.
+- `tds`: CLI for testing, automation, and repeatable runbooks.
+- `TalosDeployCore`: shared Swift core for Core inventory, Hammertime integration, OOB planning, Ubuntu autoinstall media, deployer service planning, Talos artifact rendering, and deployment orchestration.
+- Core bridge: bundled Python bridge used to query Core through an active hammertime-authenticated environment.
 
 ## Build And Run
-
-Develop locally, commit on `main`, then pull the same repo path on `rax` for Core/OOB/hammertime validation.
 
 ```bash
 swift test
@@ -23,7 +36,7 @@ scripts/build-tds-app-bundle.sh build-cache/tds.app
 open build-cache/tds.app
 ```
 
-On `rax`:
+For runtime validation on another workstation:
 
 ```bash
 cd ~/Documents/GitHub/talos-deploy-system
@@ -33,18 +46,20 @@ swift build --product tds
 .build/debug/tds devices --account 0000000 --source auto
 ```
 
-Use fake account numbers in examples and docs. Real account numbers belong in operator input, local settings, or ignored run state only.
+Use fake account numbers in examples and docs. Real account numbers belong in operator input, local settings, environment variables, or ignored run state only.
 
 ## Operator Flow
 
-1. Open `tds.app` on `rax` or from a workstation with a working access profile.
-2. Use `Sign In` to refresh/import the active hammertime-backed Core session. Manual Core session storage is available, but the normal `rax` path is automatic discovery.
+1. Open `tds.app` from a workstation with a working Core/Hammertime/OOB access profile.
+2. Use `Sign In` to refresh/import the active hammertime-backed Core session, or store a manual Core session in Keychain.
 3. In `Inventory + Roles`, enter the account number and load devices. Non-server devices such as firewalls, load balancers, switches, and VMs are filtered out of cluster role assignment.
-4. Select one physical device as `deployer`. If it needs Ubuntu reinstalled, leave install enabled and type the destructive confirmation.
-5. Assign Talos nodes as `controlplane` or `worker`. For lab-based end-to-end testing, identify the lab devices from Core inventory outside the product workflow, then assign roles in the UI or deployment spec: the selected deployer is separate from Talos, controller-named devices become control-plane nodes, and the remaining lab servers become workers.
-6. Review static networking for every Talos node. DHCP may be used for live boot only; final machine configs require static management IPs from Core, capture, or manual overrides.
-7. Use `Bootstrap Deployer` to capture/build/validate Ubuntu media and attach it through the embedded iLO local-media WebView when the OOB network cannot fetch external media.
-8. Stage and run deployment. After Ubuntu is online, `tds` installs deployer services, stages Talos artifacts, boots nodes, applies configs, bootstraps etcd, fetches kubeconfig, and verifies health.
+4. Use the inventory search field to find physical servers by name, ID, IP, OOB IP, platform/model, or role.
+5. Select one physical device as `deployer`. If it needs Ubuntu reinstalled, leave install enabled and type the destructive confirmation.
+6. Assign Talos nodes as `controlplane` or `worker`.
+7. Review static networking for every Talos node. DHCP may be used for live boot only; final machine configs require static management IPs from Core, capture, or manual overrides.
+8. In Settings, refresh Talos versions from Image Factory and select the version to deploy. Manual override remains available if Factory is unreachable.
+9. Use `Bootstrap Deployer` to capture/build/validate Ubuntu media and attach it through the embedded iLO local-media WebView when the OOB network cannot fetch external media.
+10. Stage and run deployment. After Ubuntu is online, `tds` installs deployer services, stages Talos artifacts, boots nodes, applies configs, bootstraps etcd, fetches kubeconfig, and verifies health.
 
 ## Settings
 
@@ -60,7 +75,7 @@ Core Session:
 
 - Default account is optional and should usually be blank.
 - Inventory source can be `auto`, `core`, or `hammertime`.
-- Docs and service URLs point at Core documentation/API endpoints available from `rax`.
+- Docs and service URLs point at Core documentation/API endpoints available from the runtime workstation.
 
 Hammertime:
 
@@ -70,9 +85,10 @@ Hammertime:
 
 Talos Defaults:
 
+- Talos versions are loaded from Talos Image Factory `GET /versions`.
 - Default extensions are `siderolabs/iscsi-tools`, `siderolabs/util-linux-tools`, and `siderolabs/bnx2-bnx2x`.
 - Longhorn `machine.extraMounts` for `/var/lib/longhorn` are rendered by default.
-- Kernel modules and extra kernel args are configurable.
+- Kernel modules, extra kernel args, architecture, platform, and schematic ID are configurable.
 
 Provisioning Priority:
 
@@ -107,7 +123,7 @@ tds ubuntu network-plan --capture ~/tds-captures/0000000/100001/snapshot.json --
 tds ubuntu build-iso --capture ~/tds-captures/0000000/100001/snapshot.json --source-iso ~/iso/ubuntu-24.04-live-server-amd64.iso --output-iso ~/iso/tds-100001-ubuntu.iso
 tds ubuntu validate-iso --iso ~/iso/tds-100001-ubuntu.iso
 tds ubuntu bootstrap-deployer --capture ~/tds-captures/0000000/100001/snapshot.json --source-iso ~/iso/ubuntu-24.04-live-server-amd64.iso --output-iso ~/iso/tds-100001-ubuntu.iso --oob-url https://192.0.2.10
-tds talos schematic
+tds talos versions --output table
 tds talos artifacts --version v1.12.1 --arch amd64
 tds deploy plan --spec examples/deployment-spec.example.json
 tds deploy run --spec examples/deployment-spec.example.json --dry-run true
@@ -127,28 +143,19 @@ scripts/build-tds-app-bundle.sh build-cache/tds.app
 open build-cache/tds.app
 ```
 
-2. Confirm Core/hammertime auth on `rax`:
+2. Confirm Core/hammertime auth:
 
 ```bash
 tds login --source hammertime
 tds devices --account 0000000 --source auto --output table
 ```
 
-3. Prepare the lab role plan for an end-to-end test:
+3. Refresh Talos versions and inspect artifacts:
 
 ```bash
-tds devices --account 0000000 --source auto --output json > /tmp/tds-account-devices.json
+tds talos versions --output table
+tds talos artifacts --version v1.12.1 --arch amd64
 ```
-
-Expected role intent:
-
-- `100001-lab2-deployer.example.test`: `deployer`
-- `100002-lab2-controller01.example.test`: `controlplane`
-- `100003-lab2-controller02.example.test`: `controlplane`
-- `100004-lab2-controller03.example.test`: `controlplane`
-- every other matching physical `lab2` server: `worker`
-
-This lab grouping is an acceptance-test procedure, not a built-in `tds` feature. Use the inventory JSON/Core UI to confirm the real lab membership, then assign roles in `tds.app` or a reviewed deployment spec.
 
 4. Capture the deployer before destroying its OS:
 
@@ -198,6 +205,48 @@ tds deploy run \
 
 tds deploy verify --path ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
 ```
+
+## Lab2 End-To-End Acceptance Runbook
+
+This is a real acceptance procedure, not a built-in product mode. Do not commit real account numbers, device IDs, generated specs, or captured evidence.
+
+Inputs:
+
+- `TDS_E2E_ACCOUNT`: runtime account number.
+- `TDS_E2E_OUTPUT`: ignored evidence directory, for example `~/tds-e2e/lab2-$(date +%Y%m%d%H%M%S)`.
+- Existing Lab2 director network capture, when per-node live facts are unavailable.
+
+Procedure:
+
+1. Build and test `tds`.
+2. Refresh Talos versions from Image Factory and choose the target version.
+3. Query Core inventory with `tds devices --account "$TDS_E2E_ACCOUNT" --source auto --output json`.
+4. Confirm exactly 13 physical-server-eligible devices whose names contain `lab2`; fail the preflight otherwise.
+5. Select the Lab2 director as `deployer`, 3 controller-named devices as `controlplane`, and every other Lab2 physical server as `worker`.
+6. Save Core inventory, OOB metadata, and any reachable `ht raxfacts`/live facts under `$TDS_E2E_OUTPUT`.
+7. If live facts are unavailable on some nodes, use the proven Lab2 director topology as the network template and override each node’s static management IP from Core.
+8. Validate static management CIDR, gateway, DNS, VLANs, bridges, bridge ports, routes, and install disk for every Talos node before destructive actions.
+9. Build and validate the Ubuntu deployer ISO, attach it through `tds.app` local media, and verify the deployer returns with Ubuntu, SSH, `rack`, `root`, and preserved networking.
+10. Prepare deployer services, stage Talos artifacts, provision nodes, apply machine configs, bootstrap etcd, fetch kubeconfig, and verify Talos/Kubernetes health.
+
+Evidence to keep in ignored local storage:
+
+- Inventory JSON and generated deployment spec.
+- Network topology summary and per-node static IP decisions.
+- ISO validation output.
+- Deployer service preparation logs.
+- Talos apply/bootstrap logs.
+- Kubeconfig fetch result and final health output.
+
+## Release Packaging
+
+Alpha releases are published as GitHub pre-releases. The first pre-alpha release is `v0.1.0-alpha.1`.
+
+```bash
+scripts/package-release.sh
+```
+
+The packaging script builds `tds.app`, builds the `tds` CLI, creates zip files, and writes SHA-256 checksums under `build-cache/release/`. Pushing a `v*` tag runs the release workflow and uploads the same artifacts to GitHub Releases.
 
 ## Ubuntu Autoinstall Notes
 

@@ -452,8 +452,109 @@ public struct StaticNetworkPlanner: Sendable {
     }
 }
 
+public struct TalosFactoryVersion: Codable, Equatable, Identifiable, Sendable {
+    public var value: String
+
+    public var id: String { value }
+
+    public var isPrerelease: Bool {
+        value.contains("-")
+    }
+
+    public var displayName: String {
+        isPrerelease ? "\(value) (prerelease)" : value
+    }
+
+    public init(value: String) {
+        self.value = value
+    }
+}
+
+public struct TalosFactoryVersionCatalog: Codable, Equatable, Sendable {
+    public var versions: [TalosFactoryVersion]
+
+    public var newestStable: TalosFactoryVersion? {
+        versions.first { !$0.isPrerelease }
+    }
+
+    public init(rawVersions: [String]) {
+        self.versions = rawVersions
+            .map { TalosFactoryVersion(value: $0) }
+            .sorted { lhs, rhs in
+                TalosSemanticVersion(lhs.value) > TalosSemanticVersion(rhs.value)
+            }
+    }
+
+    public func contains(_ version: String) -> Bool {
+        versions.contains { $0.value == version }
+    }
+
+    public func preferredVersion(preserving currentVersion: String) -> TalosFactoryVersion? {
+        if contains(currentVersion) {
+            return TalosFactoryVersion(value: currentVersion)
+        }
+        return newestStable ?? versions.first
+    }
+}
+
+public enum TalosFactoryError: Error, LocalizedError {
+    case invalidURL(String)
+    case unexpectedStatus(Int)
+    case emptyVersionCatalog
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidURL(let url):
+            return "Invalid Talos Image Factory URL: \(url)"
+        case .unexpectedStatus(let status):
+            return "Talos Image Factory returned HTTP \(status) while loading versions."
+        case .emptyVersionCatalog:
+            return "Talos Image Factory returned no deployable versions."
+        }
+    }
+}
+
+private struct TalosSemanticVersion: Comparable {
+    let major: Int
+    let minor: Int
+    let patch: Int
+    let prerelease: String?
+    let raw: String
+
+    init(_ raw: String) {
+        self.raw = raw
+        let trimmed = raw.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+        let parts = trimmed.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        let numbers = parts.first?.split(separator: ".").map { Int($0) ?? 0 } ?? []
+        self.major = numbers.indices.contains(0) ? numbers[0] : 0
+        self.minor = numbers.indices.contains(1) ? numbers[1] : 0
+        self.patch = numbers.indices.contains(2) ? numbers[2] : 0
+        self.prerelease = parts.indices.contains(1) ? String(parts[1]) : nil
+    }
+
+    static func < (lhs: TalosSemanticVersion, rhs: TalosSemanticVersion) -> Bool {
+        if lhs.major != rhs.major { return lhs.major < rhs.major }
+        if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
+        if lhs.patch != rhs.patch { return lhs.patch < rhs.patch }
+        switch (lhs.prerelease, rhs.prerelease) {
+        case (nil, nil):
+            return lhs.raw < rhs.raw
+        case (nil, _?):
+            return false
+        case (_?, nil):
+            return true
+        case let (left?, right?):
+            return left < right
+        }
+    }
+}
+
 public struct TalosFactoryClient: Sendable {
-    public init() {}
+    private let session: URLSession
+
+    public init(session: URLSession = .shared) {
+        self.session = session
+    }
 
     public func renderSchematic(settings: TalosImageFactorySettings) -> String {
         var lines = ["customization:"]
@@ -480,6 +581,35 @@ public struct TalosFactoryClient: Sendable {
             pxeURL: "\(pxeBaseURL)/pxe/\(settings.schematicID)/\(talosVersion)/\(model)",
             installerImage: "\(settings.registryHost)/installer/\(settings.schematicID):\(talosVersion)"
         )
+    }
+
+    public func fetchVersions(baseURL: String) async throws -> TalosFactoryVersionCatalog {
+        let normalizedBaseURL = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: "\(normalizedBaseURL)/versions"),
+              url.scheme != nil,
+              url.host != nil
+        else {
+            throw TalosFactoryError.invalidURL(baseURL)
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw TalosFactoryError.unexpectedStatus(-1)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw TalosFactoryError.unexpectedStatus(http.statusCode)
+        }
+        return try parseVersions(data: data)
+    }
+
+    public func parseVersions(data: Data) throws -> TalosFactoryVersionCatalog {
+        let rawVersions = try JSONDecoder().decode([String].self, from: data)
+        let catalog = TalosFactoryVersionCatalog(rawVersions: rawVersions)
+        guard !catalog.versions.isEmpty else {
+            throw TalosFactoryError.emptyVersionCatalog
+        }
+        return catalog
     }
 }
 
@@ -799,7 +929,7 @@ public struct DeploymentPlanner: Sendable {
         }
 
         let remotePath = "\(spec.deployerStateRoot)/\(spec.accountNumber)/\(spec.clusterName)"
-        let tempPath = "rax-temp/\(spec.accountNumber)/\(spec.clusterName)"
+        let tempPath = "bootstrap-temp/\(spec.accountNumber)/\(spec.clusterName)"
         let talosArtifacts = TalosFactoryClient().artifactURLs(settings: spec.talosFactory, talosVersion: spec.talosVersion)
         var phases: [DeploymentPhase] = []
 
@@ -963,26 +1093,26 @@ public struct DeploymentPlanner: Sendable {
     private func bootstrapDeployerSteps(deployer: PlannedDeviceInstall, tempPath: String, remotePath: String) -> [String] {
         let commonTail = [
             "Install \(deployer.device.name) first and wait for SSH reachability.",
-            "Move durable deployment state from rax to \(remotePath).",
+            "Move durable deployment state from the temporary bootstrap workspace to \(remotePath).",
             "Only after the deployer is online may PXE-dependent control-plane and worker nodes proceed.",
         ]
 
         switch settings.bootstrapMedia.deliveryMode {
         case .operatorLocalMedia:
             return [
-                "Persist temporary deployment state on rax at \(tempPath).",
+                "Persist temporary deployment state on the runtime host at \(tempPath).",
                 "Open the configured OOB access profile in the embedded tds WebView.",
                 "Attach the selected Ubuntu or Talos ISO as operator local media; do not depend on another target node having an OS.",
             ] + commonTail
         case .oobReachableURL:
             return [
-                "Persist temporary deployment state on rax at \(tempPath).",
+                "Persist temporary deployment state on the runtime host at \(tempPath).",
                 "Attach media from the configured OOB-reachable URL \(settings.bootstrapMedia.externalMediaBaseURL).",
                 "This requires infrastructure outside the selected bare-metal nodes to serve the ISO on the OOB network.",
             ] + commonTail
         case .existingOSMediaHost:
             return [
-                "Persist temporary deployment state on rax at \(tempPath).",
+                "Persist temporary deployment state on the runtime host at \(tempPath).",
                 "Use the explicitly allowed existing OS media host \(settings.bootstrapMedia.mediaHostDeviceID) to serve installation media.",
                 "This is not greenfield-safe; every run must document which existing host is being used.",
             ] + commonTail
@@ -1183,6 +1313,10 @@ public final class AppController: ObservableObject {
     @Published public var ubuntuNetworkPlan: NetworkRebuildPlan?
     @Published public var ubuntuLocalMediaState: LocalMediaSessionState?
     @Published public var accessProfileProxyPasswords: [UUID: String]
+    @Published public var availableTalosVersions: [TalosFactoryVersion]
+    @Published public var talosVersionRefreshStatus: String
+    @Published public var useManualTalosVersion: Bool
+    @Published public var inventoryFilterText: String
     @Published public var statusMessage: String
 
     private let settingsController: SettingsController
@@ -1229,6 +1363,10 @@ public final class AppController: ObservableObject {
         self.ubuntuOOBURL = ""
         self.ubuntuOOBUsername = ""
         self.accessProfileProxyPasswords = Self.loadProxyPasswords(for: loadedSettings.accessProfiles, secretStore: secretStore)
+        self.availableTalosVersions = []
+        self.talosVersionRefreshStatus = "Talos versions have not been refreshed yet."
+        self.useManualTalosVersion = false
+        self.inventoryFilterText = ""
         self.statusMessage = "Ready"
     }
 
@@ -1303,7 +1441,7 @@ public final class AppController: ObservableObject {
         do {
             try authProvider.clearSession()
             session = nil
-            statusMessage = "Stored Core session cleared. Refresh to detect the active hammertime-backed session on rax."
+            statusMessage = "Stored Core session cleared. Refresh to detect an active hammertime-backed session on this workstation."
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -1351,6 +1489,32 @@ public final class AppController: ObservableObject {
             statusMessage = "Imported the active hammertime-backed Core session into the local store."
         } catch {
             statusMessage = error.localizedDescription
+        }
+    }
+
+    public func refreshTalosVersions() async {
+        do {
+            let catalog = try await TalosFactoryClient().fetchVersions(baseURL: settings.talos.factory.baseURL)
+            availableTalosVersions = catalog.versions
+            let currentVersion = settings.talos.talosVersion
+            if let selected = catalog.preferredVersion(preserving: currentVersion) {
+                selectTalosVersion(selected.value)
+                if selected.value == currentVersion {
+                    talosVersionRefreshStatus = "Loaded \(catalog.versions.count) Talos versions from Image Factory. Current selection \(selected.value) is available."
+                } else {
+                    talosVersionRefreshStatus = "Loaded \(catalog.versions.count) Talos versions from Image Factory. Previous selection \(currentVersion) is unavailable; selected \(selected.value)."
+                }
+                useManualTalosVersion = false
+            } else {
+                talosVersionRefreshStatus = "Talos Image Factory returned no deployable versions. Use manual version entry."
+                useManualTalosVersion = true
+            }
+            statusMessage = talosVersionRefreshStatus
+        } catch {
+            availableTalosVersions = []
+            useManualTalosVersion = true
+            talosVersionRefreshStatus = "\(error.localizedDescription) Use manual version entry if needed."
+            statusMessage = talosVersionRefreshStatus
         }
     }
 
@@ -1419,6 +1583,16 @@ public final class AppController: ObservableObject {
         devices.filter(\.isClusterEligible)
     }
 
+    public var filteredClusterEligibleDevices: [DiscoveredDevice] {
+        let query = inventoryFilterText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else {
+            return clusterEligibleDevices
+        }
+        return clusterEligibleDevices.filter { device in
+            inventoryFilterTokens(for: device).contains { $0.contains(query) }
+        }
+    }
+
     public var filteredDevices: [DiscoveredDevice] {
         devices.filter { !$0.isClusterEligible }
     }
@@ -1427,11 +1601,44 @@ public final class AppController: ObservableObject {
         assignments[assignment.deviceID] = assignment
     }
 
+    public func selectTalosVersion(_ version: String) {
+        let trimmed = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let previous = settings.talos.talosVersion
+        settings.talos.talosVersion = trimmed
+        if settings.deployer.talosctlVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+           settings.deployer.talosctlVersion == previous {
+            settings.deployer.talosctlVersion = trimmed
+        }
+    }
+
     private func defaultAssignment(for deviceID: String) -> DeviceAssignment {
         DeviceAssignment(
             deviceID: deviceID,
             preferredInstall: settings.talos.installerPreference
         )
+    }
+
+    private func inventoryFilterTokens(for device: DiscoveredDevice) -> [String] {
+        let assignment = binding(for: device)
+        var tokens = [
+            device.id,
+            device.name,
+            device.primaryIP,
+            device.privateIP,
+            device.platformName,
+            assignment.role.rawValue,
+            assignment.role.displayName,
+        ]
+        if let oobAddress = device.oob?.address {
+            tokens.append(oobAddress)
+        }
+        tokens.append(contentsOf: device.networkInterfaces.flatMap { interface in
+            [interface.name, interface.macAddress] + interface.addresses
+        })
+        return tokens
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
     }
 
     public func typedConfirmationText(for device: DiscoveredDevice) -> String {
