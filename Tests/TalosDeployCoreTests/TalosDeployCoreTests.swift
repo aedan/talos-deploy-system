@@ -830,6 +830,18 @@ final class TalosDeployCoreTests: XCTestCase {
         }
     }
 
+    func testLocalCommandRunnerDrainsLargeOutputWhileProcessRuns() async throws {
+        let runner = LocalCommandRunner()
+        let result = try await runner.run(
+            "/bin/sh",
+            arguments: ["-c", "yes x | head -c 200000"],
+            timeout: 5
+        )
+
+        XCTAssertEqual(result.stdout.count, 200000)
+        XCTAssertEqual(result.exitCode, 0)
+    }
+
 }
 
 private func temporarySettingsController() -> SettingsController {

@@ -1,5 +1,11 @@
 import Foundation
 
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
+
 public struct CommandResult: Sendable {
     public var executable: String
     public var arguments: [String]
@@ -80,6 +86,25 @@ public final class LocalCommandRunner: CommandRunning, @unchecked Sendable {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
+        let stdoutBuffer = LockedData()
+        let stderrBuffer = LockedData()
+        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+            } else {
+                stdoutBuffer.append(data)
+            }
+        }
+        stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+            } else {
+                stderrBuffer.append(data)
+            }
+        }
+
         try process.run()
 
         if let timeout {
@@ -88,27 +113,64 @@ public final class LocalCommandRunner: CommandRunning, @unchecked Sendable {
                 try await Task.sleep(for: .milliseconds(100))
             }
             if process.isRunning {
-                process.terminate()
-                process.waitUntilExit()
+                await terminate(process)
+                closeReadHandlers(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe)
                 throw CommandError.timedOut(executable, arguments, timeout)
             }
         } else {
             process.waitUntilExit()
         }
 
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        closeReadHandlers(stdoutPipe: stdoutPipe, stderrPipe: stderrPipe)
+        stdoutBuffer.append(stdoutPipe.fileHandleForReading.readDataToEndOfFile())
+        stderrBuffer.append(stderrPipe.fileHandleForReading.readDataToEndOfFile())
+
         let result = CommandResult(
             executable: executable,
             arguments: arguments,
-            stdout: String(decoding: stdoutData, as: UTF8.self),
-            stderr: String(decoding: stderrData, as: UTF8.self),
+            stdout: String(decoding: stdoutBuffer.data, as: UTF8.self),
+            stderr: String(decoding: stderrBuffer.data, as: UTF8.self),
             exitCode: process.terminationStatus
         )
         guard result.exitCode == 0 else {
             throw CommandError.executionFailed(result)
         }
         return result
+    }
+
+    private func closeReadHandlers(stdoutPipe: Pipe, stderrPipe: Pipe) {
+        stdoutPipe.fileHandleForReading.readabilityHandler = nil
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
+    }
+
+    private func terminate(_ process: Process) async {
+        process.terminate()
+        let deadline = Date().addingTimeInterval(2)
+        while process.isRunning && Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        if process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+        }
+        process.waitUntilExit()
+    }
+}
+
+private final class LockedData: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = Data()
+
+    var data: Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return storage
+    }
+
+    func append(_ data: Data) {
+        guard !data.isEmpty else { return }
+        lock.lock()
+        storage.append(data)
+        lock.unlock()
     }
 }
 
