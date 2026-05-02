@@ -72,6 +72,7 @@ public final class DefaultRedfishClient: RedfishClient, @unchecked Sendable {
 
 public protocol HelperHostClient: Sendable {
     func validate(connection: SSHConnection) async throws
+    func prepareMediaServices(configuration: HelperMediaServiceConfiguration, connection: SSHConnection) async throws -> HelperMediaServicePlan
     func syncState(localDirectory: URL, remoteStateRoot: String, connection: SSHConnection) async throws
 }
 
@@ -84,6 +85,142 @@ public final class DefaultHelperHostClient: HelperHostClient, @unchecked Sendabl
 
     public func validate(connection: SSHConnection) async throws {
         try await router.validateAccess(connection)
+    }
+
+    public func prepareMediaServices(configuration: HelperMediaServiceConfiguration, connection: SSHConnection) async throws -> HelperMediaServicePlan {
+        let mediaRoot = configuration.mediaRoot
+        let pxeRoot = configuration.pxeRoot
+        let binRoot = "\(configuration.stateRoot)/bin"
+        let logRoot = "\(configuration.stateRoot)/logs"
+        let runRoot = "\(configuration.stateRoot)/run"
+        let scriptPath = "\(binRoot)/tds-range-http-server.py"
+        let logPath = "\(logRoot)/media-http.log"
+        let pidPath = "\(runRoot)/media-http.pid"
+        let startCommand = "nohup python3 \(shellEscape(scriptPath)) --bind \(shellEscape(configuration.httpBindAddress)) --port \(configuration.httpPort) --directory \(shellEscape(mediaRoot)) > \(shellEscape(logPath)) 2>&1 & echo $! > \(shellEscape(pidPath))"
+
+        let remoteCommand = """
+        set -e
+        mkdir -p \(shellEscape(mediaRoot)) \(shellEscape(pxeRoot)) \(shellEscape(binRoot)) \(shellEscape(logRoot)) \(shellEscape(runRoot))
+        cat > \(shellEscape(scriptPath)) <<'PY'
+        #!/usr/bin/env python3
+        import argparse
+        import os
+        import posixpath
+        import re
+        from http.server import SimpleHTTPRequestHandler, HTTPServer
+        from socketserver import ThreadingMixIn
+        from urllib.parse import unquote
+
+        class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+            daemon_threads = True
+
+        class RangeRequestHandler(SimpleHTTPRequestHandler):
+            directory = os.getcwd()
+
+            def translate_path(self, path):
+                path = path.split('?', 1)[0].split('#', 1)[0]
+                path = posixpath.normpath(unquote(path))
+                words = [w for w in path.split('/') if w]
+                target = type(self).directory
+                for word in words:
+                    drive, word = os.path.splitdrive(word)
+                    head, word = os.path.split(word)
+                    if word in (os.curdir, os.pardir):
+                        continue
+                    target = os.path.join(target, word)
+                return target
+
+            def send_head(self):
+                path = self.translate_path(self.path)
+                if os.path.isdir(path):
+                    return super().send_head()
+                try:
+                    file_obj = open(path, 'rb')
+                except OSError:
+                    self.send_error(404, 'File not found')
+                    return None
+                size = os.fstat(file_obj.fileno()).st_size
+                range_header = self.headers.get('Range')
+                if not range_header:
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/octet-stream')
+                    self.send_header('Content-Length', str(size))
+                    self.send_header('Accept-Ranges', 'bytes')
+                    self.end_headers()
+                    return file_obj
+                match = re.match(r'bytes=(\\d+)-(\\d*)$', range_header)
+                if not match:
+                    self.send_error(416, 'Invalid range')
+                    file_obj.close()
+                    return None
+                start = int(match.group(1))
+                end = int(match.group(2)) if match.group(2) else size - 1
+                if start >= size:
+                    self.send_error(416, 'Requested range not satisfiable')
+                    file_obj.close()
+                    return None
+                end = min(end, size - 1)
+                self.range = (start, end)
+                file_obj.seek(start)
+                self.send_response(206)
+                self.send_header('Content-type', 'application/octet-stream')
+                self.send_header('Content-Range', 'bytes %d-%d/%d' % (start, end, size))
+                self.send_header('Content-Length', str(end - start + 1))
+                self.send_header('Accept-Ranges', 'bytes')
+                self.end_headers()
+                return file_obj
+
+            def copyfile(self, source, outputfile):
+                if hasattr(self, 'range'):
+                    start, end = self.range
+                    remaining = end - start + 1
+                    while remaining > 0:
+                        chunk = source.read(min(1024 * 1024, remaining))
+                        if not chunk:
+                            break
+                        try:
+                            outputfile.write(chunk)
+                        except BrokenPipeError:
+                            break
+                        remaining -= len(chunk)
+                    del self.range
+                    return
+                return super().copyfile(source, outputfile)
+
+        def main():
+            parser = argparse.ArgumentParser()
+            parser.add_argument('--bind', default='0.0.0.0')
+            parser.add_argument('--port', type=int, default=8080)
+            parser.add_argument('--directory', required=True)
+            args = parser.parse_args()
+            RangeRequestHandler.directory = args.directory
+            ThreadingHTTPServer((args.bind, args.port), RangeRequestHandler).serve_forever()
+
+        if __name__ == '__main__':
+            main()
+        PY
+        chmod 0755 \(shellEscape(scriptPath))
+        cat > \(shellEscape("\(configuration.stateRoot)/media-service.env")) <<'EOF'
+        MEDIA_ROOT=\(mediaRoot)
+        PXE_ROOT=\(pxeRoot)
+        HTTP_BIND=\(configuration.httpBindAddress)
+        HTTP_PORT=\(configuration.httpPort)
+        START_COMMAND=\(startCommand)
+        EOF
+        """
+        _ = try await router.run(connection: connection, remoteCommand: remoteCommand)
+
+        return HelperMediaServicePlan(
+            mediaRoot: mediaRoot,
+            pxeRoot: pxeRoot,
+            httpBindAddress: configuration.httpBindAddress,
+            httpPort: configuration.httpPort,
+            serviceCommand: startCommand,
+            notes: [
+                "tds prepared the media/PXE directories and range-capable HTTP helper script on the selected existing deployer/overseer.",
+                "Start the service after media is staged, or let a deployment runner start it when executing the install.",
+            ]
+        )
     }
 
     public func syncState(localDirectory: URL, remoteStateRoot: String, connection: SSHConnection) async throws {
@@ -167,17 +304,26 @@ public enum DeploymentPlannerError: Error, LocalizedError {
     case multipleHelpers
     case invalidControlPlaneCount
     case missingHelperConfirmation(String)
+    case existingMediaHostNotExplicitlyAllowed
+    case pxeCannotBootstrapFirstOverseer
+    case missingOOBReachableMediaURL
 
     public var errorDescription: String? {
         switch self {
         case .missingHelper:
-            return "Exactly one helper/overseer must be selected."
+            return "Exactly one deployer/overseer must be selected."
         case .multipleHelpers:
-            return "Only one helper/overseer may be selected."
+            return "Only one deployer/overseer may be selected."
         case .invalidControlPlaneCount:
             return "The control plane count must be either 1 or 3."
         case .missingHelperConfirmation(let name):
-            return "Typed confirmation is required before reinstalling helper \(name)."
+            return "Typed confirmation is required before reinstalling deployer/overseer \(name)."
+        case .existingMediaHostNotExplicitlyAllowed:
+            return "Existing OS media host delivery is disabled. Use operator local media for greenfield installs, or explicitly allow an existing media host in Settings."
+        case .pxeCannotBootstrapFirstOverseer:
+            return "PXE cannot bootstrap the first deployer/overseer unless an external PXE service already exists."
+        case .missingOOBReachableMediaURL:
+            return "OOB-reachable URL media delivery requires an external media base URL in Settings."
         }
     }
 }
@@ -205,6 +351,7 @@ public struct DeploymentPlanner: Sendable {
                 throw DeploymentPlannerError.missingHelperConfirmation(helperNode.device.name)
             }
         }
+        try validateBootstrapMediaDelivery(for: helperNode)
 
         let planned = spec.nodes
             .filter { $0.assignment.role != .unassigned }
@@ -227,21 +374,19 @@ public struct DeploymentPlanner: Sendable {
         if helper.assignment.shouldInstallOS && helper.assignment.helperMode == .bootstrap {
             phases.append(
                 DeploymentPhase(
-                    title: "Bootstrap Helper",
-                    steps: [
-                        "Persist temporary deployment state on rax at \(tempPath).",
-                        "Install the helper \(helper.device.name) first using \(helper.method.rawValue).",
-                        "Wait for helper SSH reachability and move durable state to \(remotePath).",
-                    ]
+                    title: "Bootstrap Deployer/Overseer",
+                    steps: bootstrapOverseerSteps(helper: helper, tempPath: tempPath, remotePath: remotePath)
                 )
             )
         } else {
             phases.append(
                 DeploymentPhase(
-                    title: "Prepare Helper",
+                    title: "Prepare Existing Deployer/Overseer",
                     steps: [
-                        "Validate SSH access to helper \(helper.device.name).",
+                        "Validate SSH access to deployer/overseer \(helper.device.name).",
                         "Create durable state root at \(remotePath).",
+                        "tds prepares media and PXE directories plus a range-capable HTTP media service on the selected existing device.",
+                        "Stage generated Talos/Ubuntu media through tds before booting any dependent nodes.",
                     ]
                 )
             )
@@ -271,6 +416,17 @@ public struct DeploymentPlanner: Sendable {
     }
 
     private func selectInstallMethod(for node: DeploymentNodeSpec) -> InstallMethod {
+        if node.assignment.role == .helper && node.assignment.helperMode == .bootstrap && node.assignment.shouldInstallOS {
+            switch settings.bootstrapMedia.deliveryMode {
+            case .operatorLocalMedia:
+                return .operatorLocalMedia
+            case .oobReachableURL, .existingOSMediaHost:
+                return .bootURL
+            case .pxeAfterOverseerOnline:
+                return .pxe
+            }
+        }
+
         switch node.assignment.preferredInstall {
         case .virtualMedia:
             return .virtualMedia
@@ -284,6 +440,61 @@ public struct DeploymentPlanner: Sendable {
                 return .virtualMedia
             }
             return .pxe
+        }
+    }
+
+    private func validateBootstrapMediaDelivery(for helperNode: DeploymentNodeSpec) throws {
+        guard helperNode.assignment.role == .helper,
+              helperNode.assignment.helperMode == .bootstrap,
+              helperNode.assignment.shouldInstallOS
+        else { return }
+
+        switch settings.bootstrapMedia.deliveryMode {
+        case .operatorLocalMedia:
+            return
+        case .oobReachableURL:
+            guard !settings.bootstrapMedia.externalMediaBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw DeploymentPlannerError.missingOOBReachableMediaURL
+            }
+        case .existingOSMediaHost:
+            guard settings.bootstrapMedia.allowExistingOSMediaHost else {
+                throw DeploymentPlannerError.existingMediaHostNotExplicitlyAllowed
+            }
+        case .pxeAfterOverseerOnline:
+            throw DeploymentPlannerError.pxeCannotBootstrapFirstOverseer
+        }
+    }
+
+    private func bootstrapOverseerSteps(helper: PlannedDeviceInstall, tempPath: String, remotePath: String) -> [String] {
+        let commonTail = [
+            "Install \(helper.device.name) first and wait for SSH reachability.",
+            "Move durable deployment state from rax to \(remotePath).",
+            "Only after the deployer/overseer is online may PXE-dependent control-plane and worker nodes proceed.",
+        ]
+
+        switch settings.bootstrapMedia.deliveryMode {
+        case .operatorLocalMedia:
+            return [
+                "Persist temporary deployment state on rax at \(tempPath).",
+                "Open the configured OOB access profile in the embedded tds WebView.",
+                "Attach the selected Ubuntu or Talos ISO as operator local media; do not depend on another target node having an OS.",
+            ] + commonTail
+        case .oobReachableURL:
+            return [
+                "Persist temporary deployment state on rax at \(tempPath).",
+                "Attach media from the configured OOB-reachable URL \(settings.bootstrapMedia.externalMediaBaseURL).",
+                "This requires infrastructure outside the selected bare-metal nodes to serve the ISO on the OOB network.",
+            ] + commonTail
+        case .existingOSMediaHost:
+            return [
+                "Persist temporary deployment state on rax at \(tempPath).",
+                "Use the explicitly allowed existing OS media host \(settings.bootstrapMedia.mediaHostDeviceID) to serve installation media.",
+                "This is not greenfield-safe; every run must document which existing host is being used.",
+            ] + commonTail
+        case .pxeAfterOverseerOnline:
+            return [
+                "PXE is deferred until after the deployer/overseer is installed.",
+            ] + commonTail
         }
     }
 }
@@ -329,6 +540,10 @@ public final class DeploymentCoordinator: @unchecked Sendable {
     public func synchronizeToHelper(_ state: DeploymentState, connection: SSHConnection) async throws -> DeploymentState {
         let localDirectory = URL(fileURLWithPath: state.localStateDirectory, isDirectory: true)
         try await helperHostClient.validate(connection: connection)
+        let mediaPlan = try await helperHostClient.prepareMediaServices(
+            configuration: HelperMediaServiceConfiguration(defaults: settings.helper),
+            connection: connection
+        )
         try await helperHostClient.syncState(
             localDirectory: localDirectory,
             remoteStateRoot: state.plan.durableStateDirectory,
@@ -336,7 +551,8 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         )
         var updated = state
         updated.helperSynchronized = true
-        updated.events.append(DeploymentEvent(message: "Deployment state synchronized to helper \(connection.host)."))
+        updated.events.append(DeploymentEvent(message: "Prepared existing deployer/overseer media services on \(connection.host) at \(mediaPlan.mediaRoot)."))
+        updated.events.append(DeploymentEvent(message: "Deployment state synchronized to deployer/overseer \(connection.host)."))
         _ = try stateStore.save(updated, to: localDirectory)
         return updated
     }
@@ -365,6 +581,7 @@ public final class AppController: ObservableObject {
     @Published public var ubuntuLastValidation: UbuntuIsoValidationResult?
     @Published public var ubuntuNetworkPlan: NetworkRebuildPlan?
     @Published public var ubuntuLocalMediaState: LocalMediaSessionState?
+    @Published public var accessProfileProxyPasswords: [UUID: String]
     @Published public var statusMessage: String
 
     private let settingsController: SettingsController
@@ -372,18 +589,21 @@ public final class AppController: ObservableObject {
     private let coreClient: CoreClient
     private let environmentSessionProvider: EnvironmentCoreSessionProviding?
     private let hammertime: HammertimeAdapter
+    private let secretStore: KeychainSecretStore
     private let paths: AppPaths
     private var hasBootstrappedSession = false
 
     public init(
         settingsController: SettingsController = SettingsController(),
         authProvider: AuthProvider = KeychainAuthProvider(),
+        secretStore: KeychainSecretStore = KeychainSecretStore(),
         coreClient: CoreClient? = nil,
         hammertime: HammertimeAdapter? = nil,
         paths: AppPaths = AppPaths()
     ) {
         self.settingsController = settingsController
         self.paths = paths
+        self.secretStore = secretStore
         let loadedSettings = (try? settingsController.load()) ?? AppSettings()
         self.settings = loadedSettings
         self.authProvider = authProvider
@@ -407,11 +627,13 @@ public final class AppController: ObservableObject {
         self.ubuntuSSHKeyFiles = ""
         self.ubuntuOOBURL = ""
         self.ubuntuOOBUsername = ""
+        self.accessProfileProxyPasswords = Self.loadProxyPasswords(for: loadedSettings.accessProfiles, secretStore: secretStore)
         self.statusMessage = "Ready"
     }
 
     public func saveSettings() {
         do {
+            try saveAccessProfileProxyPasswords()
             try settingsController.save(settings)
             statusMessage = "Settings saved."
         } catch {
@@ -435,6 +657,32 @@ public final class AppController: ObservableObject {
     public func setAccessProfileDefault(id: UUID, isDefault: Bool) {
         for index in settings.accessProfiles.indices {
             settings.accessProfiles[index].isDefault = settings.accessProfiles[index].id == id ? isDefault : false
+        }
+    }
+
+    public func proxyPassword(for profile: AccessProfile?) -> String {
+        guard let profile else { return "" }
+        return accessProfileProxyPasswords[profile.id] ?? ""
+    }
+
+    private static func loadProxyPasswords(for profiles: [AccessProfile], secretStore: KeychainSecretStore) -> [UUID: String] {
+        var passwords: [UUID: String] = [:]
+        for profile in profiles where !profile.proxyCredentialReference.isEmpty {
+            if let password = try? secretStore.getSecret(for: profile.proxyCredentialReference) {
+                passwords[profile.id] = password
+            }
+        }
+        return passwords
+    }
+
+    private func saveAccessProfileProxyPasswords() throws {
+        for profile in settings.accessProfiles where !profile.proxyCredentialReference.isEmpty {
+            let password = accessProfileProxyPasswords[profile.id] ?? ""
+            if password.isEmpty {
+                try? secretStore.deleteSecret(for: profile.proxyCredentialReference)
+            } else {
+                try secretStore.setSecret(password, for: profile.proxyCredentialReference)
+            }
         }
     }
 

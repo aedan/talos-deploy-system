@@ -51,7 +51,7 @@ private struct RootView: View {
             case .inventory:
                 InventoryView()
             case .bootstrap:
-                BootstrapHelperView()
+                BootstrapOverseerView()
             case .deployment:
                 DeploymentView()
             case .resume:
@@ -86,7 +86,7 @@ private enum SidebarItem: String, CaseIterable, Identifiable {
         switch self {
         case .signin: "Sign In"
         case .inventory: "Inventory + Roles"
-        case .bootstrap: "Bootstrap Helper"
+        case .bootstrap: "Bootstrap Overseer"
         case .deployment: "Deployment Run"
         case .resume: "Resume"
         case .settings: "Settings"
@@ -104,7 +104,7 @@ private enum SidebarItem: String, CaseIterable, Identifiable {
     }
 }
 
-private struct BootstrapHelperView: View {
+private struct BootstrapOverseerView: View {
     @EnvironmentObject private var controller: AppController
     @State private var iloPassword = ""
 
@@ -112,7 +112,7 @@ private struct BootstrapHelperView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 SectionCard(title: "Ubuntu Autoinstall Media") {
-                    Text("Builds a NoCloud-seeded Ubuntu 24.04 ISO from the preinstall capture. The same local-media path can later boot stock Talos media without editing the Talos ISO.")
+                    Text("Builds a NoCloud-seeded Ubuntu 24.04 ISO from the preinstall capture. Greenfield installs use operator local media through the embedded OOB session, so they do not depend on another selected node having an OS.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     TextField("Preinstall capture directory or snapshot.json", text: $controller.ubuntuCapturePath)
@@ -176,7 +176,10 @@ private struct BootstrapHelperView: View {
                     }
                 }
 
-                SectionCard(title: "HPE iLO 4 Local Media") {
+                SectionCard(title: "HPE iLO 4 Operator Local Media") {
+                    Text("This is the default bootstrap path for a brand-new environment. The ISO is selected from the operator workstation or rax session inside tds; an existing OS media host is only allowed when explicitly configured in Settings.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     TextField("iLO URL, for example https://10.17.123.132", text: $controller.ubuntuOOBURL)
                         .textFieldStyle(.roundedBorder)
                     TextField("iLO username", text: $controller.ubuntuOOBUsername)
@@ -213,6 +216,7 @@ private struct BootstrapHelperView: View {
                         password: $iloPassword,
                         isoPath: controller.ubuntuLastArtifacts?.outputISOPath ?? controller.ubuntuOutputISOPath,
                         accessProfile: controller.defaultOOBAccessProfile,
+                        accessProfileProxyPassword: controller.proxyPassword(for: controller.defaultOOBAccessProfile),
                         statusMessage: $controller.statusMessage
                     )
                     .frame(minHeight: 520)
@@ -222,7 +226,7 @@ private struct BootstrapHelperView: View {
             }
             .padding()
         }
-        .navigationTitle("Bootstrap Helper")
+        .navigationTitle("Bootstrap Overseer")
     }
 }
 
@@ -521,12 +525,20 @@ private struct SettingsRootView: View {
                             get: { controller.settings.accessProfiles[index].proxyURL },
                             set: { controller.settings.accessProfiles[index].proxyURL = $0 }
                         ))
+                        TextField("Proxy Username (optional)", text: Binding(
+                            get: { controller.settings.accessProfiles[index].proxyUsername },
+                            set: { controller.settings.accessProfiles[index].proxyUsername = $0 }
+                        ))
+                        SecureField("Proxy Password (Keychain)", text: Binding(
+                            get: { controller.accessProfileProxyPasswords[profile.id] ?? "" },
+                            set: { controller.accessProfileProxyPasswords[profile.id] = $0 }
+                        ))
                         TextField("Hammertime via", text: Binding(
                             get: { controller.settings.accessProfiles[index].hammertimeVia },
                             set: { controller.settings.accessProfiles[index].hammertimeVia = $0 }
                         ))
                         if profile.kind == .httpProxy {
-                            Text("For OOB browser access, use http://127.0.0.1:18081 for the local cproxy relay or https://cproxy.iad3.corp.rackspace.net:3128 on rax. Proxy credentials can come from TDS_OOB_PROXY_USER and TDS_OOB_PROXY_PASSWORD.")
+                            Text("For OOB browser access, configure the corporate proxy URL here and optionally store credentials in Keychain. Environment variables TDS_OOB_PROXY_USER and TDS_OOB_PROXY_PASSWORD still work for headless testing.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -574,14 +586,31 @@ private struct SettingsRootView: View {
                     }
                 }
             }
-            Section("Helper Defaults") {
-                TextField("SSH User", text: $controller.settings.helper.sshUser)
+            Section("Bootstrap Media") {
+                Picker("First overseer media delivery", selection: $controller.settings.bootstrapMedia.deliveryMode) {
+                    ForEach(BootstrapMediaDeliveryMode.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                Toggle("Require operator local media for greenfield", isOn: $controller.settings.bootstrapMedia.requireOperatorLocalMediaForGreenfield)
+                Toggle("Allow existing OS media host", isOn: $controller.settings.bootstrapMedia.allowExistingOSMediaHost)
+                TextField("OOB-reachable external media base URL", text: $controller.settings.bootstrapMedia.externalMediaBaseURL)
+                TextField("Existing media host device ID (explicit only)", text: $controller.settings.bootstrapMedia.mediaHostDeviceID)
+                Text("Default is operator local media through the embedded OOB browser. Existing media hosts are intentionally opt-in because they do not work for all-bare-metal greenfield environments.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Overseer Defaults") {
+                TextField("Overseer SSH User", text: $controller.settings.helper.sshUser)
                 TextField("State Root", text: $controller.settings.helper.stateRoot)
                 TextField("PXE Address", text: $controller.settings.helper.pxeAddress)
+                TextField("HTTP Bind Address", text: $controller.settings.helper.httpBindAddress)
+                TextField("Media Directory Name", text: $controller.settings.helper.mediaDirectoryName)
+                TextField("PXE Directory Name", text: $controller.settings.helper.pxeDirectoryName)
                 Stepper("HTTP Port: \(controller.settings.helper.httpPort)", value: $controller.settings.helper.httpPort, in: 1...65535)
             }
             Section("Safety") {
-                Toggle("Require typed confirmation for helper reinstall", isOn: $controller.settings.safety.requireTypedConfirmationForHelperReinstall)
+                Toggle("Require typed confirmation for overseer reinstall", isOn: $controller.settings.safety.requireTypedConfirmationForHelperReinstall)
                 TextField("Confirmation Prefix", text: $controller.settings.safety.destructiveConfirmationTextPrefix)
             }
             Button("Save Settings") {
@@ -598,6 +627,7 @@ private struct IloLocalMediaWebView: NSViewRepresentable {
     @Binding var password: String
     let isoPath: String
     let accessProfile: AccessProfile?
+    let accessProfileProxyPassword: String
     @Binding var statusMessage: String
 
     func makeCoordinator() -> Coordinator {
@@ -632,7 +662,7 @@ private struct IloLocalMediaWebView: NSViewRepresentable {
         func configureProxy(on configuration: WKWebViewConfiguration) {
             guard #available(macOS 14.0, *) else { return }
             guard let profile = parent.accessProfile,
-                  let proxy = WebViewProxyConfiguration(profile: profile)
+                  let proxy = WebViewProxyConfiguration(profile: profile, password: parent.accessProfileProxyPassword)
             else { return }
 
             let dataStore = WKWebsiteDataStore.nonPersistent()
@@ -723,7 +753,7 @@ private struct IloLocalMediaWebView: NSViewRepresentable {
 private struct WebViewProxyConfiguration {
     let configuration: ProxyConfiguration
 
-    init?(profile: AccessProfile) {
+    init?(profile: AccessProfile, password: String) {
         switch profile.kind {
         case .httpProxy:
             guard let parsed = ParsedProxyURL(rawValue: profile.proxyURL) else { return nil }
@@ -733,26 +763,26 @@ private struct WebViewProxyConfiguration {
                 tlsOptions: parsed.usesTLS ? NWProtocolTLS.Options() : nil
             )
             proxy.allowFailover = false
-            Self.applyCredential(to: &proxy, parsed: parsed)
+            Self.applyCredential(to: &proxy, parsed: parsed, profile: profile, password: password)
             self.configuration = proxy
         case .socksProxy, .sshDynamicSocks:
             guard let parsed = ParsedProxyURL(rawValue: profile.proxyURL) else { return nil }
             let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(parsed.host), port: NWEndpoint.Port(rawValue: parsed.port) ?? 1080)
             var proxy = ProxyConfiguration(socksv5Proxy: endpoint)
             proxy.allowFailover = false
-            Self.applyCredential(to: &proxy, parsed: parsed)
+            Self.applyCredential(to: &proxy, parsed: parsed, profile: profile, password: password)
             self.configuration = proxy
         case .direct, .hammertimeProxy:
             return nil
         }
     }
 
-    private static func applyCredential(to proxy: inout ProxyConfiguration, parsed: ParsedProxyURL) {
+    private static func applyCredential(to proxy: inout ProxyConfiguration, parsed: ParsedProxyURL, profile: AccessProfile, password: String) {
         let environment = ProcessInfo.processInfo.environment
-        let username = firstNonEmpty(parsed.username, environment["TDS_OOB_PROXY_USER"] ?? "")
-        let password = firstNonEmpty(parsed.password, environment["TDS_OOB_PROXY_PASSWORD"] ?? "")
-        if !username.isEmpty || !password.isEmpty {
-            proxy.applyCredential(username: username, password: password)
+        let username = firstNonEmpty(parsed.username, profile.proxyUsername, environment["TDS_OOB_PROXY_USER"] ?? "")
+        let resolvedPassword = firstNonEmpty(parsed.password, password, environment["TDS_OOB_PROXY_PASSWORD"] ?? "")
+        if !username.isEmpty || !resolvedPassword.isEmpty {
+            proxy.applyCredential(username: username, password: resolvedPassword)
         }
     }
 }

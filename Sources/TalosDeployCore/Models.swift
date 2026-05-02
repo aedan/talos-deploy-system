@@ -39,10 +39,25 @@ public enum InstallPreference: String, Codable, CaseIterable, Sendable {
 }
 
 public enum InstallMethod: String, Codable, CaseIterable, Sendable {
+    case operatorLocalMedia
     case virtualMedia
     case bootURL
     case pxe
     case stagedOnly
+}
+
+public enum BootstrapMediaDeliveryMode: String, Codable, CaseIterable, Sendable {
+    case operatorLocalMedia
+    case oobReachableURL
+    case existingOSMediaHost
+    case pxeAfterOverseerOnline
+}
+
+public enum NetworkConfigurationSource: String, Codable, CaseIterable, Sendable {
+    case core
+    case liveSnapshot
+    case manual
+    case unavailable
 }
 
 public enum OOBVendor: String, Codable, CaseIterable, Sendable {
@@ -81,6 +96,8 @@ public struct AccessProfile: Identifiable, Codable, Equatable, Sendable {
     public var scope: AccessScope
     public var isDefault: Bool
     public var proxyURL: String
+    public var proxyUsername: String
+    public var proxyCredentialReference: String
     public var ssh: SSHProxyConfiguration?
     public var hammertimeVia: String
     public var notes: String
@@ -92,6 +109,8 @@ public struct AccessProfile: Identifiable, Codable, Equatable, Sendable {
         scope: AccessScope = .both,
         isDefault: Bool = false,
         proxyURL: String = "",
+        proxyUsername: String = "",
+        proxyCredentialReference: String = "",
         ssh: SSHProxyConfiguration? = nil,
         hammertimeVia: String = "",
         notes: String = ""
@@ -102,9 +121,17 @@ public struct AccessProfile: Identifiable, Codable, Equatable, Sendable {
         self.scope = scope
         self.isDefault = isDefault
         self.proxyURL = proxyURL
+        self.proxyUsername = proxyUsername
+        self.proxyCredentialReference = proxyCredentialReference.isEmpty
+            ? Self.defaultProxyCredentialReference(for: id)
+            : proxyCredentialReference
         self.ssh = ssh
         self.hammertimeVia = hammertimeVia
         self.notes = notes
+    }
+
+    public static func defaultProxyCredentialReference(for id: UUID) -> String {
+        "access-profile-\(id.uuidString)-proxy-password"
     }
 
     public static let directDefault = AccessProfile(
@@ -113,6 +140,39 @@ public struct AccessProfile: Identifiable, Codable, Equatable, Sendable {
         scope: .both,
         isDefault: true
     )
+}
+
+extension AccessProfile {
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case kind
+        case scope
+        case isDefault
+        case proxyURL
+        case proxyUsername
+        case proxyCredentialReference
+        case ssh
+        case hammertimeVia
+        case notes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        self.id = id
+        self.name = try container.decode(String.self, forKey: .name)
+        self.kind = try container.decode(AccessProfileKind.self, forKey: .kind)
+        self.scope = try container.decodeIfPresent(AccessScope.self, forKey: .scope) ?? .both
+        self.isDefault = try container.decodeIfPresent(Bool.self, forKey: .isDefault) ?? false
+        self.proxyURL = try container.decodeIfPresent(String.self, forKey: .proxyURL) ?? ""
+        self.proxyUsername = try container.decodeIfPresent(String.self, forKey: .proxyUsername) ?? ""
+        self.proxyCredentialReference = try container.decodeIfPresent(String.self, forKey: .proxyCredentialReference)
+            ?? Self.defaultProxyCredentialReference(for: id)
+        self.ssh = try container.decodeIfPresent(SSHProxyConfiguration.self, forKey: .ssh)
+        self.hammertimeVia = try container.decodeIfPresent(String.self, forKey: .hammertimeVia) ?? ""
+        self.notes = try container.decodeIfPresent(String.self, forKey: .notes) ?? ""
+    }
 }
 
 public struct NetworkInterface: Identifiable, Codable, Equatable, Sendable {
@@ -308,12 +368,55 @@ public struct DiscoveredDevice: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+extension DiscoveredDevice {
+    enum CodingKeys: String, CodingKey {
+        case id
+        case accountNumber
+        case name
+        case primaryIP
+        case privateIP
+        case platformName
+        case osType
+        case serviceLevel
+        case serviceTag
+        case memoryGiB
+        case storageGiB
+        case installDisk
+        case networkInterfaces
+        case oob
+        case credentialReference
+        case liveFacts
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(String.self, forKey: .id)
+        self.accountNumber = try container.decodeIfPresent(String.self, forKey: .accountNumber) ?? ""
+        self.name = try container.decode(String.self, forKey: .name)
+        self.primaryIP = try container.decodeIfPresent(String.self, forKey: .primaryIP) ?? ""
+        self.privateIP = try container.decodeIfPresent(String.self, forKey: .privateIP) ?? ""
+        self.platformName = try container.decodeIfPresent(String.self, forKey: .platformName) ?? ""
+        self.osType = try container.decodeIfPresent(String.self, forKey: .osType) ?? ""
+        self.serviceLevel = try container.decodeIfPresent(String.self, forKey: .serviceLevel) ?? ""
+        self.serviceTag = try container.decodeIfPresent(String.self, forKey: .serviceTag) ?? ""
+        self.memoryGiB = try container.decodeIfPresent(Int.self, forKey: .memoryGiB)
+        self.storageGiB = try container.decodeIfPresent(Int.self, forKey: .storageGiB)
+        self.installDisk = try container.decodeIfPresent(String.self, forKey: .installDisk) ?? ""
+        self.networkInterfaces = try container.decodeIfPresent([NetworkInterface].self, forKey: .networkInterfaces) ?? []
+        self.oob = try container.decodeIfPresent(OOBEndpoint.self, forKey: .oob)
+        self.credentialReference = try container.decodeIfPresent(String.self, forKey: .credentialReference) ?? ""
+        self.liveFacts = try container.decodeIfPresent(LiveFactSnapshot.self, forKey: .liveFacts)
+    }
+}
+
 public struct DeviceAssignment: Codable, Equatable, Sendable {
     public var deviceID: String
     public var role: DeviceRole
     public var helperMode: HelperMode
     public var shouldInstallOS: Bool
     public var preferredInstall: InstallPreference
+    public var networkSource: NetworkConfigurationSource
+    public var manualNetworkPlanPath: String
     public var typedConfirmation: String
 
     public init(
@@ -322,6 +425,8 @@ public struct DeviceAssignment: Codable, Equatable, Sendable {
         helperMode: HelperMode = .existing,
         shouldInstallOS: Bool = false,
         preferredInstall: InstallPreference = .automatic,
+        networkSource: NetworkConfigurationSource = .core,
+        manualNetworkPlanPath: String = "",
         typedConfirmation: String = ""
     ) {
         self.deviceID = deviceID
@@ -329,7 +434,34 @@ public struct DeviceAssignment: Codable, Equatable, Sendable {
         self.helperMode = helperMode
         self.shouldInstallOS = shouldInstallOS
         self.preferredInstall = preferredInstall
+        self.networkSource = networkSource
+        self.manualNetworkPlanPath = manualNetworkPlanPath
         self.typedConfirmation = typedConfirmation
+    }
+}
+
+extension DeviceAssignment {
+    enum CodingKeys: String, CodingKey {
+        case deviceID
+        case role
+        case helperMode
+        case shouldInstallOS
+        case preferredInstall
+        case networkSource
+        case manualNetworkPlanPath
+        case typedConfirmation
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.deviceID = try container.decode(String.self, forKey: .deviceID)
+        self.role = try container.decodeIfPresent(DeviceRole.self, forKey: .role) ?? .unassigned
+        self.helperMode = try container.decodeIfPresent(HelperMode.self, forKey: .helperMode) ?? .existing
+        self.shouldInstallOS = try container.decodeIfPresent(Bool.self, forKey: .shouldInstallOS) ?? false
+        self.preferredInstall = try container.decodeIfPresent(InstallPreference.self, forKey: .preferredInstall) ?? .automatic
+        self.networkSource = try container.decodeIfPresent(NetworkConfigurationSource.self, forKey: .networkSource) ?? .core
+        self.manualNetworkPlanPath = try container.decodeIfPresent(String.self, forKey: .manualNetworkPlanPath) ?? ""
+        self.typedConfirmation = try container.decodeIfPresent(String.self, forKey: .typedConfirmation) ?? ""
     }
 }
 
@@ -366,17 +498,136 @@ public struct HelperDefaults: Codable, Equatable, Sendable {
     public var stateRoot: String
     public var pxeAddress: String
     public var httpPort: Int
+    public var httpBindAddress: String
+    public var mediaDirectoryName: String
+    public var pxeDirectoryName: String
 
     public init(
         sshUser: String = "root",
         stateRoot: String = "/var/lib/talos-deploy",
         pxeAddress: String = "",
-        httpPort: Int = 8080
+        httpPort: Int = 8080,
+        httpBindAddress: String = "0.0.0.0",
+        mediaDirectoryName: String = "media",
+        pxeDirectoryName: String = "pxe"
     ) {
         self.sshUser = sshUser
         self.stateRoot = stateRoot
         self.pxeAddress = pxeAddress
         self.httpPort = httpPort
+        self.httpBindAddress = httpBindAddress
+        self.mediaDirectoryName = mediaDirectoryName
+        self.pxeDirectoryName = pxeDirectoryName
+    }
+}
+
+extension HelperDefaults {
+    enum CodingKeys: String, CodingKey {
+        case sshUser
+        case stateRoot
+        case pxeAddress
+        case httpPort
+        case httpBindAddress
+        case mediaDirectoryName
+        case pxeDirectoryName
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.sshUser = try container.decodeIfPresent(String.self, forKey: .sshUser) ?? "root"
+        self.stateRoot = try container.decodeIfPresent(String.self, forKey: .stateRoot) ?? "/var/lib/talos-deploy"
+        self.pxeAddress = try container.decodeIfPresent(String.self, forKey: .pxeAddress) ?? ""
+        self.httpPort = try container.decodeIfPresent(Int.self, forKey: .httpPort) ?? 8080
+        self.httpBindAddress = try container.decodeIfPresent(String.self, forKey: .httpBindAddress) ?? "0.0.0.0"
+        self.mediaDirectoryName = try container.decodeIfPresent(String.self, forKey: .mediaDirectoryName) ?? "media"
+        self.pxeDirectoryName = try container.decodeIfPresent(String.self, forKey: .pxeDirectoryName) ?? "pxe"
+    }
+}
+
+public struct BootstrapMediaDefaults: Codable, Equatable, Sendable {
+    public var deliveryMode: BootstrapMediaDeliveryMode
+    public var allowExistingOSMediaHost: Bool
+    public var externalMediaBaseURL: String
+    public var mediaHostDeviceID: String
+    public var requireOperatorLocalMediaForGreenfield: Bool
+
+    public init(
+        deliveryMode: BootstrapMediaDeliveryMode = .operatorLocalMedia,
+        allowExistingOSMediaHost: Bool = false,
+        externalMediaBaseURL: String = "",
+        mediaHostDeviceID: String = "",
+        requireOperatorLocalMediaForGreenfield: Bool = true
+    ) {
+        self.deliveryMode = deliveryMode
+        self.allowExistingOSMediaHost = allowExistingOSMediaHost
+        self.externalMediaBaseURL = externalMediaBaseURL
+        self.mediaHostDeviceID = mediaHostDeviceID
+        self.requireOperatorLocalMediaForGreenfield = requireOperatorLocalMediaForGreenfield
+    }
+}
+
+public struct HelperMediaServiceConfiguration: Codable, Equatable, Sendable {
+    public var stateRoot: String
+    public var mediaDirectoryName: String
+    public var pxeDirectoryName: String
+    public var httpBindAddress: String
+    public var httpPort: Int
+
+    public init(
+        stateRoot: String = "/var/lib/talos-deploy",
+        mediaDirectoryName: String = "media",
+        pxeDirectoryName: String = "pxe",
+        httpBindAddress: String = "0.0.0.0",
+        httpPort: Int = 8080
+    ) {
+        self.stateRoot = stateRoot
+        self.mediaDirectoryName = mediaDirectoryName
+        self.pxeDirectoryName = pxeDirectoryName
+        self.httpBindAddress = httpBindAddress
+        self.httpPort = httpPort
+    }
+
+    public init(defaults: HelperDefaults) {
+        self.init(
+            stateRoot: defaults.stateRoot,
+            mediaDirectoryName: defaults.mediaDirectoryName,
+            pxeDirectoryName: defaults.pxeDirectoryName,
+            httpBindAddress: defaults.httpBindAddress,
+            httpPort: defaults.httpPort
+        )
+    }
+
+    public var mediaRoot: String {
+        "\(stateRoot)/\(mediaDirectoryName)"
+    }
+
+    public var pxeRoot: String {
+        "\(stateRoot)/\(pxeDirectoryName)"
+    }
+}
+
+public struct HelperMediaServicePlan: Codable, Equatable, Sendable {
+    public var mediaRoot: String
+    public var pxeRoot: String
+    public var httpBindAddress: String
+    public var httpPort: Int
+    public var serviceCommand: String
+    public var notes: [String]
+
+    public init(
+        mediaRoot: String,
+        pxeRoot: String,
+        httpBindAddress: String,
+        httpPort: Int,
+        serviceCommand: String,
+        notes: [String] = []
+    ) {
+        self.mediaRoot = mediaRoot
+        self.pxeRoot = pxeRoot
+        self.httpBindAddress = httpBindAddress
+        self.httpPort = httpPort
+        self.serviceCommand = serviceCommand
+        self.notes = notes
     }
 }
 
@@ -494,6 +745,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var hammertime: HammertimeSettings
     public var talos: TalosDefaults
     public var helper: HelperDefaults
+    public var bootstrapMedia: BootstrapMediaDefaults
     public var safety: SafetySettings
     public var accessProfiles: [AccessProfile]
 
@@ -502,6 +754,7 @@ public struct AppSettings: Codable, Equatable, Sendable {
         hammertime: HammertimeSettings = HammertimeSettings(),
         talos: TalosDefaults = TalosDefaults(),
         helper: HelperDefaults = HelperDefaults(),
+        bootstrapMedia: BootstrapMediaDefaults = BootstrapMediaDefaults(),
         safety: SafetySettings = SafetySettings(),
         accessProfiles: [AccessProfile] = [.directDefault]
     ) {
@@ -509,8 +762,32 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.hammertime = hammertime
         self.talos = talos
         self.helper = helper
+        self.bootstrapMedia = bootstrapMedia
         self.safety = safety
         self.accessProfiles = accessProfiles
+    }
+}
+
+extension AppSettings {
+    enum CodingKeys: String, CodingKey {
+        case core
+        case hammertime
+        case talos
+        case helper
+        case bootstrapMedia
+        case safety
+        case accessProfiles
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.core = try container.decodeIfPresent(CoreAPISettings.self, forKey: .core) ?? CoreAPISettings()
+        self.hammertime = try container.decodeIfPresent(HammertimeSettings.self, forKey: .hammertime) ?? HammertimeSettings()
+        self.talos = try container.decodeIfPresent(TalosDefaults.self, forKey: .talos) ?? TalosDefaults()
+        self.helper = try container.decodeIfPresent(HelperDefaults.self, forKey: .helper) ?? HelperDefaults()
+        self.bootstrapMedia = try container.decodeIfPresent(BootstrapMediaDefaults.self, forKey: .bootstrapMedia) ?? BootstrapMediaDefaults()
+        self.safety = try container.decodeIfPresent(SafetySettings.self, forKey: .safety) ?? SafetySettings()
+        self.accessProfiles = try container.decodeIfPresent([AccessProfile].self, forKey: .accessProfiles) ?? [.directDefault]
     }
 }
 

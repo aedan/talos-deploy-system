@@ -24,6 +24,14 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(loaded.helper.stateRoot == "/srv/talos")
     }
 
+    func testBootstrapDefaultsUseOperatorLocalMedia() {
+        let settings = AppSettings()
+
+        XCTAssertTrue(settings.bootstrapMedia.deliveryMode == .operatorLocalMedia)
+        XCTAssertTrue(settings.bootstrapMedia.allowExistingOSMediaHost == false)
+        XCTAssertTrue(settings.bootstrapMedia.requireOperatorLocalMediaForGreenfield)
+    }
+
     func testPlannerRequiresExactlyOneHelper() throws {
         let device = DiscoveredDevice(id: "1", accountNumber: "0000000", name: "node-1")
         let spec = DeploymentSpec(
@@ -42,7 +50,7 @@ final class TalosDeployCoreTests: XCTestCase {
         }
     }
 
-    func testBootstrapHelperCreatesTwoPhasePlan() throws {
+    func testBootstrapOverseerCreatesGreenfieldLocalMediaPlan() throws {
         let helper = DiscoveredDevice(id: "helper", accountNumber: "0000000", name: "helper-1")
         let cp = DiscoveredDevice(id: "cp1", accountNumber: "0000000", name: "cp-1")
         var helperAssignment = DeviceAssignment(deviceID: "helper", role: .helper, helperMode: .bootstrap, shouldInstallOS: true)
@@ -60,8 +68,90 @@ final class TalosDeployCoreTests: XCTestCase {
             ]
         )
         let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
-        XCTAssertTrue(plan.phases.first?.title == "Bootstrap Helper")
-        XCTAssertTrue(plan.helper.method == .virtualMedia)
+        XCTAssertTrue(plan.phases.first?.title == "Bootstrap Deployer/Overseer")
+        XCTAssertTrue(plan.phases.first?.steps.contains(where: { $0.contains("do not depend on another target node having an OS") }) == true)
+        XCTAssertTrue(plan.helper.method == .operatorLocalMedia)
+    }
+
+    func testPlannerRejectsExistingOSMediaHostUnlessExplicitlyAllowed() throws {
+        let helper = DiscoveredDevice(id: "helper", accountNumber: "0000000", name: "helper-1")
+        let cp = DiscoveredDevice(id: "cp1", accountNumber: "0000000", name: "cp-1")
+        var helperAssignment = DeviceAssignment(deviceID: "helper", role: .helper, helperMode: .bootstrap, shouldInstallOS: true)
+        helperAssignment.typedConfirmation = "INSTALL helper-1"
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.11.3",
+            kubernetesVersion: "v1.34.1",
+            helperStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: helper, assignment: helperAssignment),
+                DeploymentNodeSpec(device: cp, assignment: DeviceAssignment(deviceID: "cp1", role: .controlplane, shouldInstallOS: true)),
+            ]
+        )
+        let settings = AppSettings(
+            bootstrapMedia: BootstrapMediaDefaults(deliveryMode: .existingOSMediaHost)
+        )
+
+        XCTAssertThrowsError(try DeploymentPlanner(settings: settings).makePlan(spec: spec)) { error in
+            guard case DeploymentPlannerError.existingMediaHostNotExplicitlyAllowed = error else {
+                return XCTFail("Expected existingMediaHostNotExplicitlyAllowed, got \(error)")
+            }
+        }
+    }
+
+    func testPlannerAllowsExplicitExistingOSMediaHost() throws {
+        let helper = DiscoveredDevice(id: "helper", accountNumber: "0000000", name: "helper-1")
+        let cp = DiscoveredDevice(id: "cp1", accountNumber: "0000000", name: "cp-1")
+        var helperAssignment = DeviceAssignment(deviceID: "helper", role: .helper, helperMode: .bootstrap, shouldInstallOS: true)
+        helperAssignment.typedConfirmation = "INSTALL helper-1"
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.11.3",
+            kubernetesVersion: "v1.34.1",
+            helperStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: helper, assignment: helperAssignment),
+                DeploymentNodeSpec(device: cp, assignment: DeviceAssignment(deviceID: "cp1", role: .controlplane, shouldInstallOS: true)),
+            ]
+        )
+        let settings = AppSettings(
+            bootstrapMedia: BootstrapMediaDefaults(
+                deliveryMode: .existingOSMediaHost,
+                allowExistingOSMediaHost: true,
+                mediaHostDeviceID: "716091"
+            )
+        )
+
+        let plan = try DeploymentPlanner(settings: settings).makePlan(spec: spec)
+
+        XCTAssertTrue(plan.helper.method == .bootURL)
+        XCTAssertTrue(plan.phases.first?.steps.contains(where: { $0.contains("not greenfield-safe") }) == true)
+    }
+
+    func testExistingOverseerPlanIncludesTDSMediaSetup() throws {
+        let helper = DiscoveredDevice(id: "helper", accountNumber: "0000000", name: "existing-overseer")
+        let cp = DiscoveredDevice(id: "cp1", accountNumber: "0000000", name: "cp-1")
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.11.3",
+            kubernetesVersion: "v1.34.1",
+            helperStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: helper, assignment: DeviceAssignment(deviceID: "helper", role: .helper, helperMode: .existing, shouldInstallOS: false)),
+                DeploymentNodeSpec(device: cp, assignment: DeviceAssignment(deviceID: "cp1", role: .controlplane, shouldInstallOS: true)),
+            ]
+        )
+
+        let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
+
+        XCTAssertTrue(plan.phases.first?.title == "Prepare Existing Deployer/Overseer")
+        XCTAssertTrue(plan.phases.first?.steps.contains(where: { $0.contains("tds prepares media and PXE directories") }) == true)
     }
 
     func testTalosBuilderCreatesArtifacts() async throws {

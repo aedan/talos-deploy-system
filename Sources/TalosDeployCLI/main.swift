@@ -209,7 +209,7 @@ struct TalosDeployCLI {
             try await handleUbuntuBuildISO(arguments: remaining)
         case "validate-iso":
             try await handleUbuntuValidateISO(arguments: remaining)
-        case "bootstrap-helper":
+        case "bootstrap-overseer", "bootstrap-helper", "local-media-plan":
             try await handleUbuntuBootstrapHelper(arguments: remaining)
         case "network-plan":
             try handleUbuntuNetworkPlan(arguments: remaining)
@@ -478,8 +478,9 @@ struct TalosDeployCLI {
               ubuntu snapshot --account ACCOUNT --device DEVICE [--source auto|core|hammertime] [--output-dir DIR]
               ubuntu build-iso --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO [--rack-password-hash HASH]
               ubuntu validate-iso --iso ISO
-              ubuntu bootstrap-helper --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url URL
-              ubuntu oob-boot-url --device DEVICE_ID --url IMAGE_URL [--one-time-boot usb] [--reboot true]
+              ubuntu bootstrap-overseer --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url URL
+              ubuntu local-media-plan --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url URL
+              ubuntu oob-boot-url --device DEVICE_ID --url OOB_REACHABLE_IMAGE_URL [--one-time-boot usb] [--reboot true]
               devices --account ACCOUNT [--source auto|core|hammertime] [--output table|json]
               facts --account ACCOUNT [--source auto|core|hammertime] [device-id...]
               snapshot --account ACCOUNT --device DEVICE [--source auto|core|hammertime] [--output-dir DIR]
@@ -498,11 +499,13 @@ struct TalosDeployCLI {
               network-plan --capture DIR_OR_SNAPSHOT [--output json|yaml]
               build-iso --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO [--rack-password-hash HASH] [--root-password-hash HASH]
               validate-iso --iso ISO
-              bootstrap-helper --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url https://ILO/
-              oob-boot-url --device DEVICE_ID --url http://helper/installer.iso [--one-time-boot usb] [--reboot true]
+              bootstrap-overseer --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url https://ILO/
+              local-media-plan --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url https://ILO/
+              oob-boot-url --device DEVICE_ID --url http://oob-reachable-media/installer.iso [--one-time-boot usb] [--reboot true]
 
             Password hashes may also be supplied with TDS_RACK_PASSWORD_HASH and TDS_ROOT_PASSWORD_HASH.
             SSH public keys default to ~/.ssh/*.pub unless --no-default-ssh-keys true is set.
+            oob-boot-url is for explicitly configured OOB-reachable media only; it is not the greenfield default.
             """
         )
     }
