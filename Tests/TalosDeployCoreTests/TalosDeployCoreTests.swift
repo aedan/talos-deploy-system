@@ -197,6 +197,50 @@ final class TalosDeployCoreTests: XCTestCase {
         })
     }
 
+    func testDeployRunDoesNotRenameCoreWhenDeployerIsUnreachable() async throws {
+        let deployer = talosDevice(id: "deployer", name: "716181-lab2-director.rpc.rackspace.com")
+        let controlPlane = talosDevice(id: "cp1", name: "716182-lab2-controller01.rpc.rackspace.com")
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "lab2-talos",
+            clusterEndpoint: "https://198.51.100.10:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(
+                    device: deployer,
+                    assignment: DeviceAssignment(
+                        deviceID: deployer.id,
+                        role: .deployer,
+                        deployerMode: .existing,
+                        shouldInstallOS: false
+                    )
+                ),
+                DeploymentNodeSpec(device: controlPlane, assignment: talosAssignment(deviceID: controlPlane.id)),
+            ]
+        )
+        let coreClient = RenameTrackingCoreClient()
+        let coordinator = DeploymentCoordinator(
+            settings: AppSettings(),
+            deployerHostClient: FailingDeployerHostClient(),
+            coreClient: coreClient
+        )
+        let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let state = try await coordinator.stage(spec: spec, at: base)
+
+        do {
+            _ = try await coordinator.run(
+                state: state,
+                connection: SSHConnection(host: "198.51.100.10", user: "rack"),
+                dryRun: false
+            )
+            XCTFail("Expected deployer validation to fail")
+        } catch {
+            XCTAssertEqual(coreClient.renameCalls, 0)
+        }
+    }
+
     func testTalosBuilderCreatesArtifacts() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
@@ -954,6 +998,51 @@ private struct StaticCoreClient: CoreClient, EnvironmentCoreSessionProviding {
     func discoverEnvironmentSession(includeSecret: Bool) async throws -> EnvironmentCoreSession? {
         nil
     }
+}
+
+private final class RenameTrackingCoreClient: CoreClient, @unchecked Sendable {
+    private(set) var renameCalls = 0
+
+    func fetchDevices(accountNumber: String) async throws -> [DiscoveredDevice] {
+        []
+    }
+
+    func fetchDeviceDetails(accountNumber: String, deviceID: String) async throws -> DiscoveredDevice {
+        DiscoveredDevice(id: deviceID, accountNumber: accountNumber, name: deviceID)
+    }
+
+    func renameDevice(accountNumber: String, deviceID: String, newName: String) async -> CoreRenameResult {
+        renameCalls += 1
+        return CoreRenameResult(requestedName: newName, didRename: true, warning: "")
+    }
+}
+
+private struct FailingDeployerHostClient: DeployerHostClient {
+    func validate(connection: SSHConnection) async throws {
+        throw CommandError.timedOut("/usr/bin/ssh", [connection.host], 60)
+    }
+
+    func setHostname(_ hostname: String, connection: SSHConnection) async throws {}
+
+    func planDeployerServices(configuration: DeployerMediaServiceConfiguration) -> DeployerServicePlan {
+        DefaultDeployerHostClient().planDeployerServices(configuration: configuration)
+    }
+
+    func prepareDeployerServices(configuration: DeployerMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerServicePlan {
+        planDeployerServices(configuration: configuration)
+    }
+
+    func prepareMediaServices(configuration: DeployerMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerMediaServicePlan {
+        DeployerMediaServicePlan(
+            mediaRoot: configuration.mediaRoot,
+            pxeRoot: configuration.pxeRoot,
+            httpBindAddress: configuration.httpBindAddress,
+            httpPort: configuration.httpPort,
+            serviceCommand: "python3 -m http.server"
+        )
+    }
+
+    func syncState(localDirectory: URL, remoteStateRoot: String, connection: SSHConnection) async throws {}
 }
 
 private struct StaticHammertimeAdapter: HammertimeAdapter {

@@ -1205,6 +1205,18 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             )
             updated.events.append(DeploymentEvent(message: "Dry run planned deployer hostname \(hostname)."))
         } else {
+            guard let connection else {
+                throw DeploymentCoordinatorError.missingDeployerConnection
+            }
+            try await deployerHostClient.validate(connection: connection)
+            try await deployerHostClient.setHostname(hostname, connection: connection)
+            servicePlan = try await deployerHostClient.prepareDeployerServices(
+                configuration: serviceConfiguration,
+                connection: connection
+            )
+            updated = try await synchronizeToDeployer(updated, connection: connection)
+            updated.events.append(DeploymentEvent(message: "Deployer services prepared on \(connection.host)."))
+
             if let coreClient {
                 renameResult = await coreClient.renameDevice(
                     accountNumber: state.spec.accountNumber,
@@ -1223,18 +1235,6 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             } else if renameResult?.didRename == true {
                 updated.events.append(DeploymentEvent(message: "Core device rename requested: \(hostname)."))
             }
-
-            guard let connection else {
-                throw DeploymentCoordinatorError.missingDeployerConnection
-            }
-            try await deployerHostClient.validate(connection: connection)
-            try await deployerHostClient.setHostname(hostname, connection: connection)
-            servicePlan = try await deployerHostClient.prepareDeployerServices(
-                configuration: serviceConfiguration,
-                connection: connection
-            )
-            updated = try await synchronizeToDeployer(updated, connection: connection)
-            updated.events.append(DeploymentEvent(message: "Deployer services prepared on \(connection.host)."))
         }
 
         let localDirectory = URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)
