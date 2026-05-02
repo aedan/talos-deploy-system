@@ -29,6 +29,17 @@ public final class KeychainAuthProvider: AuthProvider, @unchecked Sendable {
 public protocol CoreClient: Sendable {
     func fetchDevices(accountNumber: String) async throws -> [DiscoveredDevice]
     func fetchDeviceDetails(accountNumber: String, deviceID: String) async throws -> DiscoveredDevice
+    func renameDevice(accountNumber: String, deviceID: String, newName: String) async -> CoreRenameResult
+}
+
+public extension CoreClient {
+    func renameDevice(accountNumber: String, deviceID: String, newName: String) async -> CoreRenameResult {
+        CoreRenameResult(
+            requestedName: newName,
+            didRename: false,
+            warning: "Core rename is not supported by this Core client."
+        )
+    }
 }
 
 public enum CoreClientError: Error, LocalizedError {
@@ -121,6 +132,50 @@ public final class WSCoreClient: CoreClient, @unchecked Sendable {
         }
 
         throw CoreClientError.noWorkingEndpoint
+    }
+
+    public func renameDevice(accountNumber: String, deviceID: String, newName: String) async -> CoreRenameResult {
+        do {
+            guard let headerValue = try sessionStore.loadSecret() else {
+                return CoreRenameResult(requestedName: newName, didRename: false, warning: "No Core session is configured.")
+            }
+
+            let payload = try JSONSerialization.data(withJSONObject: ["name": newName])
+            for template in settings.deviceRenamePaths {
+                let path = template
+                    .replacingOccurrences(of: "{account}", with: accountNumber)
+                    .replacingOccurrences(of: "{device}", with: deviceID)
+                guard let url = URL(string: settings.serviceURL + path) else {
+                    continue
+                }
+
+                var request = URLRequest(url: url)
+                request.httpMethod = "PATCH"
+                request.setValue("application/json", forHTTPHeaderField: "Accept")
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.setValue(headerValue, forHTTPHeaderField: settings.sessionHeaderName)
+                request.httpBody = payload
+
+                let (_, response) = try await urlSession.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    continue
+                }
+                if (200..<300).contains(httpResponse.statusCode) {
+                    return CoreRenameResult(requestedName: newName, didRename: true)
+                }
+            }
+            return CoreRenameResult(
+                requestedName: newName,
+                didRename: false,
+                warning: "Core did not accept a rename request for device \(deviceID)."
+            )
+        } catch {
+            return CoreRenameResult(
+                requestedName: newName,
+                didRename: false,
+                warning: "Core rename failed: \(error.localizedDescription)"
+            )
+        }
     }
 
     private func parseDevices(data: Data, accountNumber: String) throws -> [DiscoveredDevice]? {

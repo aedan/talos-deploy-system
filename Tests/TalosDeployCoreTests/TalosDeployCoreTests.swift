@@ -3,6 +3,43 @@ import XCTest
 @testable import TalosDeployCore
 
 final class TalosDeployCoreTests: XCTestCase {
+    private func talosDevice(
+        id: String = "cp1",
+        name: String = "cp-1",
+        primaryIP: String = "198.51.100.10",
+        privateIP: String = "172.22.220.10",
+        oob: OOBEndpoint? = nil
+    ) -> DiscoveredDevice {
+        DiscoveredDevice(
+            id: id,
+            accountNumber: "0000000",
+            name: name,
+            primaryIP: primaryIP,
+            privateIP: privateIP,
+            networkInterfaces: [
+                NetworkInterface(name: "eno1", addresses: ["\(privateIP)/22"], macAddress: "94:57:a5:6d:9c:c0"),
+            ],
+            oob: oob
+        )
+    }
+
+    private func talosAssignment(
+        deviceID: String = "cp1",
+        role: DeviceRole = .controlplane,
+        shouldInstallOS: Bool = true
+    ) -> DeviceAssignment {
+        DeviceAssignment(
+            deviceID: deviceID,
+            role: role,
+            shouldInstallOS: shouldInstallOS,
+            staticNetwork: StaticNetworkConfig(
+                gateway: "172.22.220.1",
+                nameservers: ["172.22.216.10"],
+                searchDomains: ["example.test"]
+            )
+        )
+    }
+
     func testCoreDefaultsDoNotBakeInATestAccount() {
         XCTAssertTrue(CoreAPISettings().defaultAccountNumber.isEmpty)
     }
@@ -52,8 +89,8 @@ final class TalosDeployCoreTests: XCTestCase {
 
     func testBootstrapOverseerCreatesGreenfieldLocalMediaPlan() throws {
         let helper = DiscoveredDevice(id: "helper", accountNumber: "0000000", name: "helper-1")
-        let cp = DiscoveredDevice(id: "cp1", accountNumber: "0000000", name: "cp-1")
-        var helperAssignment = DeviceAssignment(deviceID: "helper", role: .helper, helperMode: .bootstrap, shouldInstallOS: true)
+        let cp = talosDevice()
+        var helperAssignment = DeviceAssignment(deviceID: "helper", role: .deployer, helperMode: .bootstrap, shouldInstallOS: true)
         helperAssignment.typedConfirmation = "INSTALL helper-1"
         let spec = DeploymentSpec(
             accountNumber: "0000000",
@@ -64,11 +101,11 @@ final class TalosDeployCoreTests: XCTestCase {
             helperStateRoot: "/var/lib/talos-deploy",
             nodes: [
                 DeploymentNodeSpec(device: helper, assignment: helperAssignment),
-                DeploymentNodeSpec(device: cp, assignment: DeviceAssignment(deviceID: "cp1", role: .controlplane, shouldInstallOS: true)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
             ]
         )
         let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
-        XCTAssertTrue(plan.phases.contains { $0.title == "Bootstrap Deployer/Overseer" })
+        XCTAssertTrue(plan.phases.contains { $0.title == "Bootstrap Deployer" })
         XCTAssertTrue(plan.phases.contains { phase in
             phase.steps.contains { $0.contains("do not depend on another target node having an OS") }
         })
@@ -77,8 +114,8 @@ final class TalosDeployCoreTests: XCTestCase {
 
     func testPlannerRejectsExistingOSMediaHostUnlessExplicitlyAllowed() throws {
         let helper = DiscoveredDevice(id: "helper", accountNumber: "0000000", name: "helper-1")
-        let cp = DiscoveredDevice(id: "cp1", accountNumber: "0000000", name: "cp-1")
-        var helperAssignment = DeviceAssignment(deviceID: "helper", role: .helper, helperMode: .bootstrap, shouldInstallOS: true)
+        let cp = talosDevice()
+        var helperAssignment = DeviceAssignment(deviceID: "helper", role: .deployer, helperMode: .bootstrap, shouldInstallOS: true)
         helperAssignment.typedConfirmation = "INSTALL helper-1"
         let spec = DeploymentSpec(
             accountNumber: "0000000",
@@ -89,7 +126,7 @@ final class TalosDeployCoreTests: XCTestCase {
             helperStateRoot: "/var/lib/talos-deploy",
             nodes: [
                 DeploymentNodeSpec(device: helper, assignment: helperAssignment),
-                DeploymentNodeSpec(device: cp, assignment: DeviceAssignment(deviceID: "cp1", role: .controlplane, shouldInstallOS: true)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
             ]
         )
         let settings = AppSettings(
@@ -105,8 +142,8 @@ final class TalosDeployCoreTests: XCTestCase {
 
     func testPlannerAllowsExplicitExistingOSMediaHost() throws {
         let helper = DiscoveredDevice(id: "helper", accountNumber: "0000000", name: "helper-1")
-        let cp = DiscoveredDevice(id: "cp1", accountNumber: "0000000", name: "cp-1")
-        var helperAssignment = DeviceAssignment(deviceID: "helper", role: .helper, helperMode: .bootstrap, shouldInstallOS: true)
+        let cp = talosDevice()
+        var helperAssignment = DeviceAssignment(deviceID: "helper", role: .deployer, helperMode: .bootstrap, shouldInstallOS: true)
         helperAssignment.typedConfirmation = "INSTALL helper-1"
         let spec = DeploymentSpec(
             accountNumber: "0000000",
@@ -117,7 +154,7 @@ final class TalosDeployCoreTests: XCTestCase {
             helperStateRoot: "/var/lib/talos-deploy",
             nodes: [
                 DeploymentNodeSpec(device: helper, assignment: helperAssignment),
-                DeploymentNodeSpec(device: cp, assignment: DeviceAssignment(deviceID: "cp1", role: .controlplane, shouldInstallOS: true)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
             ]
         )
         let settings = AppSettings(
@@ -137,8 +174,8 @@ final class TalosDeployCoreTests: XCTestCase {
     }
 
     func testExistingOverseerPlanIncludesTDSMediaSetup() throws {
-        let helper = DiscoveredDevice(id: "helper", accountNumber: "0000000", name: "existing-overseer")
-        let cp = DiscoveredDevice(id: "cp1", accountNumber: "0000000", name: "cp-1")
+        let helper = DiscoveredDevice(id: "helper", accountNumber: "0000000", name: "existing-deployer")
+        let cp = talosDevice()
         let spec = DeploymentSpec(
             accountNumber: "0000000",
             clusterName: "cluster",
@@ -147,14 +184,14 @@ final class TalosDeployCoreTests: XCTestCase {
             kubernetesVersion: "v1.34.1",
             helperStateRoot: "/var/lib/talos-deploy",
             nodes: [
-                DeploymentNodeSpec(device: helper, assignment: DeviceAssignment(deviceID: "helper", role: .helper, helperMode: .existing, shouldInstallOS: false)),
-                DeploymentNodeSpec(device: cp, assignment: DeviceAssignment(deviceID: "cp1", role: .controlplane, shouldInstallOS: true)),
+                DeploymentNodeSpec(device: helper, assignment: DeviceAssignment(deviceID: "helper", role: .deployer, helperMode: .existing, shouldInstallOS: false)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
             ]
         )
 
         let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
 
-        XCTAssertTrue(plan.phases.contains { $0.title == "Prepare Existing Deployer/Overseer" })
+        XCTAssertTrue(plan.phases.contains { $0.title == "Prepare Existing Deployer" })
         XCTAssertTrue(plan.phases.contains { phase in
             phase.steps.contains { $0.contains("tds prepares media and PXE directories") }
         })
@@ -163,8 +200,8 @@ final class TalosDeployCoreTests: XCTestCase {
     func testTalosBuilderCreatesArtifacts() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let helper = DiscoveredDevice(id: "helper", accountNumber: "0000000", name: "helper-1")
-        let cp = DiscoveredDevice(id: "cp1", accountNumber: "0000000", name: "cp-1", primaryIP: "192.0.2.10")
-        var helperAssignment = DeviceAssignment(deviceID: "helper", role: .helper, helperMode: .existing)
+        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "172.22.220.10")
+        var helperAssignment = DeviceAssignment(deviceID: "helper", role: .deployer, helperMode: .existing)
         helperAssignment.typedConfirmation = ""
         let spec = DeploymentSpec(
             accountNumber: "0000000",
@@ -180,7 +217,7 @@ final class TalosDeployCoreTests: XCTestCase {
             ],
             nodes: [
                 DeploymentNodeSpec(device: helper, assignment: helperAssignment),
-                DeploymentNodeSpec(device: cp, assignment: DeviceAssignment(deviceID: "cp1", role: .controlplane, shouldInstallOS: true)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
             ]
         )
         let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
@@ -193,6 +230,9 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("image: factory.talos.dev/installer/abc123:v1.11.3"))
         XCTAssertTrue(patch.contains("name: br_netfilter"))
         XCTAssertTrue(patch.contains("zfs_arc_max=123"))
+        XCTAssertTrue(patch.contains("addresses:\n          - 172.22.220.10/22"))
+        XCTAssertTrue(patch.contains("gateway: 172.22.220.1"))
+        XCTAssertTrue(patch.contains("destination: /var/lib/longhorn"))
     }
 
     func testBridgeSessionDetectionParsesHammertimeCachePayload() async throws {
@@ -342,13 +382,8 @@ final class TalosDeployCoreTests: XCTestCase {
 
     func testAutomaticTalosProvisioningPrefersOverseerHostedMedia() throws {
         let helper = DiscoveredDevice(id: "helper", accountNumber: "0000000", name: "helper-1")
-        let cp = DiscoveredDevice(
-            id: "cp1",
-            accountNumber: "0000000",
-            name: "cp-1",
-            oob: OOBEndpoint(vendor: .ilo, address: "10.0.0.11")
-        )
-        var helperAssignment = DeviceAssignment(deviceID: "helper", role: .helper, helperMode: .bootstrap, shouldInstallOS: true)
+        let cp = talosDevice(oob: OOBEndpoint(vendor: .ilo, address: "10.0.0.11"))
+        var helperAssignment = DeviceAssignment(deviceID: "helper", role: .deployer, helperMode: .bootstrap, shouldInstallOS: true)
         helperAssignment.typedConfirmation = "INSTALL helper-1"
         let spec = DeploymentSpec(
             accountNumber: "0000000",
@@ -359,7 +394,7 @@ final class TalosDeployCoreTests: XCTestCase {
             helperStateRoot: "/var/lib/talos-deploy",
             nodes: [
                 DeploymentNodeSpec(device: helper, assignment: helperAssignment),
-                DeploymentNodeSpec(device: cp, assignment: DeviceAssignment(deviceID: "cp1", role: .controlplane, shouldInstallOS: true)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
             ]
         )
 
@@ -368,7 +403,65 @@ final class TalosDeployCoreTests: XCTestCase {
 
         XCTAssertTrue(controlPlane?.method == .bootURL)
         XCTAssertTrue(plan.phases.contains { $0.title == "Prepare Talos Artifacts" })
-        XCTAssertTrue(plan.phases.last?.steps.contains(where: { $0.contains("overseer-hosted ISO") }) == true)
+        XCTAssertTrue(plan.phases.last?.steps.contains(where: { $0.contains("deployer-hosted ISO") }) == true)
+    }
+
+    func testDeployerRoleAndLegacyHelperAliasAreEquivalent() {
+        XCTAssertTrue(DeviceRole.deployer.isDeployer)
+        XCTAssertTrue(DeviceRole.helper.isDeployer)
+        XCTAssertTrue(DeviceRole.selectableRoles.contains(.deployer))
+        XCTAssertTrue(DeviceRole.selectableRoles.contains(.helper) == false)
+        XCTAssertTrue(DeviceRole.helper.displayName == "deployer")
+    }
+
+    func testDeployerHostnameGenerationUsesDeviceNumberAndSuffix() {
+        let device = DiscoveredDevice(id: "device-716181", accountNumber: "0000000", name: "716181-lab2-director")
+
+        let hostname = DeployerNaming().hostname(for: device, suffix: "Lab 2")
+
+        XCTAssertTrue(hostname == "716181-deployer-lab-2")
+    }
+
+    func testStaticNetworkValidationBlocksIncompleteTalosNodes() {
+        let node = DeploymentNodeSpec(
+            device: DiscoveredDevice(id: "cp1", accountNumber: "0000000", name: "cp-1"),
+            assignment: DeviceAssignment(deviceID: "cp1", role: .controlplane, shouldInstallOS: true)
+        )
+
+        let result = StaticNetworkPlanner().validate(node: node)
+
+        XCTAssertTrue(result.isValid == false)
+        XCTAssertTrue(result.errors.contains("Missing default gateway."))
+    }
+
+    func testStaticNetworkValidationPrefersCorePrivateIP() {
+        let node = DeploymentNodeSpec(device: talosDevice(), assignment: talosAssignment())
+
+        let result = StaticNetworkPlanner().validate(node: node)
+
+        XCTAssertTrue(result.isValid)
+        XCTAssertTrue(result.config.managementAddressCIDR == "172.22.220.10/22")
+        XCTAssertTrue(result.config.routes.first == StaticNetworkRoute(to: "default", via: "172.22.220.1"))
+    }
+
+    func testTalosDefaultsIncludeRackspaceExtensionsAndLonghorn() {
+        let defaults = TalosDefaults()
+
+        XCTAssertTrue(defaults.factory.selectedSystemExtensions == [
+            "siderolabs/iscsi-tools",
+            "siderolabs/util-linux-tools",
+            "siderolabs/bnx2-bnx2x",
+        ])
+        XCTAssertTrue(defaults.enableLonghornExtraMounts)
+    }
+
+    func testDeployerServicePlanIncludesManagedPackagesAndUnits() {
+        let plan = DefaultHelperHostClient().planDeployerServices(configuration: HelperMediaServiceConfiguration())
+
+        XCTAssertTrue(plan.packages.contains("dnsmasq"))
+        XCTAssertTrue(plan.systemdUnits.contains("tds-media-http.service"))
+        XCTAssertTrue(plan.systemdUnits.contains("tds-dnsmasq.service"))
+        XCTAssertTrue(plan.cacheFallbackCommands.contains { $0.contains("/var/cache/tds") })
     }
 
     func testPreinstallSnapshotCapturePersistsArtifacts() async throws {

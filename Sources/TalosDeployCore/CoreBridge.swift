@@ -199,6 +199,24 @@ public final class ConfiguredCoreClient: CoreClient, EnvironmentCoreSessionProvi
         }
     }
 
+    public func renameDevice(accountNumber: String, deviceID: String, newName: String) async -> CoreRenameResult {
+        let bridgeResult = await bridgeClient.renameDevice(accountNumber: accountNumber, deviceID: deviceID, newName: newName)
+        if bridgeResult.didRename {
+            return bridgeResult
+        }
+
+        let httpResult = await httpClient.renameDevice(accountNumber: accountNumber, deviceID: deviceID, newName: newName)
+        if httpResult.didRename || bridgeResult.warning.isEmpty {
+            return httpResult
+        }
+
+        return CoreRenameResult(
+            requestedName: newName,
+            didRename: false,
+            warning: [bridgeResult.warning, httpResult.warning].filter { !$0.isEmpty }.joined(separator: " ")
+        )
+    }
+
     public func discoverEnvironmentSession(includeSecret: Bool) async throws -> EnvironmentCoreSession? {
         try await bridgeClient.discoverEnvironmentSession(includeSecret: includeSecret)
     }

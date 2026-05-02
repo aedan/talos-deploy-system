@@ -4,9 +4,9 @@ Swift-first Rackspace Talos deployment tooling for macOS, with a shared core lib
 
 ## Current Architecture
 
-- `TalosDeployCore`: shared models, settings, Core/Hammertime adapters, deployment planning, Ubuntu bootstrap media, helper-state staging, and Talos artifact rendering
+- `TalosDeployCore`: shared models, settings, Core/Hammertime adapters, deployment planning, Ubuntu bootstrap media, deployer-state staging, and Talos artifact rendering
 - `tds`: automation-friendly CLI for testing on `rax`
-- `tds.app`: SwiftUI desktop interface for account lookup, role assignment, helper bootstrap, local-media attach, deployment staging, resume, and settings
+- `tds.app`: SwiftUI desktop interface for account lookup, role assignment, deployer bootstrap, static networking validation, local-media attach, deployment staging, resume, and settings
 - bundled Core bridge: a Python helper shipped with `TalosDeployCore` that reuses the active hammertime cache on `rax` and queries Core inventory through the same authenticated environment
 - `legacy` Ansible flow: the existing playbooks/templates remain in this repo as migration references and are not a runtime dependency of the new implementation
 
@@ -22,7 +22,8 @@ swift test
 swift build --product tds
 swift build --product tds-app
 swift run tds plan --spec examples/deployment-spec.example.json
-swift run tds deploy --spec examples/deployment-spec.example.json
+swift run tds deploy plan --spec examples/deployment-spec.example.json
+swift run tds deploy run --spec examples/deployment-spec.example.json --dry-run true
 scripts/build-tds-app-bundle.sh build-cache/tds.app
 open build-cache/tds.app
 ```
@@ -31,7 +32,7 @@ open build-cache/tds.app
 
 ```bash
 ssh rax 'cd ~/Documents/GitHub/talos-deploy-system && git pull'
-ssh rax 'cd ~/Documents/GitHub/talos-deploy-system && swift run tds plan --spec examples/deployment-spec.example.json'
+ssh rax 'cd ~/Documents/GitHub/talos-deploy-system && swift run tds deploy plan --spec examples/deployment-spec.example.json'
 ```
 
 ## Settings Coverage
@@ -41,19 +42,23 @@ The Swift implementation includes first-pass support for:
 - Access profiles: direct, HTTP proxy, SOCKS proxy, SSH dynamic SOCKS, and Hammertime-routed profiles
 - Core session storage in the macOS Keychain plus automatic detection of the active hammertime-backed session on `rax`
 - Hammertime defaults including binary path, optional Python override, session cache path, fact groups, and command timeout
-- Talos defaults for version, Kubernetes version, cluster name, and endpoint
-- Helper defaults including SSH user and durable state root
-- Safety settings for destructive helper reinstall confirmation
+- Talos defaults for version, Kubernetes version, cluster name, endpoint, default Rackspace extensions, and Longhorn extra mounts
+- Deployer defaults including SSH user, generated hostname suffix, durable state root, package cache root, media/PXE roots, and pinned `talosctl`
+- Safety settings for destructive deployer reinstall confirmation
 
-## Helper Bootstrap Flow
+## Deployer Bootstrap Flow
 
-If the selected helper/overseer is marked for reinstall:
+The Ubuntu `deployer` is a selected physical device, but it is not a Talos node. If the selected deployer is marked for reinstall:
 
 1. temporary deployment state is staged on `rax`
-2. the helper is planned first
-3. the helper must come back with SSH access
-4. durable state is synchronized to the helper root
+2. the deployer is planned first
+3. the deployer must come back with SSH access
+4. durable state is synchronized to the deployer root
 5. the remaining cluster nodes are then provisioned
+
+After the deployer is online, the default Talos provisioning order is deployer-hosted iLO URL media, deployer PXE, direct/external OOB URL media, then operator local media.
+
+Talos nodes may use DHCP only for initial live boot. Final machine configs are blocked until every control plane and worker has static management networking from Core, a capture, or manual UI/JSON input.
 
 ## Hammertime Notes
 
@@ -66,7 +71,7 @@ If the selected helper/overseer is marked for reinstall:
 
 ## Ubuntu Reinstall Lessons
 
-- `tds ubuntu snapshot` captures the current host state before a destructive helper reinstall.
+- `tds ubuntu snapshot` captures the current host state before a destructive deployer reinstall.
 - `tds ubuntu build-iso` now creates a proper NoCloud ISO with `/nocloud/user-data`, `/nocloud/meta-data`, and `/nocloud/90-tds-preserved.yaml`, then patches GRUB with `autoinstall ds=nocloud\\;s=/cdrom/nocloud/`.
 - `tds ubuntu validate-iso` extracts the rebuilt ISO and verifies the NoCloud seed, GRUB patch, `rack` user, root access, and install evidence hooks.
 - Local VM experiments are development-only checks and are not part of `tds.app`, the `tds` CLI, or the supported deployment workflow.
@@ -94,7 +99,7 @@ Automated Ansible playbook that deploys and configures dnsmasq to provide DHCP a
 
 ### Talos Linux Integration
 - **Talos Image Factory API integration** - Automatically generates custom images
-- **System extensions support** - Default: iscsi-tools and util-linux-tools
+- **System extensions support** - Default: iscsi-tools, util-linux-tools, and bnx2/bnx2x firmware support
 - **Automatic image downloads** - Kernel, initramfs, and installer images downloaded locally
 - **Flexible installer serving** - Choose between local HTTP server (airgapped) or direct factory.talos.dev pull (internet-connected)
 - **Version control** - Specify exact Talos version in inventory

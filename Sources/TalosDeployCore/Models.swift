@@ -22,9 +22,29 @@ public enum InventorySource: String, Codable, CaseIterable, Sendable {
 
 public enum DeviceRole: String, Codable, CaseIterable, Sendable {
     case unassigned
+    case deployer
     case helper
     case controlplane
     case worker
+}
+
+public extension DeviceRole {
+    var isDeployer: Bool {
+        self == .deployer || self == .helper
+    }
+
+    var displayName: String {
+        switch self {
+        case .unassigned: "unassigned"
+        case .deployer, .helper: "deployer"
+        case .controlplane: "controlplane"
+        case .worker: "worker"
+        }
+    }
+
+    static var selectableRoles: [DeviceRole] {
+        [.unassigned, .deployer, .controlplane, .worker]
+    }
 }
 
 public enum HelperMode: String, Codable, CaseIterable, Sendable {
@@ -206,6 +226,82 @@ public struct NetworkInterface: Identifiable, Codable, Equatable, Sendable {
         self.macAddress = macAddress
         self.vlanID = vlanID
         self.mtu = mtu
+    }
+}
+
+public struct StaticNetworkRoute: Codable, Equatable, Sendable {
+    public var to: String
+    public var via: String
+    public var metric: Int?
+
+    public init(to: String, via: String, metric: Int? = nil) {
+        self.to = to
+        self.via = via
+        self.metric = metric
+    }
+}
+
+public struct StaticNetworkConfig: Codable, Equatable, Sendable {
+    public var managementInterface: String
+    public var managementAddressCIDR: String
+    public var gateway: String
+    public var nameservers: [String]
+    public var searchDomains: [String]
+    public var routes: [StaticNetworkRoute]
+    public var vlans: [NetworkInterface]
+    public var bridges: [NetworkInterface]
+
+    public init(
+        managementInterface: String = "",
+        managementAddressCIDR: String = "",
+        gateway: String = "",
+        nameservers: [String] = [],
+        searchDomains: [String] = [],
+        routes: [StaticNetworkRoute] = [],
+        vlans: [NetworkInterface] = [],
+        bridges: [NetworkInterface] = []
+    ) {
+        self.managementInterface = managementInterface
+        self.managementAddressCIDR = managementAddressCIDR
+        self.gateway = gateway
+        self.nameservers = nameservers
+        self.searchDomains = searchDomains
+        self.routes = routes
+        self.vlans = vlans
+        self.bridges = bridges
+    }
+
+    public var isEmpty: Bool {
+        managementInterface.isEmpty
+            && managementAddressCIDR.isEmpty
+            && gateway.isEmpty
+            && nameservers.isEmpty
+            && searchDomains.isEmpty
+            && routes.isEmpty
+            && vlans.isEmpty
+            && bridges.isEmpty
+    }
+}
+
+public struct StaticNetworkValidationResult: Codable, Equatable, Sendable {
+    public var deviceID: String
+    public var isValid: Bool
+    public var config: StaticNetworkConfig
+    public var errors: [String]
+    public var warnings: [String]
+
+    public init(
+        deviceID: String,
+        isValid: Bool,
+        config: StaticNetworkConfig = StaticNetworkConfig(),
+        errors: [String] = [],
+        warnings: [String] = []
+    ) {
+        self.deviceID = deviceID
+        self.isValid = isValid
+        self.config = config
+        self.errors = errors
+        self.warnings = warnings
     }
 }
 
@@ -425,6 +521,7 @@ public struct DeviceAssignment: Codable, Equatable, Sendable {
     public var shouldInstallOS: Bool
     public var preferredInstall: InstallPreference
     public var networkSource: NetworkConfigurationSource
+    public var staticNetwork: StaticNetworkConfig
     public var manualNetworkPlanPath: String
     public var typedConfirmation: String
 
@@ -435,6 +532,7 @@ public struct DeviceAssignment: Codable, Equatable, Sendable {
         shouldInstallOS: Bool = false,
         preferredInstall: InstallPreference = .automatic,
         networkSource: NetworkConfigurationSource = .core,
+        staticNetwork: StaticNetworkConfig = StaticNetworkConfig(),
         manualNetworkPlanPath: String = "",
         typedConfirmation: String = ""
     ) {
@@ -444,6 +542,7 @@ public struct DeviceAssignment: Codable, Equatable, Sendable {
         self.shouldInstallOS = shouldInstallOS
         self.preferredInstall = preferredInstall
         self.networkSource = networkSource
+        self.staticNetwork = staticNetwork
         self.manualNetworkPlanPath = manualNetworkPlanPath
         self.typedConfirmation = typedConfirmation
     }
@@ -479,6 +578,7 @@ public struct TalosImageFactorySettings: Codable, Equatable, Sendable {
         selectedSystemExtensions: [String] = [
             "siderolabs/iscsi-tools",
             "siderolabs/util-linux-tools",
+            "siderolabs/bnx2-bnx2x",
         ],
         extraKernelArgs: [String] = []
     ) {
@@ -505,8 +605,8 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
             .overseerHostedMedia,
             .overseerPXE,
             .directVirtualMedia,
-            .operatorLocalMedia,
             .externalOOBURL,
+            .operatorLocalMedia,
         ],
         allowOverseerHostedMedia: Bool = true,
         allowOverseerPXE: Bool = true,
@@ -545,6 +645,7 @@ extension DeviceAssignment {
         case shouldInstallOS
         case preferredInstall
         case networkSource
+        case staticNetwork
         case manualNetworkPlanPath
         case typedConfirmation
     }
@@ -557,6 +658,7 @@ extension DeviceAssignment {
         self.shouldInstallOS = try container.decodeIfPresent(Bool.self, forKey: .shouldInstallOS) ?? false
         self.preferredInstall = try container.decodeIfPresent(InstallPreference.self, forKey: .preferredInstall) ?? .automatic
         self.networkSource = try container.decodeIfPresent(NetworkConfigurationSource.self, forKey: .networkSource) ?? .core
+        self.staticNetwork = try container.decodeIfPresent(StaticNetworkConfig.self, forKey: .staticNetwork) ?? StaticNetworkConfig()
         self.manualNetworkPlanPath = try container.decodeIfPresent(String.self, forKey: .manualNetworkPlanPath) ?? ""
         self.typedConfirmation = try container.decodeIfPresent(String.self, forKey: .typedConfirmation) ?? ""
     }
@@ -572,6 +674,7 @@ public struct TalosDefaults: Codable, Equatable, Sendable {
     public var factory: TalosImageFactorySettings
     public var provisioning: TalosProvisioningDefaults
     public var installerPreference: InstallPreference
+    public var enableLonghornExtraMounts: Bool
 
     public init(
         talosVersion: String = "v1.11.3",
@@ -581,11 +684,13 @@ public struct TalosDefaults: Codable, Equatable, Sendable {
         extensions: [String] = [
             "siderolabs/iscsi-tools",
             "siderolabs/util-linux-tools",
+            "siderolabs/bnx2-bnx2x",
         ],
         kernelModules: [TalosKernelModule] = [],
         factory: TalosImageFactorySettings = TalosImageFactorySettings(),
         provisioning: TalosProvisioningDefaults = TalosProvisioningDefaults(),
-        installerPreference: InstallPreference = .virtualMedia
+        installerPreference: InstallPreference = .virtualMedia,
+        enableLonghornExtraMounts: Bool = true
     ) {
         self.talosVersion = talosVersion
         self.kubernetesVersion = kubernetesVersion
@@ -600,6 +705,7 @@ public struct TalosDefaults: Codable, Equatable, Sendable {
         self.factory = normalizedFactory
         self.provisioning = provisioning
         self.installerPreference = installerPreference
+        self.enableLonghornExtraMounts = enableLonghornExtraMounts
     }
 }
 
@@ -614,6 +720,7 @@ extension TalosDefaults {
         case factory
         case provisioning
         case installerPreference
+        case enableLonghornExtraMounts
     }
 
     public init(from decoder: Decoder) throws {
@@ -621,6 +728,7 @@ extension TalosDefaults {
         let extensions = try container.decodeIfPresent([String].self, forKey: .extensions) ?? [
             "siderolabs/iscsi-tools",
             "siderolabs/util-linux-tools",
+            "siderolabs/bnx2-bnx2x",
         ]
         let factory = try container.decodeIfPresent(TalosImageFactorySettings.self, forKey: .factory)
             ?? TalosImageFactorySettings(selectedSystemExtensions: extensions)
@@ -633,7 +741,8 @@ extension TalosDefaults {
             kernelModules: try container.decodeIfPresent([TalosKernelModule].self, forKey: .kernelModules) ?? [],
             factory: factory,
             provisioning: try container.decodeIfPresent(TalosProvisioningDefaults.self, forKey: .provisioning) ?? TalosProvisioningDefaults(),
-            installerPreference: try container.decodeIfPresent(InstallPreference.self, forKey: .installerPreference) ?? .virtualMedia
+            installerPreference: try container.decodeIfPresent(InstallPreference.self, forKey: .installerPreference) ?? .virtualMedia,
+            enableLonghornExtraMounts: try container.decodeIfPresent(Bool.self, forKey: .enableLonghornExtraMounts) ?? true
         )
     }
 }
@@ -646,6 +755,9 @@ public struct HelperDefaults: Codable, Equatable, Sendable {
     public var httpBindAddress: String
     public var mediaDirectoryName: String
     public var pxeDirectoryName: String
+    public var hostnameSuffix: String
+    public var packageCacheRoot: String
+    public var talosctlVersion: String
 
     public init(
         sshUser: String = "root",
@@ -654,7 +766,10 @@ public struct HelperDefaults: Codable, Equatable, Sendable {
         httpPort: Int = 8080,
         httpBindAddress: String = "0.0.0.0",
         mediaDirectoryName: String = "media",
-        pxeDirectoryName: String = "pxe"
+        pxeDirectoryName: String = "pxe",
+        hostnameSuffix: String = "",
+        packageCacheRoot: String = "/var/cache/tds",
+        talosctlVersion: String = ""
     ) {
         self.sshUser = sshUser
         self.stateRoot = stateRoot
@@ -663,6 +778,9 @@ public struct HelperDefaults: Codable, Equatable, Sendable {
         self.httpBindAddress = httpBindAddress
         self.mediaDirectoryName = mediaDirectoryName
         self.pxeDirectoryName = pxeDirectoryName
+        self.hostnameSuffix = hostnameSuffix
+        self.packageCacheRoot = packageCacheRoot
+        self.talosctlVersion = talosctlVersion
     }
 }
 
@@ -675,6 +793,9 @@ extension HelperDefaults {
         case httpBindAddress
         case mediaDirectoryName
         case pxeDirectoryName
+        case hostnameSuffix
+        case packageCacheRoot
+        case talosctlVersion
     }
 
     public init(from decoder: Decoder) throws {
@@ -686,6 +807,9 @@ extension HelperDefaults {
         self.httpBindAddress = try container.decodeIfPresent(String.self, forKey: .httpBindAddress) ?? "0.0.0.0"
         self.mediaDirectoryName = try container.decodeIfPresent(String.self, forKey: .mediaDirectoryName) ?? "media"
         self.pxeDirectoryName = try container.decodeIfPresent(String.self, forKey: .pxeDirectoryName) ?? "pxe"
+        self.hostnameSuffix = try container.decodeIfPresent(String.self, forKey: .hostnameSuffix) ?? ""
+        self.packageCacheRoot = try container.decodeIfPresent(String.self, forKey: .packageCacheRoot) ?? "/var/cache/tds"
+        self.talosctlVersion = try container.decodeIfPresent(String.self, forKey: .talosctlVersion) ?? ""
     }
 }
 
@@ -717,19 +841,25 @@ public struct HelperMediaServiceConfiguration: Codable, Equatable, Sendable {
     public var pxeDirectoryName: String
     public var httpBindAddress: String
     public var httpPort: Int
+    public var packageCacheRoot: String
+    public var talosctlVersion: String
 
     public init(
         stateRoot: String = "/var/lib/talos-deploy",
         mediaDirectoryName: String = "media",
         pxeDirectoryName: String = "pxe",
         httpBindAddress: String = "0.0.0.0",
-        httpPort: Int = 8080
+        httpPort: Int = 8080,
+        packageCacheRoot: String = "/var/cache/tds",
+        talosctlVersion: String = ""
     ) {
         self.stateRoot = stateRoot
         self.mediaDirectoryName = mediaDirectoryName
         self.pxeDirectoryName = pxeDirectoryName
         self.httpBindAddress = httpBindAddress
         self.httpPort = httpPort
+        self.packageCacheRoot = packageCacheRoot
+        self.talosctlVersion = talosctlVersion
     }
 
     public init(defaults: HelperDefaults) {
@@ -738,7 +868,9 @@ public struct HelperMediaServiceConfiguration: Codable, Equatable, Sendable {
             mediaDirectoryName: defaults.mediaDirectoryName,
             pxeDirectoryName: defaults.pxeDirectoryName,
             httpBindAddress: defaults.httpBindAddress,
-            httpPort: defaults.httpPort
+            httpPort: defaults.httpPort,
+            packageCacheRoot: defaults.packageCacheRoot,
+            talosctlVersion: defaults.talosctlVersion
         )
     }
 
@@ -773,6 +905,84 @@ public struct HelperMediaServicePlan: Codable, Equatable, Sendable {
         self.httpPort = httpPort
         self.serviceCommand = serviceCommand
         self.notes = notes
+    }
+}
+
+public struct CoreRenameResult: Codable, Equatable, Sendable {
+    public var requestedName: String
+    public var didRename: Bool
+    public var warning: String
+
+    public init(requestedName: String, didRename: Bool, warning: String = "") {
+        self.requestedName = requestedName
+        self.didRename = didRename
+        self.warning = warning
+    }
+}
+
+public struct DeployerServicePlan: Codable, Equatable, Sendable {
+    public var packages: [String]
+    public var onlineInstallCommands: [String]
+    public var cacheFallbackCommands: [String]
+    public var systemdUnits: [String]
+    public var notes: [String]
+
+    public init(
+        packages: [String] = [],
+        onlineInstallCommands: [String] = [],
+        cacheFallbackCommands: [String] = [],
+        systemdUnits: [String] = [],
+        notes: [String] = []
+    ) {
+        self.packages = packages
+        self.onlineInstallCommands = onlineInstallCommands
+        self.cacheFallbackCommands = cacheFallbackCommands
+        self.systemdUnits = systemdUnits
+        self.notes = notes
+    }
+}
+
+public struct TalosExecutionRun: Codable, Equatable, Sendable {
+    public var state: DeploymentState
+    public var deployerHostname: String
+    public var coreRename: CoreRenameResult?
+    public var deployerServices: DeployerServicePlan
+    public var networkValidation: [StaticNetworkValidationResult]
+    public var dryRun: Bool
+
+    public init(
+        state: DeploymentState,
+        deployerHostname: String,
+        coreRename: CoreRenameResult? = nil,
+        deployerServices: DeployerServicePlan = DeployerServicePlan(),
+        networkValidation: [StaticNetworkValidationResult] = [],
+        dryRun: Bool = true
+    ) {
+        self.state = state
+        self.deployerHostname = deployerHostname
+        self.coreRename = coreRename
+        self.deployerServices = deployerServices
+        self.networkValidation = networkValidation
+        self.dryRun = dryRun
+    }
+}
+
+public struct ClusterHealthResult: Codable, Equatable, Sendable {
+    public var talosNodesReady: Bool
+    public var kubernetesReady: Bool
+    public var checkedCommands: [String]
+    public var warnings: [String]
+
+    public init(
+        talosNodesReady: Bool = false,
+        kubernetesReady: Bool = false,
+        checkedCommands: [String] = [],
+        warnings: [String] = []
+    ) {
+        self.talosNodesReady = talosNodesReady
+        self.kubernetesReady = kubernetesReady
+        self.checkedCommands = checkedCommands
+        self.warnings = warnings
     }
 }
 
@@ -829,6 +1039,7 @@ public struct CoreAPISettings: Codable, Equatable, Sendable {
     public var loginURL: String
     public var deviceCollectionPaths: [String]
     public var deviceDetailPaths: [String]
+    public var deviceRenamePaths: [String]
     public var inventorySource: InventorySource
     public var defaultAccountNumber: String
     public var sessionHeaderName: String
@@ -848,6 +1059,11 @@ public struct CoreAPISettings: Codable, Equatable, Sendable {
             "/accounts/{account}/devices/{device}",
             "/api/devices/{device}?account={account}",
         ],
+        deviceRenamePaths: [String] = [
+            "/api/accounts/{account}/devices/{device}",
+            "/accounts/{account}/devices/{device}",
+            "/api/devices/{device}?account={account}",
+        ],
         inventorySource: InventorySource = .auto,
         defaultAccountNumber: String = "",
         sessionHeaderName: String = "Cookie"
@@ -857,9 +1073,40 @@ public struct CoreAPISettings: Codable, Equatable, Sendable {
         self.loginURL = loginURL
         self.deviceCollectionPaths = deviceCollectionPaths
         self.deviceDetailPaths = deviceDetailPaths
+        self.deviceRenamePaths = deviceRenamePaths
         self.inventorySource = inventorySource
         self.defaultAccountNumber = defaultAccountNumber
         self.sessionHeaderName = sessionHeaderName
+    }
+}
+
+extension CoreAPISettings {
+    enum CodingKeys: String, CodingKey {
+        case docsURL
+        case serviceURL
+        case loginURL
+        case deviceCollectionPaths
+        case deviceDetailPaths
+        case deviceRenamePaths
+        case inventorySource
+        case defaultAccountNumber
+        case sessionHeaderName
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = CoreAPISettings()
+        self.init(
+            docsURL: try container.decodeIfPresent(String.self, forKey: .docsURL) ?? defaults.docsURL,
+            serviceURL: try container.decodeIfPresent(String.self, forKey: .serviceURL) ?? defaults.serviceURL,
+            loginURL: try container.decodeIfPresent(String.self, forKey: .loginURL) ?? defaults.loginURL,
+            deviceCollectionPaths: try container.decodeIfPresent([String].self, forKey: .deviceCollectionPaths) ?? defaults.deviceCollectionPaths,
+            deviceDetailPaths: try container.decodeIfPresent([String].self, forKey: .deviceDetailPaths) ?? defaults.deviceDetailPaths,
+            deviceRenamePaths: try container.decodeIfPresent([String].self, forKey: .deviceRenamePaths) ?? defaults.deviceRenamePaths,
+            inventorySource: try container.decodeIfPresent(InventorySource.self, forKey: .inventorySource) ?? defaults.inventorySource,
+            defaultAccountNumber: try container.decodeIfPresent(String.self, forKey: .defaultAccountNumber) ?? "",
+            sessionHeaderName: try container.decodeIfPresent(String.self, forKey: .sessionHeaderName) ?? defaults.sessionHeaderName
+        )
     }
 }
 
@@ -957,6 +1204,7 @@ public struct DeploymentSpec: Codable, Equatable, Sendable {
     public var talosFactory: TalosImageFactorySettings
     public var talosProvisioning: TalosProvisioningDefaults
     public var talosKernelModules: [TalosKernelModule]
+    public var enableLonghornExtraMounts: Bool
     public var nodes: [DeploymentNodeSpec]
 
     public init(
@@ -969,6 +1217,7 @@ public struct DeploymentSpec: Codable, Equatable, Sendable {
         talosFactory: TalosImageFactorySettings = TalosImageFactorySettings(),
         talosProvisioning: TalosProvisioningDefaults = TalosProvisioningDefaults(),
         talosKernelModules: [TalosKernelModule] = [],
+        enableLonghornExtraMounts: Bool = true,
         nodes: [DeploymentNodeSpec]
     ) {
         self.accountNumber = accountNumber
@@ -980,6 +1229,7 @@ public struct DeploymentSpec: Codable, Equatable, Sendable {
         self.talosFactory = talosFactory
         self.talosProvisioning = talosProvisioning
         self.talosKernelModules = talosKernelModules
+        self.enableLonghornExtraMounts = enableLonghornExtraMounts
         self.nodes = nodes
     }
 }
@@ -995,6 +1245,7 @@ extension DeploymentSpec {
         case talosFactory
         case talosProvisioning
         case talosKernelModules
+        case enableLonghornExtraMounts
         case nodes
     }
 
@@ -1010,6 +1261,7 @@ extension DeploymentSpec {
             talosFactory: try container.decodeIfPresent(TalosImageFactorySettings.self, forKey: .talosFactory) ?? TalosImageFactorySettings(),
             talosProvisioning: try container.decodeIfPresent(TalosProvisioningDefaults.self, forKey: .talosProvisioning) ?? TalosProvisioningDefaults(),
             talosKernelModules: try container.decodeIfPresent([TalosKernelModule].self, forKey: .talosKernelModules) ?? [],
+            enableLonghornExtraMounts: try container.decodeIfPresent(Bool.self, forKey: .enableLonghornExtraMounts) ?? true,
             nodes: try container.decode([DeploymentNodeSpec].self, forKey: .nodes)
         )
     }
@@ -1053,6 +1305,7 @@ public struct DeploymentPlan: Codable, Equatable, Sendable {
     public var installs: [PlannedDeviceInstall]
     public var phases: [DeploymentPhase]
     public var talosArtifacts: TalosFactoryArtifacts
+    public var networkValidation: [StaticNetworkValidationResult]
     public var tempStateDirectory: String
     public var durableStateDirectory: String
 
@@ -1069,6 +1322,7 @@ public struct DeploymentPlan: Codable, Equatable, Sendable {
             pxeURL: "",
             installerImage: ""
         ),
+        networkValidation: [StaticNetworkValidationResult] = [],
         tempStateDirectory: String,
         durableStateDirectory: String
     ) {
@@ -1078,6 +1332,7 @@ public struct DeploymentPlan: Codable, Equatable, Sendable {
         self.installs = installs
         self.phases = phases
         self.talosArtifacts = talosArtifacts
+        self.networkValidation = networkValidation
         self.tempStateDirectory = tempStateDirectory
         self.durableStateDirectory = durableStateDirectory
     }
@@ -1091,6 +1346,7 @@ extension DeploymentPlan {
         case installs
         case phases
         case talosArtifacts
+        case networkValidation
         case tempStateDirectory
         case durableStateDirectory
     }
@@ -1104,6 +1360,7 @@ extension DeploymentPlan {
             installs: try container.decode([PlannedDeviceInstall].self, forKey: .installs),
             phases: try container.decode([DeploymentPhase].self, forKey: .phases),
             talosArtifacts: try container.decodeIfPresent(TalosFactoryArtifacts.self, forKey: .talosArtifacts) ?? TalosFactoryClient().artifactURLs(settings: TalosImageFactorySettings(), talosVersion: "v1.11.3"),
+            networkValidation: try container.decodeIfPresent([StaticNetworkValidationResult].self, forKey: .networkValidation) ?? [],
             tempStateDirectory: try container.decode(String.self, forKey: .tempStateDirectory),
             durableStateDirectory: try container.decode(String.self, forKey: .durableStateDirectory)
         )
@@ -1150,7 +1407,7 @@ public struct DeploymentState: Codable, Equatable, Sendable {
 
 public extension DeploymentSpec {
     var helperNode: DeploymentNodeSpec? {
-        nodes.first(where: { $0.assignment.role == .helper })
+        nodes.first(where: { $0.assignment.role.isDeployer })
     }
 }
 

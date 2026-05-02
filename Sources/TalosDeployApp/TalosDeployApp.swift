@@ -51,7 +51,7 @@ private struct RootView: View {
             case .inventory:
                 InventoryView()
             case .bootstrap:
-                BootstrapOverseerView()
+                BootstrapDeployerView()
             case .deployment:
                 DeploymentView()
             case .resume:
@@ -86,7 +86,7 @@ private enum SidebarItem: String, CaseIterable, Identifiable {
         switch self {
         case .signin: "Sign In"
         case .inventory: "Inventory + Roles"
-        case .bootstrap: "Bootstrap Overseer"
+        case .bootstrap: "Bootstrap Deployer"
         case .deployment: "Deployment Run"
         case .resume: "Resume"
         case .settings: "Settings"
@@ -104,7 +104,7 @@ private enum SidebarItem: String, CaseIterable, Identifiable {
     }
 }
 
-private struct BootstrapOverseerView: View {
+private struct BootstrapDeployerView: View {
     @EnvironmentObject private var controller: AppController
     @State private var iloPassword = ""
 
@@ -226,7 +226,7 @@ private struct BootstrapOverseerView: View {
             }
             .padding()
         }
-        .navigationTitle("Bootstrap Overseer")
+        .navigationTitle("Bootstrap Deployer")
     }
 }
 
@@ -348,8 +348,8 @@ private struct InventoryView: View {
                             controller.updateAssignment(assignment)
                         }
                     )) {
-                        ForEach(DeviceRole.allCases, id: \.self) { role in
-                            Text(role.rawValue).tag(role)
+                        ForEach(DeviceRole.selectableRoles, id: \.self) { role in
+                            Text(role.displayName).tag(role)
                         }
                     }
                     .labelsHidden()
@@ -362,7 +362,7 @@ private struct InventoryView: View {
                             set: {
                                 var assignment = controller.binding(for: device)
                                 assignment.shouldInstallOS = $0
-                                if assignment.role == .helper && $0 {
+                                if assignment.role.isDeployer && $0 {
                                     assignment.helperMode = .bootstrap
                                 }
                                 controller.updateAssignment(assignment)
@@ -372,6 +372,8 @@ private struct InventoryView: View {
                     .labelsHidden()
                 }
             }
+
+            NetworkingEditorView()
 
             if !controller.filteredDevices.isEmpty {
                 DisclosureGroup("Filtered non-server devices (\(controller.filteredDevices.count))") {
@@ -395,9 +397,9 @@ private struct InventoryView: View {
 
             if let helper = controller.clusterEligibleDevices.first(where: {
                 let assignment = controller.binding(for: $0)
-                return assignment.role == .helper && assignment.shouldInstallOS
+                return assignment.role.isDeployer && assignment.shouldInstallOS
             }) {
-                HelperWarningView(device: helper)
+                DeployerWarningView(device: helper)
             }
         }
         .padding()
@@ -405,16 +407,16 @@ private struct InventoryView: View {
     }
 }
 
-private struct HelperWarningView: View {
+private struct DeployerWarningView: View {
     @EnvironmentObject private var controller: AppController
     let device: DiscoveredDevice
 
     var body: some View {
         let assignment = controller.binding(for: device)
         VStack(alignment: .leading, spacing: 8) {
-            Text("Helper reinstall warning")
+            Text("Deployer reinstall warning")
                 .font(.headline)
-            Text("Installing a new OS on the helper/overseer will stage temporary state on rax until the helper comes back.")
+            Text("Installing a new OS on the deployer will stage temporary state on rax until the deployer comes back.")
                 .foregroundStyle(.secondary)
             TextField(
                 "Type \(controller.typedConfirmationText(for: device))",
@@ -432,6 +434,147 @@ private struct HelperWarningView: View {
         .padding()
         .background(.orange.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+private struct NetworkingEditorView: View {
+    @EnvironmentObject private var controller: AppController
+
+    private var talosNodes: [DiscoveredDevice] {
+        controller.clusterEligibleDevices.filter { device in
+            let role = controller.binding(for: device).role
+            return role == .controlplane || role == .worker
+        }
+    }
+
+    var body: some View {
+        DisclosureGroup("Talos Static Networking (\(talosNodes.count))") {
+            if talosNodes.isEmpty {
+                Text("Assign controlplane or worker roles to edit final static networking. DHCP may be used only for live boot; machine configs must use Core/captured/manual static IPs.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(talosNodes) { device in
+                        DeviceNetworkEditor(device: device)
+                            .environmentObject(controller)
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+    }
+}
+
+private struct DeviceNetworkEditor: View {
+    @EnvironmentObject private var controller: AppController
+    let device: DiscoveredDevice
+
+    var body: some View {
+        let assignment = controller.binding(for: device)
+        let validation = StaticNetworkPlanner().validate(node: DeploymentNodeSpec(device: device, assignment: assignment))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading) {
+                    Text(device.name)
+                        .font(.headline)
+                    Text("Core private: \(emptyDash(device.privateIP))  primary: \(emptyDash(device.primaryIP))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Detected interfaces: \(device.networkInterfaces.map { "\($0.name) \($0.addresses.joined(separator: ","))" }.joined(separator: "; "))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Label(validation.isValid ? "Valid" : "Incomplete", systemImage: validation.isValid ? "checkmark.circle" : "exclamationmark.triangle")
+                    .foregroundStyle(validation.isValid ? .green : .orange)
+            }
+            Picker("Network Source", selection: Binding(
+                get: { controller.binding(for: device).networkSource },
+                set: {
+                    var updated = controller.binding(for: device)
+                    updated.networkSource = $0
+                    controller.updateAssignment(updated)
+                }
+            )) {
+                ForEach(NetworkConfigurationSource.allCases, id: \.self) { source in
+                    Text(source.rawValue).tag(source)
+                }
+            }
+            .pickerStyle(.segmented)
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+                GridRow {
+                    Text("Interface")
+                    TextField("eno1", text: networkStringBinding(\.managementInterface))
+                        .textFieldStyle(.roundedBorder)
+                    Text("Static CIDR")
+                    TextField("172.22.220.196/22", text: networkStringBinding(\.managementAddressCIDR))
+                        .textFieldStyle(.roundedBorder)
+                }
+                GridRow {
+                    Text("Gateway")
+                    TextField("172.22.220.1", text: networkStringBinding(\.gateway))
+                        .textFieldStyle(.roundedBorder)
+                    Text("DNS")
+                    TextField("172.22.216.10,8.8.8.8", text: networkListBinding(\.nameservers))
+                        .textFieldStyle(.roundedBorder)
+                }
+                GridRow {
+                    Text("Search Domains")
+                    TextField("lab.example,example.test", text: networkListBinding(\.searchDomains))
+                        .textFieldStyle(.roundedBorder)
+                    Text("Manual Plan")
+                    TextField("/path/to/network-plan.yaml", text: Binding(
+                        get: { controller.binding(for: device).manualNetworkPlanPath },
+                        set: {
+                            var updated = controller.binding(for: device)
+                            updated.manualNetworkPlanPath = $0
+                            controller.updateAssignment(updated)
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                }
+            }
+            ForEach(validation.errors, id: \.self) { error in
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            ForEach(validation.warnings, id: \.self) { warning in
+                Text(warning)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding()
+        .background(Color(nsColor: .windowBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
+    }
+
+    private func networkStringBinding(_ keyPath: WritableKeyPath<StaticNetworkConfig, String>) -> Binding<String> {
+        Binding(
+            get: { controller.binding(for: device).staticNetwork[keyPath: keyPath] },
+            set: {
+                var updated = controller.binding(for: device)
+                updated.staticNetwork[keyPath: keyPath] = $0
+                controller.updateAssignment(updated)
+            }
+        )
+    }
+
+    private func networkListBinding(_ keyPath: WritableKeyPath<StaticNetworkConfig, [String]>) -> Binding<String> {
+        Binding(
+            get: { controller.binding(for: device).staticNetwork[keyPath: keyPath].joined(separator: ",") },
+            set: {
+                var updated = controller.binding(for: device)
+                updated.staticNetwork[keyPath: keyPath] = $0
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                controller.updateAssignment(updated)
+            }
+        )
     }
 }
 
@@ -472,7 +615,7 @@ private struct ResumeView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Resume uses the saved deployment-state.json from the local staging directory or the helper host state root.")
+            Text("Resume uses the saved deployment-state.json from the local staging directory or the deployer state root.")
                 .foregroundStyle(.secondary)
             if let state = controller.lastState {
                 Text("Last staged deployment: \(state.spec.clusterName)")
@@ -603,6 +746,7 @@ private struct SettingsRootView: View {
                         Text(preference.rawValue).tag(preference)
                     }
                 }
+                Toggle("Render Longhorn extraMounts", isOn: $controller.settings.talos.enableLonghornExtraMounts)
             }
             Section("Talos Image Factory") {
                 TextField("Factory URL", text: $controller.settings.talos.factory.baseURL)
@@ -616,8 +760,8 @@ private struct SettingsRootView: View {
                     .foregroundStyle(.secondary)
             }
             Section("Talos Provisioning") {
-                Toggle("Allow overseer-hosted media", isOn: $controller.settings.talos.provisioning.allowOverseerHostedMedia)
-                Toggle("Allow overseer PXE", isOn: $controller.settings.talos.provisioning.allowOverseerPXE)
+                Toggle("Allow deployer-hosted media", isOn: $controller.settings.talos.provisioning.allowOverseerHostedMedia)
+                Toggle("Allow deployer PXE", isOn: $controller.settings.talos.provisioning.allowOverseerPXE)
                 Toggle("Allow external OOB URL", isOn: $controller.settings.talos.provisioning.allowExternalOOBURL)
                 TextField("External OOB media base URL", text: $controller.settings.talos.provisioning.externalOOBMediaBaseURL)
                 TextField("Strategy order", text: Binding(
@@ -628,12 +772,12 @@ private struct SettingsRootView: View {
                             .compactMap { TalosProvisioningStrategy(rawValue: $0.trimmingCharacters(in: .whitespaces)) }
                     }
                 ))
-                Text("After the Ubuntu/deployer node is established, tds can use it for PXE/DHCP/HTTP media, or use direct/external OOB media when that is safer.")
+                Text("After the Ubuntu deployer node is established, tds can use it for PXE/DHCP/HTTP media, or use direct/external OOB media when that is safer.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Section("Bootstrap Media") {
-                Picker("First overseer media delivery", selection: $controller.settings.bootstrapMedia.deliveryMode) {
+                Picker("First deployer media delivery", selection: $controller.settings.bootstrapMedia.deliveryMode) {
                     ForEach(BootstrapMediaDeliveryMode.allCases, id: \.self) { mode in
                         Text(mode.rawValue).tag(mode)
                     }
@@ -646,17 +790,20 @@ private struct SettingsRootView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Section("Overseer Defaults") {
-                TextField("Overseer SSH User", text: $controller.settings.helper.sshUser)
+            Section("Deployer Defaults") {
+                TextField("Deployer SSH User", text: $controller.settings.helper.sshUser)
                 TextField("State Root", text: $controller.settings.helper.stateRoot)
+                TextField("Hostname Suffix", text: $controller.settings.helper.hostnameSuffix)
                 TextField("PXE Address", text: $controller.settings.helper.pxeAddress)
                 TextField("HTTP Bind Address", text: $controller.settings.helper.httpBindAddress)
                 TextField("Media Directory Name", text: $controller.settings.helper.mediaDirectoryName)
                 TextField("PXE Directory Name", text: $controller.settings.helper.pxeDirectoryName)
+                TextField("Package Cache Root", text: $controller.settings.helper.packageCacheRoot)
+                TextField("Pinned talosctl Version", text: $controller.settings.helper.talosctlVersion)
                 Stepper("HTTP Port: \(controller.settings.helper.httpPort)", value: $controller.settings.helper.httpPort, in: 1...65535)
             }
             Section("Safety") {
-                Toggle("Require typed confirmation for overseer reinstall", isOn: $controller.settings.safety.requireTypedConfirmationForHelperReinstall)
+                Toggle("Require typed confirmation for deployer reinstall", isOn: $controller.settings.safety.requireTypedConfirmationForHelperReinstall)
                 TextField("Confirmation Prefix", text: $controller.settings.safety.destructiveConfirmationTextPrefix)
             }
             Button("Save Settings") {
@@ -860,6 +1007,10 @@ private struct ParsedProxyURL {
 
 private func firstNonEmpty(_ values: String...) -> String {
     values.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+}
+
+private func emptyDash(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "-" : value
 }
 
 private func parseKernelModules(_ value: String) -> [TalosKernelModule] {

@@ -72,6 +72,9 @@ public final class DefaultRedfishClient: RedfishClient, @unchecked Sendable {
 
 public protocol HelperHostClient: Sendable {
     func validate(connection: SSHConnection) async throws
+    func setHostname(_ hostname: String, connection: SSHConnection) async throws
+    func planDeployerServices(configuration: HelperMediaServiceConfiguration) -> DeployerServicePlan
+    func prepareDeployerServices(configuration: HelperMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerServicePlan
     func prepareMediaServices(configuration: HelperMediaServiceConfiguration, connection: SSHConnection) async throws -> HelperMediaServicePlan
     func syncState(localDirectory: URL, remoteStateRoot: String, connection: SSHConnection) async throws
 }
@@ -87,6 +90,109 @@ public final class DefaultHelperHostClient: HelperHostClient, @unchecked Sendabl
         try await router.validateAccess(connection)
     }
 
+    public func setHostname(_ hostname: String, connection: SSHConnection) async throws {
+        let escaped = shellEscape(hostname)
+        _ = try await router.run(connection: connection, remoteCommand: "sudo hostnamectl set-hostname \(escaped) || hostnamectl set-hostname \(escaped)")
+    }
+
+    public func planDeployerServices(configuration: HelperMediaServiceConfiguration) -> DeployerServicePlan {
+        let packages = ["ca-certificates", "curl", "dnsmasq", "python3", "openssh-client"]
+        let talosctlVersion = configuration.talosctlVersion.isEmpty ? "configured Talos version" : configuration.talosctlVersion
+        return DeployerServicePlan(
+            packages: packages,
+            onlineInstallCommands: [
+                "apt-get update",
+                "apt-get install -y \(packages.joined(separator: " "))",
+                "install pinned talosctl \(talosctlVersion) into \(configuration.stateRoot)/bin/talosctl",
+            ],
+            cacheFallbackCommands: [
+                "dpkg -i \(configuration.packageCacheRoot)/apt/*.deb || apt-get -f install -y",
+                "install cached talosctl from \(configuration.packageCacheRoot)/talosctl/",
+            ],
+            systemdUnits: [
+                "tds-media-http.service",
+                "tds-dnsmasq.service",
+            ],
+            notes: [
+                "Use online package/tool sources first.",
+                "Fall back to the tds-managed cache when the deployer has limited internet access.",
+            ]
+        )
+    }
+
+    public func prepareDeployerServices(configuration: HelperMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerServicePlan {
+        let plan = planDeployerServices(configuration: configuration)
+        let packageList = plan.packages.joined(separator: " ")
+        let binRoot = "\(configuration.stateRoot)/bin"
+        let dnsmasqRoot = "\(configuration.stateRoot)/dnsmasq"
+        let mediaRoot = configuration.mediaRoot
+        let logRoot = "\(configuration.stateRoot)/logs"
+        let cacheRoot = configuration.packageCacheRoot
+        let talosctlVersion = configuration.talosctlVersion.trimmingCharacters(in: .whitespacesAndNewlines)
+        let remoteCommand = """
+        set -e
+        sudo mkdir -p \(shellEscape(binRoot)) \(shellEscape(dnsmasqRoot)) \(shellEscape(mediaRoot)) \(shellEscape(logRoot)) \(shellEscape(cacheRoot))/apt \(shellEscape(cacheRoot))/talosctl
+        sudo chown -R "$(id -un):$(id -gn)" \(shellEscape(configuration.stateRoot)) \(shellEscape(cacheRoot)) || true
+        if command -v apt-get >/dev/null 2>&1; then
+          sudo apt-get update || true
+          sudo apt-get install -y \(packageList) || sudo dpkg -i \(shellEscape(cacheRoot))/apt/*.deb || true
+        fi
+        TALOSCTL_VERSION=\(shellEscape(talosctlVersion))
+        ARCH="$(uname -m)"
+        case "$ARCH" in
+          x86_64|amd64) TDS_TALOS_ARCH=amd64 ;;
+          aarch64|arm64) TDS_TALOS_ARCH=arm64 ;;
+          *) TDS_TALOS_ARCH=amd64 ;;
+        esac
+        if [ -n "$TALOSCTL_VERSION" ] && command -v curl >/dev/null 2>&1; then
+          curl -fsSL -o \(shellEscape("\(binRoot)/talosctl")) "https://github.com/siderolabs/talos/releases/download/${TALOSCTL_VERSION}/talosctl-linux-${TDS_TALOS_ARCH}" || true
+          chmod 0755 \(shellEscape("\(binRoot)/talosctl")) || true
+        elif [ -x \(shellEscape("\(cacheRoot)/talosctl/talosctl")) ]; then
+          cp \(shellEscape("\(cacheRoot)/talosctl/talosctl")) \(shellEscape("\(binRoot)/talosctl"))
+          chmod 0755 \(shellEscape("\(binRoot)/talosctl"))
+        fi
+        cat > \(shellEscape("\(dnsmasqRoot)/tds-dnsmasq.conf")) <<'EOF'
+        # Managed by tds. Final DHCP/PXE ranges are rendered per deployment run.
+        port=0
+        log-dhcp
+        enable-tftp
+        EOF
+        cat > /tmp/tds-media-http.service <<'EOF'
+        [Unit]
+        Description=TDS range-capable media HTTP service
+        After=network-online.target
+
+        [Service]
+        Type=simple
+        ExecStart=\(binRoot)/tds-range-http-server.py --bind \(configuration.httpBindAddress) --port \(configuration.httpPort) --directory \(mediaRoot)
+        Restart=on-failure
+        StandardOutput=append:\(logRoot)/media-http.log
+        StandardError=append:\(logRoot)/media-http.log
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        cat > /tmp/tds-dnsmasq.service <<'EOF'
+        [Unit]
+        Description=TDS dnsmasq PXE service
+        After=network-online.target
+
+        [Service]
+        Type=simple
+        ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=\(dnsmasqRoot)/tds-dnsmasq.conf
+        Restart=on-failure
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        sudo mv /tmp/tds-media-http.service /etc/systemd/system/tds-media-http.service || true
+        sudo mv /tmp/tds-dnsmasq.service /etc/systemd/system/tds-dnsmasq.service || true
+        sudo systemctl daemon-reload || true
+        """
+        _ = try await router.run(connection: connection, remoteCommand: remoteCommand)
+        return plan
+    }
+
     public func prepareMediaServices(configuration: HelperMediaServiceConfiguration, connection: SSHConnection) async throws -> HelperMediaServicePlan {
         let mediaRoot = configuration.mediaRoot
         let pxeRoot = configuration.pxeRoot
@@ -100,7 +206,8 @@ public final class DefaultHelperHostClient: HelperHostClient, @unchecked Sendabl
 
         let remoteCommand = """
         set -e
-        mkdir -p \(shellEscape(mediaRoot)) \(shellEscape(pxeRoot)) \(shellEscape(binRoot)) \(shellEscape(logRoot)) \(shellEscape(runRoot))
+        sudo mkdir -p \(shellEscape(mediaRoot)) \(shellEscape(pxeRoot)) \(shellEscape(binRoot)) \(shellEscape(logRoot)) \(shellEscape(runRoot))
+        sudo chown -R "$(id -un):$(id -gn)" \(shellEscape(configuration.stateRoot)) || true
         cat > \(shellEscape(scriptPath)) <<'PY'
         #!/usr/bin/env python3
         import argparse
@@ -217,7 +324,7 @@ public final class DefaultHelperHostClient: HelperHostClient, @unchecked Sendabl
             httpPort: configuration.httpPort,
             serviceCommand: startCommand,
             notes: [
-                "tds prepared the media/PXE directories and range-capable HTTP helper script on the selected existing deployer/overseer.",
+                "tds prepared the media/PXE directories and range-capable HTTP service on the selected deployer.",
                 "Start the service after media is staged, or let a deployment runner start it when executing the install.",
             ]
         )
@@ -231,6 +338,118 @@ public final class DefaultHelperHostClient: HelperHostClient, @unchecked Sendabl
 
 public protocol TalosBuilder: Sendable {
     func buildArtifacts(for spec: DeploymentSpec, plan: DeploymentPlan, in directory: URL) async throws -> URL
+}
+
+public struct DeployerNaming: Sendable {
+    public init() {}
+
+    public func hostname(for device: DiscoveredDevice, suffix: String = "") -> String {
+        let number = deviceNumber(for: device)
+        let cleanSuffix = sanitize(suffix)
+        return cleanSuffix.isEmpty ? "\(number)-deployer" : "\(number)-deployer-\(cleanSuffix)"
+    }
+
+    private func deviceNumber(for device: DiscoveredDevice) -> String {
+        let idDigits = device.id.filter(\.isNumber)
+        if !idDigits.isEmpty {
+            return String(idDigits)
+        }
+        let nameDigits = device.name.prefix(while: \.isNumber)
+        return nameDigits.isEmpty ? device.id : String(nameDigits)
+    }
+
+    private func sanitize(_ value: String) -> String {
+        value
+            .lowercased()
+            .map { character in
+                character.isLetter || character.isNumber ? character : "-"
+            }
+            .reduce(into: "") { partial, character in
+                if character == "-", partial.last == "-" { return }
+                partial.append(character)
+            }
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+}
+
+public struct StaticNetworkPlanner: Sendable {
+    public init() {}
+
+    public func validate(spec: DeploymentSpec) -> [StaticNetworkValidationResult] {
+        spec.nodes
+            .filter { $0.assignment.role == .controlplane || $0.assignment.role == .worker }
+            .map { validate(node: $0) }
+    }
+
+    public func validate(node: DeploymentNodeSpec) -> StaticNetworkValidationResult {
+        var config = deriveConfig(for: node)
+        var errors: [String] = []
+        var warnings: [String] = []
+
+        if node.assignment.networkSource == .unavailable {
+            errors.append("No network source is available. Provide manual static networking before deployment.")
+        }
+
+        if config.managementInterface.isEmpty {
+            errors.append("Missing management interface.")
+        }
+        if config.managementAddressCIDR.isEmpty {
+            errors.append("Missing static management address with CIDR from Core, capture, or manual input.")
+        } else if !config.managementAddressCIDR.contains("/") {
+            errors.append("Static management address must include CIDR prefix.")
+        }
+        if config.gateway.isEmpty {
+            errors.append("Missing default gateway.")
+        } else if !config.routes.contains(where: { $0.to == "default" }) {
+            config.routes.insert(StaticNetworkRoute(to: "default", via: config.gateway), at: 0)
+        }
+        if config.nameservers.isEmpty {
+            errors.append("Missing DNS nameserver list.")
+        }
+
+        if !node.device.privateIP.isEmpty {
+            warnings.append("Using Core private IP \(node.device.privateIP) as preferred Talos management IP.")
+        } else if !node.device.primaryIP.isEmpty {
+            warnings.append("Core private IP missing; using primary IP \(node.device.primaryIP) as Talos management IP.")
+        }
+
+        return StaticNetworkValidationResult(
+            deviceID: node.device.id,
+            isValid: errors.isEmpty,
+            config: config,
+            errors: errors,
+            warnings: warnings
+        )
+    }
+
+    public func config(for node: DeploymentNodeSpec) -> StaticNetworkConfig {
+        validate(node: node).config
+    }
+
+    private func deriveConfig(for node: DeploymentNodeSpec) -> StaticNetworkConfig {
+        let manual = node.assignment.staticNetwork
+        let preferredIP = firstNonEmptyStatic(node.device.privateIP, node.device.primaryIP)
+        let matchingInterface = interface(on: node.device, containing: preferredIP) ?? node.device.networkInterfaces.first
+        let matchingAddress = matchingInterface?.addresses.first(where: { address in
+            preferredIP.isEmpty || address == preferredIP || address.hasPrefix("\(preferredIP)/")
+        }) ?? matchingInterface?.addresses.first ?? ""
+
+        var config = manual
+        if config.managementInterface.isEmpty {
+            config.managementInterface = matchingInterface?.name ?? ""
+        }
+        if config.managementAddressCIDR.isEmpty {
+            config.managementAddressCIDR = matchingAddress
+        }
+        return config
+    }
+
+    private func interface(on device: DiscoveredDevice, containing ip: String) -> NetworkInterface? {
+        guard !ip.isEmpty else { return nil }
+        return device.networkInterfaces.first { interface in
+            interface.addresses.contains { $0 == ip || $0.hasPrefix("\(ip)/") }
+        }
+    }
 }
 
 public struct TalosFactoryClient: Sendable {
@@ -279,7 +498,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
 
         let nodesDirectory = directory.appending(path: "node-patches", directoryHint: .isDirectory)
         try fileManager.createDirectory(at: nodesDirectory, withIntermediateDirectories: true)
-        for node in spec.nodes where node.assignment.role != .unassigned {
+        for node in spec.nodes where node.assignment.role == .controlplane || node.assignment.role == .worker {
             let yaml = renderNodePatch(node: node, spec: spec)
             try yaml.write(
                 to: nodesDirectory.appending(path: "\(node.device.name).yaml"),
@@ -301,30 +520,34 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
     }
 
     private func renderNodePatch(node: DeploymentNodeSpec, spec: DeploymentSpec) -> String {
-        let addresses = node.device.networkInterfaces.first?.addresses ?? (node.device.primaryIP.isEmpty ? [] : [node.device.primaryIP])
-        let renderedAddresses = addresses.map { "      - \($0)" }.joined(separator: "\n")
-        let interfaceName = node.device.networkInterfaces.first?.name ?? "eth0"
-        let moduleBlock = renderKernelModules(spec.talosKernelModules)
-        let extraKernelArgsBlock = renderExtraKernelArgs(spec.talosFactory.extraKernelArgs)
+        let staticConfig = StaticNetworkPlanner().config(for: node)
+        let interfaceName = firstNonEmptyStatic(staticConfig.managementInterface, node.device.networkInterfaces.first?.name ?? "eth0")
         let installerImage = TalosFactoryClient().artifactURLs(settings: spec.talosFactory, talosVersion: spec.talosVersion).installerImage
-        return """
-        machine:
-          type: \(node.assignment.role == .worker ? "worker" : "controlplane")
-        \(moduleBlock)
-          network:
-            hostname: \(node.device.name)
-            interfaces:
-              - interface: \(interfaceName)
-        \(renderedAddresses.isEmpty ? "" : "    addresses:\n\(renderedAddresses)\n")
-          install:
-            disk: \(node.device.installDisk.isEmpty ? "/dev/sda" : node.device.installDisk)
-            image: \(installerImage)
-        \(extraKernelArgsBlock)
-        """
+        var lines = [
+            "machine:",
+            "  type: \(node.assignment.role == .worker ? "worker" : "controlplane")",
+        ]
+        lines.append(contentsOf: renderKernelModules(spec.talosKernelModules))
+        lines.append(contentsOf: renderLonghornExtraMounts(enabled: spec.enableLonghornExtraMounts))
+        lines.append("  network:")
+        lines.append("    hostname: \(node.device.name)")
+        lines.append(contentsOf: renderNameservers(staticConfig))
+        lines.append("    interfaces:")
+        lines.append("      - interface: \(interfaceName)")
+        if !staticConfig.managementAddressCIDR.isEmpty {
+            lines.append("        addresses:")
+            lines.append("          - \(staticConfig.managementAddressCIDR)")
+        }
+        lines.append(contentsOf: renderRoutes(staticConfig.routes))
+        lines.append("  install:")
+        lines.append("    disk: \(node.device.installDisk.isEmpty ? "/dev/sda" : node.device.installDisk)")
+        lines.append("    image: \(installerImage)")
+        lines.append(contentsOf: renderExtraKernelArgs(spec.talosFactory.extraKernelArgs))
+        return lines.joined(separator: "\n") + "\n"
     }
 
-    private func renderKernelModules(_ modules: [TalosKernelModule]) -> String {
-        guard !modules.isEmpty else { return "" }
+    private func renderKernelModules(_ modules: [TalosKernelModule]) -> [String] {
+        guard !modules.isEmpty else { return [] }
         var lines = ["  kernel:", "    modules:"]
         for module in modules {
             lines.append("      - name: \(module.name)")
@@ -333,12 +556,52 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
                 lines.append(contentsOf: module.parameters.map { "          - \(yamlScalar($0))" })
             }
         }
-        return lines.joined(separator: "\n")
+        return lines
     }
 
-    private func renderExtraKernelArgs(_ args: [String]) -> String {
-        guard !args.isEmpty else { return "" }
-        return "    extraKernelArgs:\n" + args.map { "      - \(yamlScalar($0))" }.joined(separator: "\n")
+    private func renderExtraKernelArgs(_ args: [String]) -> [String] {
+        guard !args.isEmpty else { return [] }
+        return ["    extraKernelArgs:"] + args.map { "      - \(yamlScalar($0))" }
+    }
+
+    private func renderRoutes(_ routes: [StaticNetworkRoute]) -> [String] {
+        guard !routes.isEmpty else { return [] }
+        var lines = ["        routes:"]
+        for route in routes {
+            lines.append("          - network: \(route.to)")
+            lines.append("            gateway: \(route.via)")
+            if let metric = route.metric {
+                lines.append("            metric: \(metric)")
+            }
+        }
+        return lines
+    }
+
+    private func renderNameservers(_ config: StaticNetworkConfig) -> [String] {
+        guard !config.nameservers.isEmpty || !config.searchDomains.isEmpty else { return [] }
+        var lines = ["    nameservers:"]
+        if !config.nameservers.isEmpty {
+            lines.append(contentsOf: config.nameservers.map { "      - \($0)" })
+        }
+        if !config.searchDomains.isEmpty {
+            lines.append("    searchDomains:")
+            lines.append(contentsOf: config.searchDomains.map { "      - \($0)" })
+        }
+        return lines
+    }
+
+    private func renderLonghornExtraMounts(enabled: Bool) -> [String] {
+        guard enabled else { return [] }
+        return [
+            "  extraMounts:",
+            "    - destination: /var/lib/longhorn",
+            "      type: bind",
+            "      source: /var/lib/longhorn",
+            "      options:",
+            "        - bind",
+            "        - rshared",
+            "        - rw",
+        ]
     }
 
     private func renderClusterFile(spec: DeploymentSpec) -> String {
@@ -360,6 +623,10 @@ private func yamlScalar(_ value: String) -> String {
     return "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
 }
 
+private func firstNonEmptyStatic(_ values: String...) -> String {
+    values.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+}
+
 public protocol Provisioner: Sendable {
     func prepare(plan: DeploymentPlan) async throws
 }
@@ -377,23 +644,30 @@ public enum DeploymentPlannerError: Error, LocalizedError {
     case existingMediaHostNotExplicitlyAllowed
     case pxeCannotBootstrapFirstOverseer
     case missingOOBReachableMediaURL
+    case staticNetworkInvalid([StaticNetworkValidationResult])
 
     public var errorDescription: String? {
         switch self {
         case .missingHelper:
-            return "Exactly one deployer/overseer must be selected."
+            return "Exactly one deployer must be selected."
         case .multipleHelpers:
-            return "Only one deployer/overseer may be selected."
+            return "Only one deployer may be selected."
         case .invalidControlPlaneCount:
             return "The control plane count must be either 1 or 3."
         case .missingHelperConfirmation(let name):
-            return "Typed confirmation is required before reinstalling deployer/overseer \(name)."
+            return "Typed confirmation is required before reinstalling deployer \(name)."
         case .existingMediaHostNotExplicitlyAllowed:
             return "Existing OS media host delivery is disabled. Use operator local media for greenfield installs, or explicitly allow an existing media host in Settings."
         case .pxeCannotBootstrapFirstOverseer:
-            return "PXE cannot bootstrap the first deployer/overseer unless an external PXE service already exists."
+            return "PXE cannot bootstrap the first deployer unless an external PXE service already exists."
         case .missingOOBReachableMediaURL:
             return "OOB-reachable URL media delivery requires an external media base URL in Settings."
+        case .staticNetworkInvalid(let results):
+            let failures = results
+                .filter { !$0.isValid }
+                .map { "\($0.deviceID): \($0.errors.joined(separator: "; "))" }
+                .joined(separator: " | ")
+            return "Static networking is incomplete: \(failures)"
         }
     }
 }
@@ -406,12 +680,16 @@ public struct DeploymentPlanner: Sendable {
     }
 
     public func makePlan(spec: DeploymentSpec) throws -> DeploymentPlan {
-        let helpers = spec.nodes.filter { $0.assignment.role == .helper }
+        let helpers = spec.nodes.filter { $0.assignment.role.isDeployer }
         guard !helpers.isEmpty else { throw DeploymentPlannerError.missingHelper }
         guard helpers.count == 1 else { throw DeploymentPlannerError.multipleHelpers }
         let controlPlanes = spec.nodes.filter { $0.assignment.role == .controlplane }
         guard controlPlanes.count == 1 || controlPlanes.count == 3 else {
             throw DeploymentPlannerError.invalidControlPlaneCount
+        }
+        let networkValidation = StaticNetworkPlanner().validate(spec: spec)
+        guard networkValidation.allSatisfy(\.isValid) else {
+            throw DeploymentPlannerError.staticNetworkInvalid(networkValidation)
         }
 
         let helperNode = helpers[0]
@@ -433,7 +711,7 @@ public struct DeploymentPlanner: Sendable {
                 )
             }
 
-        guard let helper = planned.first(where: { $0.assignment.role == .helper }) else {
+        guard let helper = planned.first(where: { $0.assignment.role.isDeployer }) else {
             throw DeploymentPlannerError.missingHelper
         }
 
@@ -457,16 +735,16 @@ public struct DeploymentPlanner: Sendable {
         if helper.assignment.shouldInstallOS && helper.assignment.helperMode == .bootstrap {
             phases.append(
                 DeploymentPhase(
-                    title: "Bootstrap Deployer/Overseer",
-                    steps: bootstrapOverseerSteps(helper: helper, tempPath: tempPath, remotePath: remotePath)
+                    title: "Bootstrap Deployer",
+                    steps: bootstrapDeployerSteps(helper: helper, tempPath: tempPath, remotePath: remotePath)
                 )
             )
         } else {
             phases.append(
                 DeploymentPhase(
-                    title: "Prepare Existing Deployer/Overseer",
+                    title: "Prepare Existing Deployer",
                     steps: [
-                        "Validate SSH access to deployer/overseer \(helper.device.name).",
+                        "Validate SSH access to deployer \(helper.device.name).",
                         "Create durable state root at \(remotePath).",
                         "tds prepares media and PXE directories plus a range-capable HTTP media service on the selected existing device.",
                         "Stage generated Talos/Ubuntu media through tds before booting any dependent nodes.",
@@ -483,7 +761,7 @@ public struct DeploymentPlanner: Sendable {
                     provisioningStep(for: $0, talosArtifacts: talosArtifacts)
                 } + [
                     "Generate machine configs with preserved/manual network settings and selected kernel modules.",
-                    "Run talosctl from the deployer/overseer to apply configs, bootstrap etcd, fetch kubeconfig, and verify cluster health.",
+                    "Run talosctl from the deployer to apply configs, bootstrap etcd, fetch kubeconfig, and verify cluster health.",
                     "Persist generated state under \(remotePath).",
                 ]
             )
@@ -496,13 +774,14 @@ public struct DeploymentPlanner: Sendable {
             installs: planned,
             phases: phases,
             talosArtifacts: talosArtifacts,
+            networkValidation: networkValidation,
             tempStateDirectory: tempPath,
             durableStateDirectory: remotePath
         )
     }
 
     private func selectInstallMethod(for node: DeploymentNodeSpec, spec: DeploymentSpec) -> InstallMethod {
-        if node.assignment.role == .helper && node.assignment.helperMode == .bootstrap && node.assignment.shouldInstallOS {
+        if node.assignment.role.isDeployer && node.assignment.helperMode == .bootstrap && node.assignment.shouldInstallOS {
             switch settings.bootstrapMedia.deliveryMode {
             case .operatorLocalMedia:
                 return .operatorLocalMedia
@@ -519,10 +798,10 @@ public struct DeploymentPlanner: Sendable {
         case .pxe:
             return .pxe
         case .automatic:
-            if node.assignment.role == .helper && node.assignment.shouldInstallOS {
+            if node.assignment.role.isDeployer && node.assignment.shouldInstallOS {
                 return .virtualMedia
             }
-            if node.assignment.role != .helper {
+            if !node.assignment.role.isDeployer {
                 return selectAutomaticTalosMethod(for: node, spec: spec)
             }
             if let oob = node.device.oob, oob.supportsVirtualMedia == true {
@@ -564,20 +843,20 @@ public struct DeploymentPlanner: Sendable {
     private func provisioningStep(for install: PlannedDeviceInstall, talosArtifacts: TalosFactoryArtifacts) -> String {
         switch install.method {
         case .operatorLocalMedia:
-            return "Provision \(install.device.name) as \(install.assignment.role.rawValue) using operator-attached local media through tds OOB WebView."
+            return "Provision \(install.device.name) as \(install.assignment.role.displayName) using operator-attached local media through tds OOB WebView."
         case .virtualMedia:
-            return "Provision \(install.device.name) as \(install.assignment.role.rawValue) using direct OOB virtual media with \(talosArtifacts.isoURL)."
+            return "Provision \(install.device.name) as \(install.assignment.role.displayName) using direct OOB virtual media with \(talosArtifacts.isoURL)."
         case .bootURL:
-            return "Provision \(install.device.name) as \(install.assignment.role.rawValue) using OOB boot URL media; prefer overseer-hosted ISO, otherwise configured external OOB URL."
+            return "Provision \(install.device.name) as \(install.assignment.role.displayName) using OOB boot URL media; prefer deployer-hosted ISO, otherwise configured external OOB URL."
         case .pxe:
-            return "Provision \(install.device.name) as \(install.assignment.role.rawValue) using overseer PXE/DHCP/TFTP/HTTP services."
+            return "Provision \(install.device.name) as \(install.assignment.role.displayName) using deployer PXE/DHCP/TFTP/HTTP services."
         case .stagedOnly:
-            return "Stage config for \(install.device.name) as \(install.assignment.role.rawValue) without booting it."
+            return "Stage config for \(install.device.name) as \(install.assignment.role.displayName) without booting it."
         }
     }
 
     private func validateBootstrapMediaDelivery(for helperNode: DeploymentNodeSpec) throws {
-        guard helperNode.assignment.role == .helper,
+        guard helperNode.assignment.role.isDeployer,
               helperNode.assignment.helperMode == .bootstrap,
               helperNode.assignment.shouldInstallOS
         else { return }
@@ -598,11 +877,11 @@ public struct DeploymentPlanner: Sendable {
         }
     }
 
-    private func bootstrapOverseerSteps(helper: PlannedDeviceInstall, tempPath: String, remotePath: String) -> [String] {
+    private func bootstrapDeployerSteps(helper: PlannedDeviceInstall, tempPath: String, remotePath: String) -> [String] {
         let commonTail = [
             "Install \(helper.device.name) first and wait for SSH reachability.",
             "Move durable deployment state from rax to \(remotePath).",
-            "Only after the deployer/overseer is online may PXE-dependent control-plane and worker nodes proceed.",
+            "Only after the deployer is online may PXE-dependent control-plane and worker nodes proceed.",
         ]
 
         switch settings.bootstrapMedia.deliveryMode {
@@ -626,7 +905,7 @@ public struct DeploymentPlanner: Sendable {
             ] + commonTail
         case .pxeAfterOverseerOnline:
             return [
-                "PXE is deferred until after the deployer/overseer is installed.",
+                "PXE is deferred until after the deployer is installed.",
             ] + commonTail
         }
     }
@@ -636,6 +915,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
     private let settings: AppSettings
     private let builder: TalosBuilder
     private let helperHostClient: HelperHostClient
+    private let coreClient: CoreClient?
     private let stateStore: DeploymentStateStore
     private let fileManager: FileManager
 
@@ -643,12 +923,14 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         settings: AppSettings,
         builder: TalosBuilder = DefaultTalosBuilder(),
         helperHostClient: HelperHostClient = DefaultHelperHostClient(),
+        coreClient: CoreClient? = nil,
         stateStore: DeploymentStateStore = DeploymentStateStore(),
         fileManager: FileManager = .default
     ) {
         self.settings = settings
         self.builder = builder
         self.helperHostClient = helperHostClient
+        self.coreClient = coreClient
         self.stateStore = stateStore
         self.fileManager = fileManager
     }
@@ -684,10 +966,113 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         )
         var updated = state
         updated.helperSynchronized = true
-        updated.events.append(DeploymentEvent(message: "Prepared existing deployer/overseer media services on \(connection.host) at \(mediaPlan.mediaRoot)."))
-        updated.events.append(DeploymentEvent(message: "Deployment state synchronized to deployer/overseer \(connection.host)."))
+        updated.events.append(DeploymentEvent(message: "Prepared deployer media services on \(connection.host) at \(mediaPlan.mediaRoot)."))
+        updated.events.append(DeploymentEvent(message: "Deployment state synchronized to deployer \(connection.host)."))
         _ = try stateStore.save(updated, to: localDirectory)
         return updated
+    }
+
+    public func run(
+        state: DeploymentState,
+        connection: SSHConnection? = nil,
+        dryRun: Bool = true
+    ) async throws -> TalosExecutionRun {
+        let deployer = state.plan.helper
+        let hostname = DeployerNaming().hostname(for: deployer.device, suffix: settings.helper.hostnameSuffix)
+        let serviceConfiguration = HelperMediaServiceConfiguration(defaults: settings.helper)
+        var updated = state
+        var servicePlan = helperHostClient.planDeployerServices(configuration: serviceConfiguration)
+        let renameResult: CoreRenameResult?
+
+        if dryRun {
+            renameResult = CoreRenameResult(
+                requestedName: hostname,
+                didRename: false,
+                warning: "Dry run: Core rename was planned but not executed."
+            )
+            updated.events.append(DeploymentEvent(message: "Dry run planned deployer hostname \(hostname)."))
+        } else {
+            if let coreClient {
+                renameResult = await coreClient.renameDevice(
+                    accountNumber: state.spec.accountNumber,
+                    deviceID: deployer.device.id,
+                    newName: hostname
+                )
+            } else {
+                renameResult = CoreRenameResult(
+                    requestedName: hostname,
+                    didRename: false,
+                    warning: "No Core client was configured; skipped Core rename."
+                )
+            }
+            if let renameResult, !renameResult.warning.isEmpty {
+                updated.events.append(DeploymentEvent(message: "Core rename warning: \(renameResult.warning)"))
+            } else if renameResult?.didRename == true {
+                updated.events.append(DeploymentEvent(message: "Core device rename requested: \(hostname)."))
+            }
+
+            guard let connection else {
+                throw DeploymentCoordinatorError.missingDeployerConnection
+            }
+            try await helperHostClient.validate(connection: connection)
+            try await helperHostClient.setHostname(hostname, connection: connection)
+            servicePlan = try await helperHostClient.prepareDeployerServices(
+                configuration: serviceConfiguration,
+                connection: connection
+            )
+            updated = try await synchronizeToHelper(updated, connection: connection)
+            updated.events.append(DeploymentEvent(message: "Deployer services prepared on \(connection.host)."))
+        }
+
+        let localDirectory = URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)
+        _ = try stateStore.save(updated, to: localDirectory)
+
+        return TalosExecutionRun(
+            state: updated,
+            deployerHostname: hostname,
+            coreRename: renameResult,
+            deployerServices: servicePlan,
+            networkValidation: state.plan.networkValidation,
+            dryRun: dryRun
+        )
+    }
+
+    public func verify(state: DeploymentState) -> ClusterHealthResult {
+        let deployerPath = state.plan.durableStateDirectory
+        let controlPlanes = state.spec.nodes
+            .filter { $0.assignment.role == .controlplane }
+            .map(\.device.name)
+            .joined(separator: ",")
+        let workers = state.spec.nodes
+            .filter { $0.assignment.role == .worker }
+            .map(\.device.name)
+            .joined(separator: ",")
+        return ClusterHealthResult(
+            talosNodesReady: false,
+            kubernetesReady: false,
+            checkedCommands: [
+                "cd \(deployerPath)",
+                "talosctl health --nodes \(controlPlanes)",
+                "kubectl --kubeconfig kubeconfig get nodes -o wide",
+                "kubectl --kubeconfig kubeconfig get pods -A",
+            ],
+            warnings: [
+                "Verification is planned until tds has an active deployer SSH session.",
+                "Control planes: \(controlPlanes.isEmpty ? "none" : controlPlanes)",
+                "Workers: \(workers.isEmpty ? "none" : workers)",
+            ]
+        )
+    }
+}
+
+public enum DeploymentCoordinatorError: Error, LocalizedError {
+    case missingDeployerConnection
+
+    public var errorDescription: String? {
+        switch self {
+        case .missingDeployerConnection:
+            return "A deployer SSH connection is required to execute a non-dry-run deployment."
+        }
     }
 }
 
@@ -981,6 +1366,7 @@ public final class AppController: ObservableObject {
             talosFactory: settings.talos.factory,
             talosProvisioning: settings.talos.provisioning,
             talosKernelModules: settings.talos.kernelModules,
+            enableLonghornExtraMounts: settings.talos.enableLonghornExtraMounts,
             nodes: clusterEligibleDevices.compactMap { device in
                 guard let assignment = assignments[device.id], assignment.role != .unassigned else {
                     return nil
@@ -1080,7 +1466,7 @@ public final class AppController: ObservableObject {
 
         return UbuntuInstallSpec(
             accountNumber: accountNumber,
-            deviceID: clusterEligibleDevices.first(where: { binding(for: $0).role == .helper })?.id ?? "",
+            deviceID: clusterEligibleDevices.first(where: { binding(for: $0).role.isDeployer })?.id ?? "",
             sourceISOPath: ubuntuSourceISOPath.expandingTildeInPath(),
             outputISOPath: ubuntuOutputISOPath.expandingTildeInPath(),
             workDirectoryPath: ubuntuWorkDirectoryPath.expandingTildeInPath(),

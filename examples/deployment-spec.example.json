@@ -7,19 +7,19 @@
   "nodes" : [
     {
       "assignment" : {
-        "deviceID" : "helper-1",
+        "deviceID" : "123456",
         "helperMode" : "bootstrap",
         "preferredInstall" : "automatic",
-        "role" : "helper",
+        "role" : "deployer",
         "shouldInstallOS" : true,
-        "typedConfirmation" : "INSTALL helper-node"
+        "typedConfirmation" : "INSTALL 123456-deployer-node"
       },
       "device" : {
         "accountNumber" : "0000000",
         "credentialReference" : "",
-        "id" : "helper-1",
+        "id" : "123456",
         "installDisk" : "/dev/sda",
-        "name" : "helper-node",
+        "name" : "123456-deployer-node",
         "networkInterfaces" : [
           {
             "addresses" : [
@@ -33,12 +33,12 @@
         ],
         "oob" : {
           "address" : "192.168.50.10",
-          "credentialReference" : "helper-oob",
+          "credentialReference" : "deployer-oob",
           "username" : "Administrator",
           "vendor" : "ilo"
         },
         "primaryIP" : "192.168.10.10",
-        "privateIP" : "",
+        "privateIP" : "192.168.10.10",
         "serviceTag" : ""
       }
     },
@@ -46,9 +46,25 @@
       "assignment" : {
         "deviceID" : "cp-1",
         "helperMode" : "existing",
+        "networkSource" : "core",
         "preferredInstall" : "automatic",
         "role" : "controlplane",
         "shouldInstallOS" : true,
+        "staticNetwork" : {
+          "bridges" : [],
+          "gateway" : "192.168.10.1",
+          "managementAddressCIDR" : "192.168.10.11/24",
+          "managementInterface" : "eno1",
+          "nameservers" : [
+            "8.8.8.8",
+            "1.1.1.1"
+          ],
+          "routes" : [],
+          "searchDomains" : [
+            "example.com"
+          ],
+          "vlans" : []
+        },
         "typedConfirmation" : ""
       },
       "device" : {
@@ -76,7 +92,7 @@
           "vendor" : "ilo"
         },
         "primaryIP" : "192.168.10.11",
-        "privateIP" : "",
+        "privateIP" : "192.168.10.11",
         "serviceTag" : ""
       }
     }

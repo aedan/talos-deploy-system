@@ -211,7 +211,7 @@ struct TalosDeployCLI {
             try await handleUbuntuBuildISO(arguments: remaining)
         case "validate-iso":
             try await handleUbuntuValidateISO(arguments: remaining)
-        case "bootstrap-overseer", "bootstrap-helper", "local-media-plan":
+        case "bootstrap-deployer", "bootstrap-overseer", "bootstrap-helper", "local-media-plan":
             try await handleUbuntuBootstrapHelper(arguments: remaining)
         case "network-plan":
             try handleUbuntuNetworkPlan(arguments: remaining)
@@ -349,6 +349,29 @@ struct TalosDeployCLI {
     }
 
     private static func handleDeploy(arguments: [String]) async throws {
+        if let subcommand = arguments.first, !subcommand.hasPrefix("--") {
+            let remaining = Array(arguments.dropFirst())
+            switch subcommand {
+            case "plan":
+                try await handlePlan(arguments: remaining)
+            case "run":
+                try await handleDeployRun(arguments: remaining)
+            case "resume":
+                try handleResume(arguments: remaining)
+            case "verify":
+                try handleDeployVerify(arguments: remaining)
+            case "deployer":
+                try await handleDeployDeployer(arguments: remaining)
+            default:
+                printUsage()
+            }
+            return
+        }
+
+        try await handleDeployLegacy(arguments: arguments)
+    }
+
+    private static func handleDeployLegacy(arguments: [String]) async throws {
         let options = parseOptions(arguments)
         let spec = try loadSpec(from: options["spec"] ?? "examples/deployment-spec.example.json")
         let settings = (try? SettingsController().load()) ?? AppSettings()
@@ -357,13 +380,7 @@ struct TalosDeployCLI {
         let coordinator = DeploymentCoordinator(settings: settings)
         let state = try await coordinator.stage(spec: spec, at: paths.stateDirectory)
 
-        if let helperHost = options["helper-host"], let helperUser = options["helper-user"] {
-            let connection = SSHConnection(
-                host: helperHost,
-                user: helperUser,
-                port: Int(options["helper-port"] ?? "22") ?? 22,
-                identityFile: options["identity-file"] ?? ""
-            )
+        if let connection = deployerConnection(options: options) {
             let synchronized = try await coordinator.synchronizeToHelper(state, connection: connection)
             let data = try JSONEncoder.pretty.encode(synchronized)
             print(String(decoding: data, as: UTF8.self))
@@ -374,12 +391,66 @@ struct TalosDeployCLI {
         print(String(decoding: data, as: UTF8.self))
     }
 
+    private static func handleDeployRun(arguments: [String]) async throws {
+        let options = parseOptions(arguments)
+        let spec = try loadSpec(from: options["spec"] ?? "examples/deployment-spec.example.json")
+        let settings = (try? SettingsController().load()) ?? AppSettings()
+        let paths = AppPaths()
+        try paths.ensureExists()
+        let coreClient = ConfiguredCoreClient(
+            coreSettings: settings.core,
+            hammertimeSettings: settings.hammertime
+        )
+        let coordinator = DeploymentCoordinator(settings: settings, coreClient: coreClient)
+        let state = try await coordinator.stage(spec: spec, at: paths.stateDirectory)
+        let dryRun = parseBool(options["dry-run"]) ?? !(parseBool(options["execute"]) ?? false)
+        let run = try await coordinator.run(
+            state: state,
+            connection: deployerConnection(options: options),
+            dryRun: dryRun
+        )
+        let data = try JSONEncoder.pretty.encode(run)
+        print(String(decoding: data, as: UTF8.self))
+    }
+
+    private static func handleDeployVerify(arguments: [String]) throws {
+        let options = parseOptions(arguments)
+        let state = try loadState(path: options["path"])
+        let settings = (try? SettingsController().load()) ?? AppSettings()
+        let result = DeploymentCoordinator(settings: settings).verify(state: state)
+        let data = try JSONEncoder.pretty.encode(result)
+        print(String(decoding: data, as: UTF8.self))
+    }
+
+    private static func handleDeployDeployer(arguments: [String]) async throws {
+        guard let subcommand = arguments.first else {
+            printDeployUsage()
+            return
+        }
+        let options = parseOptions(Array(arguments.dropFirst()))
+        let settings = (try? SettingsController().load()) ?? AppSettings()
+        let client = DefaultHelperHostClient()
+        let configuration = HelperMediaServiceConfiguration(defaults: settings.helper)
+        switch subcommand {
+        case "plan":
+            let plan = client.planDeployerServices(configuration: configuration)
+            let data = try JSONEncoder.pretty.encode(plan)
+            print(String(decoding: data, as: UTF8.self))
+        case "prepare":
+            guard let connection = deployerConnection(options: options) else {
+                throw CLIError.missingRequired("deploy deployer prepare requires --deployer-host HOST and --deployer-user USER")
+            }
+            let plan = try await client.prepareDeployerServices(configuration: configuration, connection: connection)
+            let data = try JSONEncoder.pretty.encode(plan)
+            print(String(decoding: data, as: UTF8.self))
+        default:
+            printDeployUsage()
+        }
+    }
+
     private static func handleResume(arguments: [String]) throws {
         let options = parseOptions(arguments)
-        let path = options["path"] ?? AppPaths().stateDirectory.appending(path: "deployment-state.json").path
-        let url = URL(fileURLWithPath: path)
-        let directory = url.hasDirectoryPath ? url : url.deletingLastPathComponent()
-        let state = try DeploymentStateStore().load(from: directory)
+        let state = try loadState(path: options["path"])
         let data = try JSONEncoder.pretty.encode(state)
         print(String(decoding: data, as: UTF8.self))
     }
@@ -397,6 +468,25 @@ struct TalosDeployCLI {
         let data = try Data(contentsOf: URL(fileURLWithPath: path))
         let decoder = JSONDecoder()
         return try decoder.decode(DeploymentSpec.self, from: data)
+    }
+
+    private static func loadState(path: String?) throws -> DeploymentState {
+        let resolvedPath = path ?? AppPaths().stateDirectory.appending(path: "deployment-state.json").path
+        let url = URL(fileURLWithPath: resolvedPath)
+        let directory = url.hasDirectoryPath ? url : url.deletingLastPathComponent()
+        return try DeploymentStateStore().load(from: directory)
+    }
+
+    private static func deployerConnection(options: [String: String]) -> SSHConnection? {
+        let host = options["deployer-host"] ?? options["helper-host"]
+        let user = options["deployer-user"] ?? options["helper-user"]
+        guard let host, let user else { return nil }
+        return SSHConnection(
+            host: host,
+            user: user,
+            port: Int(options["deployer-port"] ?? options["helper-port"] ?? "22") ?? 22,
+            identityFile: options["identity-file"] ?? ""
+        )
     }
 
     private static func parseOptions(_ arguments: [String]) -> [String: String] {
@@ -516,14 +606,19 @@ struct TalosDeployCLI {
               ubuntu snapshot --account ACCOUNT --device DEVICE [--source auto|core|hammertime] [--output-dir DIR]
               ubuntu build-iso --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO [--rack-password-hash HASH]
               ubuntu validate-iso --iso ISO
-              ubuntu bootstrap-overseer --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url URL
+              ubuntu bootstrap-deployer --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url URL
               ubuntu local-media-plan --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url URL
               ubuntu oob-boot-url --device DEVICE_ID --url OOB_REACHABLE_IMAGE_URL [--one-time-boot usb] [--reboot true]
               devices --account ACCOUNT [--source auto|core|hammertime] [--output table|json]
               facts --account ACCOUNT [--source auto|core|hammertime] [device-id...]
               snapshot --account ACCOUNT --device DEVICE [--source auto|core|hammertime] [--output-dir DIR]
               plan --spec path/to/spec.json
-              deploy --spec path/to/spec.json [--helper-host HOST --helper-user USER]
+              deploy plan --spec path/to/spec.json
+              deploy run --spec path/to/spec.json [--execute true] [--deployer-host HOST --deployer-user USER]
+              deploy verify --path /path/to/deployment-state.json
+              deploy deployer plan
+              deploy deployer prepare --deployer-host HOST --deployer-user USER
+              deploy --spec path/to/spec.json [--deployer-host HOST --deployer-user USER]
               resume --path /path/to/deployment-state.json
             """
         )
@@ -537,7 +632,7 @@ struct TalosDeployCLI {
               network-plan --capture DIR_OR_SNAPSHOT [--output json|yaml]
               build-iso --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO [--rack-password-hash HASH] [--root-password-hash HASH]
               validate-iso --iso ISO
-              bootstrap-overseer --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url https://ILO/
+              bootstrap-deployer --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url https://ILO/
               local-media-plan --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url https://ILO/
               oob-boot-url --device DEVICE_ID --url http://oob-reachable-media/installer.iso [--one-time-boot usb] [--reboot true]
 
@@ -557,6 +652,23 @@ struct TalosDeployCLI {
 
             The artifact URLs follow the Talos Image Factory model. Extensions affect the image schematic;
             kernel modules are rendered into machine configs during deployment planning.
+            """
+        )
+    }
+
+    private static func printDeployUsage() {
+        print(
+            """
+            tds deploy commands:
+              plan --spec path/to/spec.json
+              run --spec path/to/spec.json [--dry-run true|false] [--execute true] [--deployer-host HOST --deployer-user USER]
+              resume --path /path/to/deployment-state.json
+              verify --path /path/to/deployment-state.json
+              deployer plan
+              deployer prepare --deployer-host HOST --deployer-user USER
+
+            Non-dry-run execution requires --execute true plus a deployer SSH connection.
+            --helper-host/--helper-user remain accepted as backward-compatible aliases.
             """
         )
     }
