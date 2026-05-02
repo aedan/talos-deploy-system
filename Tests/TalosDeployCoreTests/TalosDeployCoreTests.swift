@@ -419,6 +419,28 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(HammertimeSettings().skipDeviceChecks)
     }
 
+    func testHammertimeInventoryUsesLongEnoughTimeoutForLargeAccounts() async throws {
+        let runner = MockCommandRunner(
+            responses: [
+                CommandResult(
+                    executable: "/tmp/ht",
+                    arguments: [],
+                    stdout: #"[]"#,
+                    stderr: "",
+                    exitCode: 0
+                ),
+            ]
+        )
+        let adapter = DefaultHammertimeAdapter(
+            settings: HammertimeSettings(binaryPath: "/tmp/ht", timeoutSeconds: 30),
+            runner: runner
+        )
+
+        _ = try await adapter.inventory(accountNumber: "0000000")
+
+        XCTAssertEqual(runner.invocations.first?.timeout, 90)
+    }
+
     func testTalosDefaultsPreferVirtualMedia() {
         XCTAssertTrue(TalosDefaults().installerPreference == .virtualMedia)
     }

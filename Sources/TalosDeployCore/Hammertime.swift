@@ -40,7 +40,7 @@ public final class DefaultHammertimeAdapter: HammertimeAdapter, @unchecked Senda
             ],
             environment: [:],
             currentDirectory: nil,
-            timeout: TimeInterval(settings.timeoutSeconds)
+            timeout: TimeInterval(max(settings.timeoutSeconds, 90))
         )
         return try parseInventory(stdout: result.stdout, accountNumber: accountNumber)
     }
