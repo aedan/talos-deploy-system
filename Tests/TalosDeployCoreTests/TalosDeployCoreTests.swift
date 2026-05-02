@@ -354,52 +354,6 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(vm.isClusterEligible == false)
     }
 
-    func testLabRoleAssignmentSelectsMatchingPhysicalServers() throws {
-        let deployer = DiscoveredDevice(
-            id: "100001",
-            accountNumber: "0000000",
-            name: "100001-lab-2-deployer.example.test",
-            platformName: "HP DL380 G9"
-        )
-        let controller = DiscoveredDevice(
-            id: "100002",
-            accountNumber: "0000000",
-            name: "100002-lab2-controller01.example.test",
-            platformName: "HP DL380 G9"
-        )
-        let worker = DiscoveredDevice(
-            id: "100003",
-            accountNumber: "0000000",
-            name: "100003-lab2-compute01.example.test",
-            platformName: "HP DL380 G9"
-        )
-        let otherLab = DiscoveredDevice(
-            id: "100004",
-            accountNumber: "0000000",
-            name: "100004-lab3-controller01.example.test",
-            platformName: "HP DL380 G9"
-        )
-        let loadBalancer = DiscoveredDevice(
-            id: "100005",
-            accountNumber: "0000000",
-            name: "100005-lab2-lb01.example.test",
-            platformName: "Load Balancer"
-        )
-
-        let result = LabRoleAssignmentPlanner().makeAssignments(
-            devices: [deployer, controller, worker, otherLab, loadBalancer],
-            labLabel: "lab2",
-            deployerID: "100001"
-        )
-
-        XCTAssertTrue(result.selectedDevices.map(\.id) == ["100001", "100002", "100003"])
-        XCTAssertTrue(result.assignments["100001"]?.role == .deployer)
-        XCTAssertTrue(result.assignments["100002"]?.role == .controlplane)
-        XCTAssertTrue(result.assignments["100003"]?.role == .worker)
-        XCTAssertNil(result.assignments["100004"])
-        XCTAssertNil(result.assignments["100005"])
-    }
-
     func testHammertimeDefaultsSkipChecksForPreProvisionAccess() {
         XCTAssertTrue(HammertimeSettings().skipDeviceChecks)
     }

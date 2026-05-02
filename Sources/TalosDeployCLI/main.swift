@@ -109,29 +109,6 @@ struct TalosDeployCLI {
             }
         }
 
-        if let labLabel = options["lab"] ?? options["lab-label"], !labLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let markers = splitCommaList(options["controller-markers"] ?? "")
-            let result = LabRoleAssignmentPlanner().makeAssignments(
-                devices: devices,
-                labLabel: labLabel,
-                deployerID: options["deployer"] ?? options["deployer-device"] ?? "",
-                controllerMarkers: markers.isEmpty ? LabRoleAssignmentPlanner.defaultControllerMarkers : markers
-            )
-            if output == "json" || output == "lab-plan" {
-                let data = try JSONEncoder.pretty.encode(result)
-                print(String(decoding: data, as: UTF8.self))
-                return
-            }
-            for device in result.selectedDevices {
-                let assignment = result.assignments[device.id]
-                print("\(device.id)\t\(device.name)\t\(assignment?.role.displayName ?? "unassigned")\t\(device.privateIP.isEmpty ? device.primaryIP : device.privateIP)")
-            }
-            for warning in result.warnings {
-                fputs("warning: \(warning)\n", stderr)
-            }
-            return
-        }
-
         if output == "json" {
             let data = try JSONEncoder.pretty.encode(devices)
             print(String(decoding: data, as: UTF8.self))
@@ -612,7 +589,6 @@ struct TalosDeployCLI {
               ubuntu local-media-plan --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO --oob-url URL
               ubuntu oob-boot-url --device DEVICE_ID --url OOB_REACHABLE_IMAGE_URL [--one-time-boot usb] [--reboot true]
               devices --account ACCOUNT [--source auto|core|hammertime] [--output table|json]
-              devices --account ACCOUNT --lab LAB --deployer DEVICE [--controller-markers controller,master] [--output table|json]
               facts --account ACCOUNT [--source auto|core|hammertime] [device-id...]
               snapshot --account ACCOUNT --device DEVICE [--source auto|core|hammertime] [--output-dir DIR]
               plan --spec path/to/spec.json

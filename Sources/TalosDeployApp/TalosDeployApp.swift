@@ -355,26 +355,6 @@ private struct InventoryView: View {
                     .foregroundStyle(.secondary)
             }
 
-            SectionCard(title: "Lab Auto Assignment") {
-                Text("For end-to-end testing, enter a lab label from Core inventory. tds selects every matching physical server, assigns the selected deployer separately, marks controller-named hosts as control-plane nodes, and makes the rest workers.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                HStack(alignment: .top) {
-                    TextField("Lab label, for example lab2", text: $controller.labAssignmentLabel)
-                        .textFieldStyle(.roundedBorder)
-                        .fieldHelp("Matched against normalized Core device names and metadata, so lab2 also matches lab-2.")
-                    TextField("Deployer device ID or name", text: $controller.labAssignmentDeployerID)
-                        .textFieldStyle(.roundedBorder)
-                        .fieldHelp("Selected physical server that becomes Ubuntu deployer; it is not a Talos node.")
-                    TextField("Controller markers", text: $controller.labAssignmentControllerMarkers)
-                        .textFieldStyle(.roundedBorder)
-                        .fieldHelp("Comma-separated markers used to detect control-plane nodes, such as controller,controlplane,master.")
-                    Button("Auto Assign Lab") {
-                        controller.applyLabRoleAssignment()
-                    }
-                }
-            }
-
             Table(controller.clusterEligibleDevices) {
                 TableColumn("Device") { device in
                     VStack(alignment: .leading, spacing: 2) {

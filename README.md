@@ -41,7 +41,7 @@ Use fake account numbers in examples and docs. Real account numbers belong in op
 2. Use `Sign In` to refresh/import the active hammertime-backed Core session. Manual Core session storage is available, but the normal `rax` path is automatic discovery.
 3. In `Inventory + Roles`, enter the account number and load devices. Non-server devices such as firewalls, load balancers, switches, and VMs are filtered out of cluster role assignment.
 4. Select one physical device as `deployer`. If it needs Ubuntu reinstalled, leave install enabled and type the destructive confirmation.
-5. Assign Talos nodes as `controlplane` or `worker`. For lab-based end-to-end runs, use `Lab Auto Assignment`: enter a label such as `lab2`, choose the deployer device ID/name, and let `tds` assign controller-named devices as control-plane nodes and all other matching physical servers as workers.
+5. Assign Talos nodes as `controlplane` or `worker`. For lab-based end-to-end testing, identify the lab devices from Core inventory outside the product workflow, then assign roles in the UI or deployment spec: the selected deployer is separate from Talos, controller-named devices become control-plane nodes, and the remaining lab servers become workers.
 6. Review static networking for every Talos node. DHCP may be used for live boot only; final machine configs require static management IPs from Core, capture, or manual overrides.
 7. Use `Bootstrap Deployer` to capture/build/validate Ubuntu media and attach it through the embedded iLO local-media WebView when the OOB network cannot fetch external media.
 8. Stage and run deployment. After Ubuntu is online, `tds` installs deployer services, stages Talos artifacts, boots nodes, applies configs, bootstraps etcd, fetches kubeconfig, and verifies health.
@@ -101,7 +101,6 @@ Safety:
 ```bash
 tds login --source hammertime
 tds devices --account 0000000 --source auto --output table
-tds devices --account 0000000 --lab lab2 --deployer 100001 --output json
 tds facts --account 0000000 100002 100003
 tds ubuntu snapshot --account 0000000 --device 100001 --output-dir ~/tds-captures
 tds ubuntu network-plan --capture ~/tds-captures/0000000/100001/snapshot.json --output yaml
@@ -135,10 +134,10 @@ tds login --source hammertime
 tds devices --account 0000000 --source auto --output table
 ```
 
-3. Use lab auto-assignment for an end-to-end test:
+3. Prepare the lab role plan for an end-to-end test:
 
 ```bash
-tds devices --account 0000000 --lab lab2 --deployer 100001 --output json
+tds devices --account 0000000 --source auto --output json > /tmp/tds-account-devices.json
 ```
 
 Expected role intent:
@@ -148,6 +147,8 @@ Expected role intent:
 - `100003-lab2-controller02.example.test`: `controlplane`
 - `100004-lab2-controller03.example.test`: `controlplane`
 - every other matching physical `lab2` server: `worker`
+
+This lab grouping is an acceptance-test procedure, not a built-in `tds` feature. Use the inventory JSON/Core UI to confirm the real lab membership, then assign roles in `tds.app` or a reviewed deployment spec.
 
 4. Capture the deployer before destroying its OS:
 

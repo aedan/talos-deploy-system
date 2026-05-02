@@ -1099,9 +1099,6 @@ public final class AppController: ObservableObject {
     @Published public var ubuntuLastValidation: UbuntuIsoValidationResult?
     @Published public var ubuntuNetworkPlan: NetworkRebuildPlan?
     @Published public var ubuntuLocalMediaState: LocalMediaSessionState?
-    @Published public var labAssignmentLabel: String
-    @Published public var labAssignmentDeployerID: String
-    @Published public var labAssignmentControllerMarkers: String
     @Published public var accessProfileProxyPasswords: [UUID: String]
     @Published public var statusMessage: String
 
@@ -1148,9 +1145,6 @@ public final class AppController: ObservableObject {
         self.ubuntuSSHKeyFiles = ""
         self.ubuntuOOBURL = ""
         self.ubuntuOOBUsername = ""
-        self.labAssignmentLabel = ""
-        self.labAssignmentDeployerID = ""
-        self.labAssignmentControllerMarkers = LabRoleAssignmentPlanner.defaultControllerMarkers.joined(separator: ",")
         self.accessProfileProxyPasswords = Self.loadProxyPasswords(for: loadedSettings.accessProfiles, secretStore: secretStore)
         self.statusMessage = "Ready"
     }
@@ -1348,32 +1342,6 @@ public final class AppController: ObservableObject {
 
     public func updateAssignment(_ assignment: DeviceAssignment) {
         assignments[assignment.deviceID] = assignment
-    }
-
-    public func applyLabRoleAssignment() {
-        let markers = labAssignmentControllerMarkers
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        let result = LabRoleAssignmentPlanner().makeAssignments(
-            devices: clusterEligibleDevices,
-            labLabel: labAssignmentLabel,
-            deployerID: labAssignmentDeployerID,
-            controllerMarkers: markers.isEmpty ? LabRoleAssignmentPlanner.defaultControllerMarkers : markers
-        )
-
-        for device in clusterEligibleDevices {
-            assignments[device.id] = defaultAssignment(for: device.id)
-        }
-        for assignment in result.assignments.values {
-            assignments[assignment.deviceID] = assignment
-        }
-
-        let controlPlanes = result.assignments.values.filter { $0.role == .controlplane }.count
-        let workers = result.assignments.values.filter { $0.role == .worker }.count
-        let deployers = result.assignments.values.filter { $0.role.isDeployer }.count
-        let warningSuffix = result.warnings.isEmpty ? "" : " Warnings: \(result.warnings.joined(separator: " "))"
-        statusMessage = "Assigned lab \(result.labLabel): \(deployers) deployer, \(controlPlanes) control-plane, \(workers) workers.\(warningSuffix)"
     }
 
     private func defaultAssignment(for deviceID: String) -> DeviceAssignment {
