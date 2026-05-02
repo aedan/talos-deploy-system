@@ -231,6 +231,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("name: br_netfilter"))
         XCTAssertTrue(patch.contains("zfs_arc_max=123"))
         XCTAssertTrue(patch.contains("addresses:\n          - 172.22.220.10/22"))
+        XCTAssertTrue(patch.contains("network: 0.0.0.0/0"))
         XCTAssertTrue(patch.contains("gateway: 172.22.220.1"))
         XCTAssertTrue(patch.contains("destination: /var/lib/longhorn"))
     }

@@ -570,7 +570,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         guard !routes.isEmpty else { return [] }
         var lines = ["        routes:"]
         for route in routes {
-            lines.append("          - network: \(route.to)")
+            lines.append("          - network: \(renderRouteDestination(route.to))")
             lines.append("            gateway: \(route.via)")
             if let metric = route.metric {
                 lines.append("            metric: \(metric)")
@@ -583,7 +583,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         guard !routes.isEmpty else { return [] }
         var lines = ["\(indent)routes:"]
         for route in routes {
-            lines.append("\(indent)  - network: \(route.to)")
+            lines.append("\(indent)  - network: \(renderRouteDestination(route.to))")
             if !route.via.isEmpty {
                 lines.append("\(indent)    gateway: \(route.via)")
             }
@@ -654,6 +654,10 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
     private func parentInterfaceName(for vlanName: String) -> String {
         guard let dot = vlanName.firstIndex(of: ".") else { return "" }
         return String(vlanName[..<dot])
+    }
+
+    private func renderRouteDestination(_ destination: String) -> String {
+        destination == "default" ? "0.0.0.0/0" : destination
     }
 
     private func renderNameservers(_ config: StaticNetworkConfig) -> [String] {
