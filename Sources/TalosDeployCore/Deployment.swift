@@ -233,6 +233,37 @@ public protocol TalosBuilder: Sendable {
     func buildArtifacts(for spec: DeploymentSpec, plan: DeploymentPlan, in directory: URL) async throws -> URL
 }
 
+public struct TalosFactoryClient: Sendable {
+    public init() {}
+
+    public func renderSchematic(settings: TalosImageFactorySettings) -> String {
+        var lines = ["customization:"]
+        if !settings.extraKernelArgs.isEmpty {
+            lines.append("  extraKernelArgs:")
+            lines.append(contentsOf: settings.extraKernelArgs.map { "    - \(yamlScalar($0))" })
+        }
+        if !settings.selectedSystemExtensions.isEmpty {
+            lines.append("  systemExtensions:")
+            lines.append("    officialExtensions:")
+            lines.append(contentsOf: settings.selectedSystemExtensions.map { "      - \(yamlScalar($0))" })
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    public func artifactURLs(settings: TalosImageFactorySettings, talosVersion: String) -> TalosFactoryArtifacts {
+        let baseURL = settings.baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let pxeBaseURL = settings.pxeBaseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let model = "\(settings.platform)-\(settings.architecture)"
+        return TalosFactoryArtifacts(
+            schematicID: settings.schematicID,
+            schematicYAML: renderSchematic(settings: settings),
+            isoURL: "\(baseURL)/image/\(settings.schematicID)/\(talosVersion)/\(model).iso",
+            pxeURL: "\(pxeBaseURL)/pxe/\(settings.schematicID)/\(talosVersion)/\(model)",
+            installerImage: "\(settings.registryHost)/installer/\(settings.schematicID):\(talosVersion)"
+        )
+    }
+}
+
 public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
     private let fileManager: FileManager
 
@@ -259,6 +290,13 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
 
         let clusterURL = directory.appending(path: "cluster.yaml")
         try renderClusterFile(spec: spec).write(to: clusterURL, atomically: true, encoding: .utf8)
+
+        let factoryURL = directory.appending(path: "talos-factory-schematic.yaml")
+        try plan.talosArtifacts.schematicYAML.write(to: factoryURL, atomically: true, encoding: .utf8)
+
+        let artifactsURL = directory.appending(path: "talos-artifacts.json")
+        let artifactsData = try JSONEncoder.pretty.encode(plan.talosArtifacts)
+        try artifactsData.write(to: artifactsURL, options: .atomic)
         return directory
     }
 
@@ -266,9 +304,13 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         let addresses = node.device.networkInterfaces.first?.addresses ?? (node.device.primaryIP.isEmpty ? [] : [node.device.primaryIP])
         let renderedAddresses = addresses.map { "      - \($0)" }.joined(separator: "\n")
         let interfaceName = node.device.networkInterfaces.first?.name ?? "eth0"
+        let moduleBlock = renderKernelModules(spec.talosKernelModules)
+        let extraKernelArgsBlock = renderExtraKernelArgs(spec.talosFactory.extraKernelArgs)
+        let installerImage = TalosFactoryClient().artifactURLs(settings: spec.talosFactory, talosVersion: spec.talosVersion).installerImage
         return """
         machine:
           type: \(node.assignment.role == .worker ? "worker" : "controlplane")
+        \(moduleBlock)
           network:
             hostname: \(node.device.name)
             interfaces:
@@ -276,7 +318,27 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         \(renderedAddresses.isEmpty ? "" : "    addresses:\n\(renderedAddresses)\n")
           install:
             disk: \(node.device.installDisk.isEmpty ? "/dev/sda" : node.device.installDisk)
+            image: \(installerImage)
+        \(extraKernelArgsBlock)
         """
+    }
+
+    private func renderKernelModules(_ modules: [TalosKernelModule]) -> String {
+        guard !modules.isEmpty else { return "" }
+        var lines = ["  kernel:", "    modules:"]
+        for module in modules {
+            lines.append("      - name: \(module.name)")
+            if !module.parameters.isEmpty {
+                lines.append("        parameters:")
+                lines.append(contentsOf: module.parameters.map { "          - \(yamlScalar($0))" })
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func renderExtraKernelArgs(_ args: [String]) -> String {
+        guard !args.isEmpty else { return "" }
+        return "    extraKernelArgs:\n" + args.map { "      - \(yamlScalar($0))" }.joined(separator: "\n")
     }
 
     private func renderClusterFile(spec: DeploymentSpec) -> String {
@@ -288,6 +350,14 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
           kubernetesVersion: \(spec.kubernetesVersion)
         """
     }
+}
+
+private func yamlScalar(_ value: String) -> String {
+    let safeCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_./:=@+"))
+    if value.unicodeScalars.allSatisfy({ safeCharacters.contains($0) }) {
+        return value
+    }
+    return "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
 }
 
 public protocol Provisioner: Sendable {
@@ -359,7 +429,7 @@ public struct DeploymentPlanner: Sendable {
                 PlannedDeviceInstall(
                     device: node.device,
                     assignment: node.assignment,
-                    method: selectInstallMethod(for: node)
+                    method: selectInstallMethod(for: node, spec: spec)
                 )
             }
 
@@ -369,7 +439,20 @@ public struct DeploymentPlanner: Sendable {
 
         let remotePath = "\(spec.helperStateRoot)/\(spec.accountNumber)/\(spec.clusterName)"
         let tempPath = "rax-temp/\(spec.accountNumber)/\(spec.clusterName)"
+        let talosArtifacts = TalosFactoryClient().artifactURLs(settings: spec.talosFactory, talosVersion: spec.talosVersion)
         var phases: [DeploymentPhase] = []
+
+        phases.append(
+            DeploymentPhase(
+                title: "Prepare Talos Artifacts",
+                steps: [
+                    "Render Image Factory schematic for \(spec.talosFactory.selectedSystemExtensions.isEmpty ? "vanilla Talos" : spec.talosFactory.selectedSystemExtensions.joined(separator: ", ")).",
+                    "Use ISO \(talosArtifacts.isoURL).",
+                    "Use PXE endpoint \(talosArtifacts.pxeURL).",
+                    "Set machine install image to \(talosArtifacts.installerImage).",
+                ]
+            )
+        )
 
         if helper.assignment.shouldInstallOS && helper.assignment.helperMode == .bootstrap {
             phases.append(
@@ -397,8 +480,10 @@ public struct DeploymentPlanner: Sendable {
             DeploymentPhase(
                 title: "Provision Cluster",
                 steps: remainingInstalls.map {
-                    "Provision \($0.device.name) as \($0.assignment.role.rawValue) using \($0.method.rawValue)."
+                    provisioningStep(for: $0, talosArtifacts: talosArtifacts)
                 } + [
+                    "Generate machine configs with preserved/manual network settings and selected kernel modules.",
+                    "Run talosctl from the deployer/overseer to apply configs, bootstrap etcd, fetch kubeconfig, and verify cluster health.",
                     "Persist generated state under \(remotePath).",
                 ]
             )
@@ -410,12 +495,13 @@ public struct DeploymentPlanner: Sendable {
             helper: helper,
             installs: planned,
             phases: phases,
+            talosArtifacts: talosArtifacts,
             tempStateDirectory: tempPath,
             durableStateDirectory: remotePath
         )
     }
 
-    private func selectInstallMethod(for node: DeploymentNodeSpec) -> InstallMethod {
+    private func selectInstallMethod(for node: DeploymentNodeSpec, spec: DeploymentSpec) -> InstallMethod {
         if node.assignment.role == .helper && node.assignment.helperMode == .bootstrap && node.assignment.shouldInstallOS {
             switch settings.bootstrapMedia.deliveryMode {
             case .operatorLocalMedia:
@@ -436,10 +522,57 @@ public struct DeploymentPlanner: Sendable {
             if node.assignment.role == .helper && node.assignment.shouldInstallOS {
                 return .virtualMedia
             }
+            if node.assignment.role != .helper {
+                return selectAutomaticTalosMethod(for: node, spec: spec)
+            }
             if let oob = node.device.oob, oob.supportsVirtualMedia == true {
                 return .virtualMedia
             }
             return .pxe
+        }
+    }
+
+    private func selectAutomaticTalosMethod(for node: DeploymentNodeSpec, spec: DeploymentSpec) -> InstallMethod {
+        for strategy in spec.talosProvisioning.preferredStrategies {
+            switch strategy {
+            case .automatic:
+                continue
+            case .overseerHostedMedia:
+                if spec.talosProvisioning.allowOverseerHostedMedia {
+                    return .bootURL
+                }
+            case .overseerPXE:
+                if spec.talosProvisioning.allowOverseerPXE {
+                    return .pxe
+                }
+            case .directVirtualMedia:
+                if node.device.oob != nil {
+                    return .virtualMedia
+                }
+            case .operatorLocalMedia:
+                return .operatorLocalMedia
+            case .externalOOBURL:
+                if spec.talosProvisioning.allowExternalOOBURL,
+                   !spec.talosProvisioning.externalOOBMediaBaseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return .bootURL
+                }
+            }
+        }
+        return node.device.oob == nil ? .pxe : .virtualMedia
+    }
+
+    private func provisioningStep(for install: PlannedDeviceInstall, talosArtifacts: TalosFactoryArtifacts) -> String {
+        switch install.method {
+        case .operatorLocalMedia:
+            return "Provision \(install.device.name) as \(install.assignment.role.rawValue) using operator-attached local media through tds OOB WebView."
+        case .virtualMedia:
+            return "Provision \(install.device.name) as \(install.assignment.role.rawValue) using direct OOB virtual media with \(talosArtifacts.isoURL)."
+        case .bootURL:
+            return "Provision \(install.device.name) as \(install.assignment.role.rawValue) using OOB boot URL media; prefer overseer-hosted ISO, otherwise configured external OOB URL."
+        case .pxe:
+            return "Provision \(install.device.name) as \(install.assignment.role.rawValue) using overseer PXE/DHCP/TFTP/HTTP services."
+        case .stagedOnly:
+            return "Stage config for \(install.device.name) as \(install.assignment.role.rawValue) without booting it."
         }
     }
 
@@ -845,6 +978,9 @@ public final class AppController: ObservableObject {
             talosVersion: settings.talos.talosVersion,
             kubernetesVersion: settings.talos.kubernetesVersion,
             helperStateRoot: settings.helper.stateRoot,
+            talosFactory: settings.talos.factory,
+            talosProvisioning: settings.talos.provisioning,
+            talosKernelModules: settings.talos.kernelModules,
             nodes: clusterEligibleDevices.compactMap { device in
                 guard let assignment = assignments[device.id], assignment.role != .unassigned else {
                     return nil

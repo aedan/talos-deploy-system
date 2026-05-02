@@ -24,6 +24,8 @@ struct TalosDeployCLI {
             try await handleLogin(arguments: Array(arguments.dropFirst()))
         case "ubuntu":
             try await handleUbuntu(arguments: Array(arguments.dropFirst()))
+        case "talos":
+            try handleTalos(arguments: Array(arguments.dropFirst()))
         case "devices":
             try await handleDevices(arguments: Array(arguments.dropFirst()))
         case "facts":
@@ -228,6 +230,40 @@ struct TalosDeployCLI {
         let artifacts = try await builder.buildISO(spec: spec, networkPlan: plan)
         let data = try JSONEncoder.pretty.encode(artifacts)
         print(String(decoding: data, as: UTF8.self))
+    }
+
+    private static func handleTalos(arguments: [String]) throws {
+        guard let subcommand = arguments.first else {
+            printTalosUsage()
+            return
+        }
+        let options = parseOptions(Array(arguments.dropFirst()))
+        let settings = (try? SettingsController().load()) ?? AppSettings()
+        var factory = settings.talos.factory
+        if let value = options["factory-url"] { factory.baseURL = value }
+        if let value = options["pxe-url"] { factory.pxeBaseURL = value }
+        if let value = options["registry"] { factory.registryHost = value }
+        if let value = options["arch"] { factory.architecture = value }
+        if let value = options["platform"] { factory.platform = value }
+        if let value = options["schematic-id"] { factory.schematicID = value }
+        if let value = options["extensions"] {
+            factory.selectedSystemExtensions = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        }
+        if let value = options["extra-kernel-args"] {
+            factory.extraKernelArgs = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        }
+        let version = options["version"] ?? settings.talos.talosVersion
+
+        switch subcommand {
+        case "schematic":
+            print(TalosFactoryClient().renderSchematic(settings: factory))
+        case "artifacts":
+            let artifacts = TalosFactoryClient().artifactURLs(settings: factory, talosVersion: version)
+            let data = try JSONEncoder.pretty.encode(artifacts)
+            print(String(decoding: data, as: UTF8.self))
+        default:
+            printTalosUsage()
+        }
     }
 
     private static func handleUbuntuValidateISO(arguments: [String]) async throws {
@@ -475,6 +511,8 @@ struct TalosDeployCLI {
             """
             tds commands:
               login [--source hammertime] | --username USER --secret VALUE [--header-name Cookie]
+              talos schematic [--extensions ext1,ext2] [--extra-kernel-args arg1,arg2]
+              talos artifacts [--version v1.12.1] [--schematic-id ID] [--arch amd64]
               ubuntu snapshot --account ACCOUNT --device DEVICE [--source auto|core|hammertime] [--output-dir DIR]
               ubuntu build-iso --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO [--rack-password-hash HASH]
               ubuntu validate-iso --iso ISO
@@ -506,6 +544,19 @@ struct TalosDeployCLI {
             Password hashes may also be supplied with TDS_RACK_PASSWORD_HASH and TDS_ROOT_PASSWORD_HASH.
             SSH public keys default to ~/.ssh/*.pub unless --no-default-ssh-keys true is set.
             oob-boot-url is for explicitly configured OOB-reachable media only; it is not the greenfield default.
+            """
+        )
+    }
+
+    private static func printTalosUsage() {
+        print(
+            """
+            tds talos commands:
+              schematic [--extensions ext1,ext2] [--extra-kernel-args arg1,arg2]
+              artifacts [--version v1.12.1] [--schematic-id ID] [--arch amd64] [--platform metal]
+
+            The artifact URLs follow the Talos Image Factory model. Extensions affect the image schematic;
+            kernel modules are rendered into machine configs during deployment planning.
             """
         )
     }

@@ -68,8 +68,10 @@ final class TalosDeployCoreTests: XCTestCase {
             ]
         )
         let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
-        XCTAssertTrue(plan.phases.first?.title == "Bootstrap Deployer/Overseer")
-        XCTAssertTrue(plan.phases.first?.steps.contains(where: { $0.contains("do not depend on another target node having an OS") }) == true)
+        XCTAssertTrue(plan.phases.contains { $0.title == "Bootstrap Deployer/Overseer" })
+        XCTAssertTrue(plan.phases.contains { phase in
+            phase.steps.contains { $0.contains("do not depend on another target node having an OS") }
+        })
         XCTAssertTrue(plan.helper.method == .operatorLocalMedia)
     }
 
@@ -129,7 +131,9 @@ final class TalosDeployCoreTests: XCTestCase {
         let plan = try DeploymentPlanner(settings: settings).makePlan(spec: spec)
 
         XCTAssertTrue(plan.helper.method == .bootURL)
-        XCTAssertTrue(plan.phases.first?.steps.contains(where: { $0.contains("not greenfield-safe") }) == true)
+        XCTAssertTrue(plan.phases.contains { phase in
+            phase.steps.contains { $0.contains("not greenfield-safe") }
+        })
     }
 
     func testExistingOverseerPlanIncludesTDSMediaSetup() throws {
@@ -150,8 +154,10 @@ final class TalosDeployCoreTests: XCTestCase {
 
         let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
 
-        XCTAssertTrue(plan.phases.first?.title == "Prepare Existing Deployer/Overseer")
-        XCTAssertTrue(plan.phases.first?.steps.contains(where: { $0.contains("tds prepares media and PXE directories") }) == true)
+        XCTAssertTrue(plan.phases.contains { $0.title == "Prepare Existing Deployer/Overseer" })
+        XCTAssertTrue(plan.phases.contains { phase in
+            phase.steps.contains { $0.contains("tds prepares media and PXE directories") }
+        })
     }
 
     func testTalosBuilderCreatesArtifacts() async throws {
@@ -167,6 +173,11 @@ final class TalosDeployCoreTests: XCTestCase {
             talosVersion: "v1.11.3",
             kubernetesVersion: "v1.34.1",
             helperStateRoot: "/var/lib/talos-deploy",
+            talosFactory: TalosImageFactorySettings(schematicID: "abc123", extraKernelArgs: ["console=ttyS1"]),
+            talosKernelModules: [
+                TalosKernelModule(name: "br_netfilter"),
+                TalosKernelModule(name: "zfs", parameters: ["zfs_arc_max=123"]),
+            ],
             nodes: [
                 DeploymentNodeSpec(device: helper, assignment: helperAssignment),
                 DeploymentNodeSpec(device: cp, assignment: DeviceAssignment(deviceID: "cp1", role: .controlplane, shouldInstallOS: true)),
@@ -176,6 +187,12 @@ final class TalosDeployCoreTests: XCTestCase {
         let output = try await DefaultTalosBuilder().buildArtifacts(for: spec, plan: plan, in: temp)
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "deployment-manifest.json").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "cluster.yaml").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "talos-factory-schematic.yaml").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "talos-artifacts.json").path))
+        let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+        XCTAssertTrue(patch.contains("image: factory.talos.dev/installer/abc123:v1.11.3"))
+        XCTAssertTrue(patch.contains("name: br_netfilter"))
+        XCTAssertTrue(patch.contains("zfs_arc_max=123"))
     }
 
     func testBridgeSessionDetectionParsesHammertimeCachePayload() async throws {
@@ -303,6 +320,55 @@ final class TalosDeployCoreTests: XCTestCase {
 
     func testTalosDefaultsPreferVirtualMedia() {
         XCTAssertTrue(TalosDefaults().installerPreference == .virtualMedia)
+    }
+
+    func testTalosFactoryArtifactsRenderSelectedExtensions() {
+        let settings = TalosImageFactorySettings(
+            architecture: "amd64",
+            platform: "metal",
+            schematicID: "abc123",
+            selectedSystemExtensions: ["siderolabs/iscsi-tools", "siderolabs/zfs"],
+            extraKernelArgs: ["console=ttyS1"]
+        )
+
+        let artifacts = TalosFactoryClient().artifactURLs(settings: settings, talosVersion: "v1.12.1")
+
+        XCTAssertTrue(artifacts.isoURL == "https://factory.talos.dev/image/abc123/v1.12.1/metal-amd64.iso")
+        XCTAssertTrue(artifacts.pxeURL == "https://pxe.factory.talos.dev/pxe/abc123/v1.12.1/metal-amd64")
+        XCTAssertTrue(artifacts.installerImage == "factory.talos.dev/installer/abc123:v1.12.1")
+        XCTAssertTrue(artifacts.schematicYAML.contains("siderolabs/zfs"))
+        XCTAssertTrue(artifacts.schematicYAML.contains("extraKernelArgs:"))
+    }
+
+    func testAutomaticTalosProvisioningPrefersOverseerHostedMedia() throws {
+        let helper = DiscoveredDevice(id: "helper", accountNumber: "0000000", name: "helper-1")
+        let cp = DiscoveredDevice(
+            id: "cp1",
+            accountNumber: "0000000",
+            name: "cp-1",
+            oob: OOBEndpoint(vendor: .ilo, address: "10.0.0.11")
+        )
+        var helperAssignment = DeviceAssignment(deviceID: "helper", role: .helper, helperMode: .bootstrap, shouldInstallOS: true)
+        helperAssignment.typedConfirmation = "INSTALL helper-1"
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.11.3",
+            kubernetesVersion: "v1.34.1",
+            helperStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: helper, assignment: helperAssignment),
+                DeploymentNodeSpec(device: cp, assignment: DeviceAssignment(deviceID: "cp1", role: .controlplane, shouldInstallOS: true)),
+            ]
+        )
+
+        let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
+        let controlPlane = plan.installs.first { $0.device.id == "cp1" }
+
+        XCTAssertTrue(controlPlane?.method == .bootURL)
+        XCTAssertTrue(plan.phases.contains { $0.title == "Prepare Talos Artifacts" })
+        XCTAssertTrue(plan.phases.last?.steps.contains(where: { $0.contains("overseer-hosted ISO") }) == true)
     }
 
     func testPreinstallSnapshotCapturePersistsArtifacts() async throws {

@@ -46,6 +46,15 @@ public enum InstallMethod: String, Codable, CaseIterable, Sendable {
     case stagedOnly
 }
 
+public enum TalosProvisioningStrategy: String, Codable, CaseIterable, Sendable {
+    case automatic
+    case operatorLocalMedia
+    case overseerHostedMedia
+    case overseerPXE
+    case externalOOBURL
+    case directVirtualMedia
+}
+
 public enum BootstrapMediaDeliveryMode: String, Codable, CaseIterable, Sendable {
     case operatorLocalMedia
     case oobReachableURL
@@ -440,6 +449,94 @@ public struct DeviceAssignment: Codable, Equatable, Sendable {
     }
 }
 
+public struct TalosKernelModule: Codable, Equatable, Sendable {
+    public var name: String
+    public var parameters: [String]
+
+    public init(name: String, parameters: [String] = []) {
+        self.name = name
+        self.parameters = parameters
+    }
+}
+
+public struct TalosImageFactorySettings: Codable, Equatable, Sendable {
+    public var baseURL: String
+    public var pxeBaseURL: String
+    public var registryHost: String
+    public var architecture: String
+    public var platform: String
+    public var schematicID: String
+    public var selectedSystemExtensions: [String]
+    public var extraKernelArgs: [String]
+
+    public init(
+        baseURL: String = "https://factory.talos.dev",
+        pxeBaseURL: String = "https://pxe.factory.talos.dev",
+        registryHost: String = "factory.talos.dev",
+        architecture: String = "amd64",
+        platform: String = "metal",
+        schematicID: String = "376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba",
+        selectedSystemExtensions: [String] = [
+            "siderolabs/iscsi-tools",
+            "siderolabs/util-linux-tools",
+        ],
+        extraKernelArgs: [String] = []
+    ) {
+        self.baseURL = baseURL
+        self.pxeBaseURL = pxeBaseURL
+        self.registryHost = registryHost
+        self.architecture = architecture
+        self.platform = platform
+        self.schematicID = schematicID
+        self.selectedSystemExtensions = selectedSystemExtensions
+        self.extraKernelArgs = extraKernelArgs
+    }
+}
+
+public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
+    public var preferredStrategies: [TalosProvisioningStrategy]
+    public var allowOverseerHostedMedia: Bool
+    public var allowOverseerPXE: Bool
+    public var allowExternalOOBURL: Bool
+    public var externalOOBMediaBaseURL: String
+
+    public init(
+        preferredStrategies: [TalosProvisioningStrategy] = [
+            .overseerHostedMedia,
+            .overseerPXE,
+            .directVirtualMedia,
+            .operatorLocalMedia,
+            .externalOOBURL,
+        ],
+        allowOverseerHostedMedia: Bool = true,
+        allowOverseerPXE: Bool = true,
+        allowExternalOOBURL: Bool = false,
+        externalOOBMediaBaseURL: String = ""
+    ) {
+        self.preferredStrategies = preferredStrategies
+        self.allowOverseerHostedMedia = allowOverseerHostedMedia
+        self.allowOverseerPXE = allowOverseerPXE
+        self.allowExternalOOBURL = allowExternalOOBURL
+        self.externalOOBMediaBaseURL = externalOOBMediaBaseURL
+    }
+}
+
+public struct TalosFactoryArtifacts: Codable, Equatable, Sendable {
+    public var schematicID: String
+    public var schematicYAML: String
+    public var isoURL: String
+    public var pxeURL: String
+    public var installerImage: String
+
+    public init(schematicID: String, schematicYAML: String, isoURL: String, pxeURL: String, installerImage: String) {
+        self.schematicID = schematicID
+        self.schematicYAML = schematicYAML
+        self.isoURL = isoURL
+        self.pxeURL = pxeURL
+        self.installerImage = installerImage
+    }
+}
+
 extension DeviceAssignment {
     enum CodingKeys: String, CodingKey {
         case deviceID
@@ -471,6 +568,9 @@ public struct TalosDefaults: Codable, Equatable, Sendable {
     public var clusterName: String
     public var clusterEndpoint: String
     public var extensions: [String]
+    public var kernelModules: [TalosKernelModule]
+    public var factory: TalosImageFactorySettings
+    public var provisioning: TalosProvisioningDefaults
     public var installerPreference: InstallPreference
 
     public init(
@@ -482,6 +582,9 @@ public struct TalosDefaults: Codable, Equatable, Sendable {
             "siderolabs/iscsi-tools",
             "siderolabs/util-linux-tools",
         ],
+        kernelModules: [TalosKernelModule] = [],
+        factory: TalosImageFactorySettings = TalosImageFactorySettings(),
+        provisioning: TalosProvisioningDefaults = TalosProvisioningDefaults(),
         installerPreference: InstallPreference = .virtualMedia
     ) {
         self.talosVersion = talosVersion
@@ -489,7 +592,49 @@ public struct TalosDefaults: Codable, Equatable, Sendable {
         self.clusterName = clusterName
         self.clusterEndpoint = clusterEndpoint
         self.extensions = extensions
+        self.kernelModules = kernelModules
+        var normalizedFactory = factory
+        if normalizedFactory.selectedSystemExtensions.isEmpty {
+            normalizedFactory.selectedSystemExtensions = extensions
+        }
+        self.factory = normalizedFactory
+        self.provisioning = provisioning
         self.installerPreference = installerPreference
+    }
+}
+
+extension TalosDefaults {
+    enum CodingKeys: String, CodingKey {
+        case talosVersion
+        case kubernetesVersion
+        case clusterName
+        case clusterEndpoint
+        case extensions
+        case kernelModules
+        case factory
+        case provisioning
+        case installerPreference
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let extensions = try container.decodeIfPresent([String].self, forKey: .extensions) ?? [
+            "siderolabs/iscsi-tools",
+            "siderolabs/util-linux-tools",
+        ]
+        let factory = try container.decodeIfPresent(TalosImageFactorySettings.self, forKey: .factory)
+            ?? TalosImageFactorySettings(selectedSystemExtensions: extensions)
+        self.init(
+            talosVersion: try container.decodeIfPresent(String.self, forKey: .talosVersion) ?? "v1.11.3",
+            kubernetesVersion: try container.decodeIfPresent(String.self, forKey: .kubernetesVersion) ?? "v1.34.1",
+            clusterName: try container.decodeIfPresent(String.self, forKey: .clusterName) ?? "cluster.local",
+            clusterEndpoint: try container.decodeIfPresent(String.self, forKey: .clusterEndpoint) ?? "https://talos-api.example.com:6443",
+            extensions: extensions,
+            kernelModules: try container.decodeIfPresent([TalosKernelModule].self, forKey: .kernelModules) ?? [],
+            factory: factory,
+            provisioning: try container.decodeIfPresent(TalosProvisioningDefaults.self, forKey: .provisioning) ?? TalosProvisioningDefaults(),
+            installerPreference: try container.decodeIfPresent(InstallPreference.self, forKey: .installerPreference) ?? .virtualMedia
+        )
     }
 }
 
@@ -809,6 +954,9 @@ public struct DeploymentSpec: Codable, Equatable, Sendable {
     public var talosVersion: String
     public var kubernetesVersion: String
     public var helperStateRoot: String
+    public var talosFactory: TalosImageFactorySettings
+    public var talosProvisioning: TalosProvisioningDefaults
+    public var talosKernelModules: [TalosKernelModule]
     public var nodes: [DeploymentNodeSpec]
 
     public init(
@@ -818,6 +966,9 @@ public struct DeploymentSpec: Codable, Equatable, Sendable {
         talosVersion: String,
         kubernetesVersion: String,
         helperStateRoot: String,
+        talosFactory: TalosImageFactorySettings = TalosImageFactorySettings(),
+        talosProvisioning: TalosProvisioningDefaults = TalosProvisioningDefaults(),
+        talosKernelModules: [TalosKernelModule] = [],
         nodes: [DeploymentNodeSpec]
     ) {
         self.accountNumber = accountNumber
@@ -826,7 +977,41 @@ public struct DeploymentSpec: Codable, Equatable, Sendable {
         self.talosVersion = talosVersion
         self.kubernetesVersion = kubernetesVersion
         self.helperStateRoot = helperStateRoot
+        self.talosFactory = talosFactory
+        self.talosProvisioning = talosProvisioning
+        self.talosKernelModules = talosKernelModules
         self.nodes = nodes
+    }
+}
+
+extension DeploymentSpec {
+    enum CodingKeys: String, CodingKey {
+        case accountNumber
+        case clusterName
+        case clusterEndpoint
+        case talosVersion
+        case kubernetesVersion
+        case helperStateRoot
+        case talosFactory
+        case talosProvisioning
+        case talosKernelModules
+        case nodes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            accountNumber: try container.decode(String.self, forKey: .accountNumber),
+            clusterName: try container.decode(String.self, forKey: .clusterName),
+            clusterEndpoint: try container.decode(String.self, forKey: .clusterEndpoint),
+            talosVersion: try container.decode(String.self, forKey: .talosVersion),
+            kubernetesVersion: try container.decodeIfPresent(String.self, forKey: .kubernetesVersion) ?? "v1.34.1",
+            helperStateRoot: try container.decodeIfPresent(String.self, forKey: .helperStateRoot) ?? "/var/lib/talos-deploy",
+            talosFactory: try container.decodeIfPresent(TalosImageFactorySettings.self, forKey: .talosFactory) ?? TalosImageFactorySettings(),
+            talosProvisioning: try container.decodeIfPresent(TalosProvisioningDefaults.self, forKey: .talosProvisioning) ?? TalosProvisioningDefaults(),
+            talosKernelModules: try container.decodeIfPresent([TalosKernelModule].self, forKey: .talosKernelModules) ?? [],
+            nodes: try container.decode([DeploymentNodeSpec].self, forKey: .nodes)
+        )
     }
 }
 
@@ -867,6 +1052,7 @@ public struct DeploymentPlan: Codable, Equatable, Sendable {
     public var helper: PlannedDeviceInstall
     public var installs: [PlannedDeviceInstall]
     public var phases: [DeploymentPhase]
+    public var talosArtifacts: TalosFactoryArtifacts
     public var tempStateDirectory: String
     public var durableStateDirectory: String
 
@@ -876,6 +1062,13 @@ public struct DeploymentPlan: Codable, Equatable, Sendable {
         helper: PlannedDeviceInstall,
         installs: [PlannedDeviceInstall],
         phases: [DeploymentPhase],
+        talosArtifacts: TalosFactoryArtifacts = TalosFactoryArtifacts(
+            schematicID: TalosImageFactorySettings().schematicID,
+            schematicYAML: "customization:\n",
+            isoURL: "",
+            pxeURL: "",
+            installerImage: ""
+        ),
         tempStateDirectory: String,
         durableStateDirectory: String
     ) {
@@ -884,8 +1077,36 @@ public struct DeploymentPlan: Codable, Equatable, Sendable {
         self.helper = helper
         self.installs = installs
         self.phases = phases
+        self.talosArtifacts = talosArtifacts
         self.tempStateDirectory = tempStateDirectory
         self.durableStateDirectory = durableStateDirectory
+    }
+}
+
+extension DeploymentPlan {
+    enum CodingKeys: String, CodingKey {
+        case accountNumber
+        case clusterName
+        case helper
+        case installs
+        case phases
+        case talosArtifacts
+        case tempStateDirectory
+        case durableStateDirectory
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            accountNumber: try container.decode(String.self, forKey: .accountNumber),
+            clusterName: try container.decode(String.self, forKey: .clusterName),
+            helper: try container.decode(PlannedDeviceInstall.self, forKey: .helper),
+            installs: try container.decode([PlannedDeviceInstall].self, forKey: .installs),
+            phases: try container.decode([DeploymentPhase].self, forKey: .phases),
+            talosArtifacts: try container.decodeIfPresent(TalosFactoryArtifacts.self, forKey: .talosArtifacts) ?? TalosFactoryClient().artifactURLs(settings: TalosImageFactorySettings(), talosVersion: "v1.11.3"),
+            tempStateDirectory: try container.decode(String.self, forKey: .tempStateDirectory),
+            durableStateDirectory: try container.decode(String.self, forKey: .durableStateDirectory)
+        )
     }
 }
 

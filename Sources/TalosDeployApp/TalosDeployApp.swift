@@ -580,11 +580,57 @@ private struct SettingsRootView: View {
                 TextField("Kubernetes Version", text: $controller.settings.talos.kubernetesVersion)
                 TextField("Cluster Name", text: $controller.settings.talos.clusterName)
                 TextField("Cluster Endpoint", text: $controller.settings.talos.clusterEndpoint)
+                TextField("System Extensions", text: Binding(
+                    get: { controller.settings.talos.factory.selectedSystemExtensions.joined(separator: ",") },
+                    set: {
+                        let values = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                        controller.settings.talos.factory.selectedSystemExtensions = values
+                        controller.settings.talos.extensions = values
+                    }
+                ))
+                TextField("Kernel Modules", text: Binding(
+                    get: { controller.settings.talos.kernelModules.map { module in
+                        module.parameters.isEmpty ? module.name : "\(module.name)(\(module.parameters.joined(separator: " ")))"
+                    }.joined(separator: ",") },
+                    set: { controller.settings.talos.kernelModules = parseKernelModules($0) }
+                ))
+                TextField("Extra Kernel Args", text: Binding(
+                    get: { controller.settings.talos.factory.extraKernelArgs.joined(separator: ",") },
+                    set: { controller.settings.talos.factory.extraKernelArgs = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
+                ))
                 Picker("Installer Preference", selection: $controller.settings.talos.installerPreference) {
                     ForEach(InstallPreference.allCases, id: \.self) { preference in
                         Text(preference.rawValue).tag(preference)
                     }
                 }
+            }
+            Section("Talos Image Factory") {
+                TextField("Factory URL", text: $controller.settings.talos.factory.baseURL)
+                TextField("PXE Factory URL", text: $controller.settings.talos.factory.pxeBaseURL)
+                TextField("Registry Host", text: $controller.settings.talos.factory.registryHost)
+                TextField("Architecture", text: $controller.settings.talos.factory.architecture)
+                TextField("Platform", text: $controller.settings.talos.factory.platform)
+                TextField("Schematic ID", text: $controller.settings.talos.factory.schematicID)
+                Text("Image Factory creates ISO/PXE/installer artifacts from schematics and system extensions. Kernel modules are rendered into machine configs separately.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Talos Provisioning") {
+                Toggle("Allow overseer-hosted media", isOn: $controller.settings.talos.provisioning.allowOverseerHostedMedia)
+                Toggle("Allow overseer PXE", isOn: $controller.settings.talos.provisioning.allowOverseerPXE)
+                Toggle("Allow external OOB URL", isOn: $controller.settings.talos.provisioning.allowExternalOOBURL)
+                TextField("External OOB media base URL", text: $controller.settings.talos.provisioning.externalOOBMediaBaseURL)
+                TextField("Strategy order", text: Binding(
+                    get: { controller.settings.talos.provisioning.preferredStrategies.map(\.rawValue).joined(separator: ",") },
+                    set: {
+                        controller.settings.talos.provisioning.preferredStrategies = $0
+                            .split(separator: ",")
+                            .compactMap { TalosProvisioningStrategy(rawValue: $0.trimmingCharacters(in: .whitespaces)) }
+                    }
+                ))
+                Text("After the Ubuntu/deployer node is established, tds can use it for PXE/DHCP/HTTP media, or use direct/external OOB media when that is safer.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section("Bootstrap Media") {
                 Picker("First overseer media delivery", selection: $controller.settings.bootstrapMedia.deliveryMode) {
@@ -814,6 +860,26 @@ private struct ParsedProxyURL {
 
 private func firstNonEmpty(_ values: String...) -> String {
     values.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+}
+
+private func parseKernelModules(_ value: String) -> [TalosKernelModule] {
+    value
+        .split(separator: ",")
+        .compactMap { raw in
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            if let open = trimmed.firstIndex(of: "("), trimmed.hasSuffix(")") {
+                let name = String(trimmed[..<open]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let paramsStart = trimmed.index(after: open)
+                let paramsEnd = trimmed.index(before: trimmed.endIndex)
+                let parameters = trimmed[paramsStart..<paramsEnd]
+                    .split(separator: " ")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                return name.isEmpty ? nil : TalosKernelModule(name: name, parameters: parameters)
+            }
+            return TalosKernelModule(name: trimmed)
+        }
 }
 
 private extension AppController {
