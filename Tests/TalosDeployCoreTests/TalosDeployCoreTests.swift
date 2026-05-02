@@ -235,6 +235,66 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("destination: /var/lib/longhorn"))
     }
 
+    func testTalosBuilderRendersManualVLANsAndBridges() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
+        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "172.22.220.10")
+        var deployerAssignment = DeviceAssignment(deviceID: "deployer", role: .deployer, deployerMode: .existing)
+        let cpAssignment = DeviceAssignment(
+            deviceID: "cp1",
+            role: .controlplane,
+            shouldInstallOS: true,
+            networkSource: .manual,
+            staticNetwork: StaticNetworkConfig(
+                managementInterface: "eno1",
+                managementAddressCIDR: "172.22.220.10/22",
+                gateway: "172.22.220.1",
+                nameservers: ["69.20.0.196", "69.20.0.164"],
+                searchDomains: ["rpc.rackspace.com"],
+                routes: [StaticNetworkRoute(to: "default", via: "172.22.220.1")],
+                vlans: [
+                    NetworkInterface(name: "eno3.901", vlanID: 901, parentInterface: "eno3"),
+                    NetworkInterface(name: "eno50.1326", vlanID: 1326, parentInterface: "eno50"),
+                ],
+                bridges: [
+                    NetworkInterface(name: "br-ipmi", addresses: ["10.17.123.180/26"], bridgePorts: ["eno3.901"]),
+                    NetworkInterface(
+                        name: "br-ctlplane",
+                        addresses: ["172.22.216.10/22"],
+                        bridgePorts: ["eno49"],
+                        routes: [StaticNetworkRoute(to: "192.168.100.0/24", via: "172.22.216.36")]
+                    ),
+                ]
+            )
+        )
+        deployerAssignment.typedConfirmation = ""
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.11.3",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: deployerAssignment),
+                DeploymentNodeSpec(device: cp, assignment: cpAssignment),
+            ]
+        )
+
+        let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
+        let output = try await DefaultTalosBuilder().buildArtifacts(for: spec, plan: plan, in: temp)
+        let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+
+        XCTAssertTrue(patch.contains("      - interface: eno3\n        vlans:\n          - vlanId: 901"))
+        XCTAssertTrue(patch.contains("      - interface: eno50\n        vlans:\n          - vlanId: 1326"))
+        XCTAssertTrue(patch.contains("      - interface: br-ipmi"))
+        XCTAssertTrue(patch.contains("          - eno3.901"))
+        XCTAssertTrue(patch.contains("      - interface: br-ctlplane"))
+        XCTAssertTrue(patch.contains("          - eno49"))
+        XCTAssertTrue(patch.contains("network: 192.168.100.0/24"))
+        XCTAssertTrue(patch.contains("gateway: 172.22.216.36"))
+    }
+
     func testBridgeSessionDetectionParsesHammertimeCachePayload() async throws {
         let runner = MockCommandRunner(
             responses: [

@@ -210,6 +210,9 @@ public struct NetworkInterface: Identifiable, Codable, Equatable, Sendable {
     public var macAddress: String
     public var vlanID: Int?
     public var mtu: Int?
+    public var parentInterface: String
+    public var bridgePorts: [String]
+    public var routes: [StaticNetworkRoute]
 
     public init(
         id: UUID = UUID(),
@@ -217,7 +220,10 @@ public struct NetworkInterface: Identifiable, Codable, Equatable, Sendable {
         addresses: [String] = [],
         macAddress: String = "",
         vlanID: Int? = nil,
-        mtu: Int? = nil
+        mtu: Int? = nil,
+        parentInterface: String = "",
+        bridgePorts: [String] = [],
+        routes: [StaticNetworkRoute] = []
     ) {
         self.id = id
         self.name = name
@@ -225,6 +231,36 @@ public struct NetworkInterface: Identifiable, Codable, Equatable, Sendable {
         self.macAddress = macAddress
         self.vlanID = vlanID
         self.mtu = mtu
+        self.parentInterface = parentInterface
+        self.bridgePorts = bridgePorts
+        self.routes = routes
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case addresses
+        case macAddress
+        case vlanID
+        case mtu
+        case parentInterface
+        case bridgePorts
+        case routes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
+            name: try container.decodeIfPresent(String.self, forKey: .name) ?? "",
+            addresses: try container.decodeIfPresent([String].self, forKey: .addresses) ?? [],
+            macAddress: try container.decodeIfPresent(String.self, forKey: .macAddress) ?? "",
+            vlanID: try container.decodeIfPresent(Int.self, forKey: .vlanID),
+            mtu: try container.decodeIfPresent(Int.self, forKey: .mtu),
+            parentInterface: try container.decodeIfPresent(String.self, forKey: .parentInterface) ?? "",
+            bridgePorts: try container.decodeIfPresent([String].self, forKey: .bridgePorts) ?? [],
+            routes: try container.decodeIfPresent([StaticNetworkRoute].self, forKey: .routes) ?? []
+        )
     }
 }
 

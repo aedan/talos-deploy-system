@@ -539,6 +539,8 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             lines.append("          - \(staticConfig.managementAddressCIDR)")
         }
         lines.append(contentsOf: renderRoutes(staticConfig.routes))
+        lines.append(contentsOf: renderVLANParentInterfaces(staticConfig.vlans, excluding: [interfaceName]))
+        lines.append(contentsOf: renderBridgeInterfaces(staticConfig.bridges))
         lines.append("  install:")
         lines.append("    disk: \(node.device.installDisk.isEmpty ? "/dev/sda" : node.device.installDisk)")
         lines.append("    image: \(installerImage)")
@@ -575,6 +577,83 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             }
         }
         return lines
+    }
+
+    private func renderNestedRoutes(_ routes: [StaticNetworkRoute], indent: String) -> [String] {
+        guard !routes.isEmpty else { return [] }
+        var lines = ["\(indent)routes:"]
+        for route in routes {
+            lines.append("\(indent)  - network: \(route.to)")
+            if !route.via.isEmpty {
+                lines.append("\(indent)    gateway: \(route.via)")
+            }
+            if let metric = route.metric {
+                lines.append("\(indent)    metric: \(metric)")
+            }
+        }
+        return lines
+    }
+
+    private func renderVLANParentInterfaces(_ vlans: [NetworkInterface], excluding excludedParents: Set<String> = []) -> [String] {
+        let resolved = vlans
+            .filter { $0.vlanID != nil }
+            .map { vlan in
+                (
+                    parent: firstNonEmptyStatic(vlan.parentInterface, parentInterfaceName(for: vlan.name)),
+                    vlan: vlan
+                )
+            }
+            .filter { !$0.parent.isEmpty && !excludedParents.contains($0.parent) }
+        guard !resolved.isEmpty else { return [] }
+
+        let grouped = Dictionary(grouping: resolved, by: \.parent)
+        var lines: [String] = []
+        for parent in grouped.keys.sorted() {
+            lines.append("      - interface: \(parent)")
+            lines.append("        vlans:")
+            for entry in grouped[parent, default: []].map(\.vlan).sorted(by: { ($0.vlanID ?? 0) < ($1.vlanID ?? 0) }) {
+                guard let vlanID = entry.vlanID else { continue }
+                lines.append("          - vlanId: \(vlanID)")
+                if !entry.addresses.isEmpty {
+                    lines.append("            addresses:")
+                    lines.append(contentsOf: entry.addresses.map { "              - \($0)" })
+                }
+                if let mtu = entry.mtu {
+                    lines.append("            mtu: \(mtu)")
+                }
+                lines.append(contentsOf: renderNestedRoutes(entry.routes, indent: "            "))
+            }
+        }
+        return lines
+    }
+
+    private func renderBridgeInterfaces(_ bridges: [NetworkInterface]) -> [String] {
+        guard !bridges.isEmpty else { return [] }
+        var lines: [String] = []
+        for bridge in bridges.sorted(by: { $0.name < $1.name }) where !bridge.name.isEmpty {
+            lines.append("      - interface: \(bridge.name)")
+            if !bridge.addresses.isEmpty {
+                lines.append("        addresses:")
+                lines.append(contentsOf: bridge.addresses.map { "          - \($0)" })
+            }
+            if let mtu = bridge.mtu {
+                lines.append("        mtu: \(mtu)")
+            }
+            lines.append(contentsOf: renderNestedRoutes(bridge.routes, indent: "        "))
+            if !bridge.bridgePorts.isEmpty {
+                lines.append("        bridge:")
+                lines.append("          interfaces:")
+                lines.append(contentsOf: bridge.bridgePorts.map { "            - \($0)" })
+                lines.append("          stp:")
+                lines.append("            enabled: false")
+            }
+        }
+        return lines
+    }
+
+    private func parentInterfaceName(for vlanName: String) -> String {
+        guard let dot = vlanName.firstIndex(of: ".") else { return "" }
+        return String(vlanName[..<dot])
     }
 
     private func renderNameservers(_ config: StaticNetworkConfig) -> [String] {
