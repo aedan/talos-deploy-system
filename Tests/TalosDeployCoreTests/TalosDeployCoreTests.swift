@@ -1,15 +1,13 @@
 import Foundation
-import Testing
+import XCTest
 @testable import TalosDeployCore
 
-struct TalosDeployCoreTests {
-    @Test
-    func coreDefaultsDoNotBakeInATestAccount() {
-        #expect(CoreAPISettings().defaultAccountNumber.isEmpty)
+final class TalosDeployCoreTests: XCTestCase {
+    func testCoreDefaultsDoNotBakeInATestAccount() {
+        XCTAssertTrue(CoreAPISettings().defaultAccountNumber.isEmpty)
     }
 
-    @Test
-    func settingsRoundTrip() throws {
+    func testSettingsRoundTrip() throws {
         let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         setenv("TALOS_DEPLOY_HOME", base.path, 1)
         let paths = AppPaths()
@@ -22,12 +20,11 @@ struct TalosDeployCoreTests {
         try controller.save(settings)
 
         let loaded = try controller.load()
-        #expect(loaded.core.defaultAccountNumber == "123456")
-        #expect(loaded.helper.stateRoot == "/srv/talos")
+        XCTAssertTrue(loaded.core.defaultAccountNumber == "123456")
+        XCTAssertTrue(loaded.helper.stateRoot == "/srv/talos")
     }
 
-    @Test
-    func plannerRequiresExactlyOneHelper() throws {
+    func testPlannerRequiresExactlyOneHelper() throws {
         let device = DiscoveredDevice(id: "1", accountNumber: "0000000", name: "node-1")
         let spec = DeploymentSpec(
             accountNumber: "0000000",
@@ -40,13 +37,12 @@ struct TalosDeployCoreTests {
                 DeploymentNodeSpec(device: device, assignment: DeviceAssignment(deviceID: "1", role: .controlplane, shouldInstallOS: true)),
             ]
         )
-        #expect(throws: DeploymentPlannerError.self) {
-            _ = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
+        XCTAssertThrowsError(try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)) { error in
+            XCTAssertTrue(error is DeploymentPlannerError)
         }
     }
 
-    @Test
-    func bootstrapHelperCreatesTwoPhasePlan() throws {
+    func testBootstrapHelperCreatesTwoPhasePlan() throws {
         let helper = DiscoveredDevice(id: "helper", accountNumber: "0000000", name: "helper-1")
         let cp = DiscoveredDevice(id: "cp1", accountNumber: "0000000", name: "cp-1")
         var helperAssignment = DeviceAssignment(deviceID: "helper", role: .helper, helperMode: .bootstrap, shouldInstallOS: true)
@@ -64,12 +60,11 @@ struct TalosDeployCoreTests {
             ]
         )
         let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
-        #expect(plan.phases.first?.title == "Bootstrap Helper")
-        #expect(plan.helper.method == .virtualMedia)
+        XCTAssertTrue(plan.phases.first?.title == "Bootstrap Helper")
+        XCTAssertTrue(plan.helper.method == .virtualMedia)
     }
 
-    @Test
-    func talosBuilderCreatesArtifacts() async throws {
+    func testTalosBuilderCreatesArtifacts() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let helper = DiscoveredDevice(id: "helper", accountNumber: "0000000", name: "helper-1")
         let cp = DiscoveredDevice(id: "cp1", accountNumber: "0000000", name: "cp-1", primaryIP: "192.0.2.10")
@@ -89,12 +84,11 @@ struct TalosDeployCoreTests {
         )
         let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
         let output = try await DefaultTalosBuilder().buildArtifacts(for: spec, plan: plan, in: temp)
-        #expect(FileManager.default.fileExists(atPath: output.appending(path: "deployment-manifest.json").path))
-        #expect(FileManager.default.fileExists(atPath: output.appending(path: "cluster.yaml").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "deployment-manifest.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "cluster.yaml").path))
     }
 
-    @Test
-    func bridgeSessionDetectionParsesHammertimeCachePayload() async throws {
+    func testBridgeSessionDetectionParsesHammertimeCachePayload() async throws {
         let runner = MockCommandRunner(
             responses: [
                 CommandResult(
@@ -115,14 +109,13 @@ struct TalosDeployCoreTests {
 
         let session = try await client.discoverEnvironmentSession(includeSecret: true)
 
-        #expect(session?.session.username == "testuser")
-        #expect(session?.session.headerName == "X-Auth-Token")
-        #expect(session?.secret == "test-token")
-        #expect(runner.invocations.first?.arguments.contains("auth-status") == true)
+        XCTAssertTrue(session?.session.username == "testuser")
+        XCTAssertTrue(session?.session.headerName == "X-Auth-Token")
+        XCTAssertTrue(session?.secret == "test-token")
+        XCTAssertTrue(runner.invocations.first?.arguments.contains("auth-status") == true)
     }
 
-    @Test
-    func bridgeInventoryParsesDevices() async throws {
+    func testBridgeInventoryParsesDevices() async throws {
         let runner = MockCommandRunner(
             responses: [
                 CommandResult(
@@ -180,17 +173,16 @@ struct TalosDeployCoreTests {
 
         let devices = try await client.fetchDevices(accountNumber: "0000000")
 
-        #expect(devices.count == 1)
-        #expect(devices.first?.id == "123452")
-        #expect(devices.first?.platformName == "Load-Balancer")
-        #expect(devices.first?.oob?.address == "10.17.123.153")
-        #expect(devices.first?.networkInterfaces.first?.vlanID == 1220)
-        #expect(devices.first?.isClusterEligible == false)
-        #expect(runner.invocations.first?.arguments.contains("account-devices") == true)
+        XCTAssertTrue(devices.count == 1)
+        XCTAssertTrue(devices.first?.id == "123452")
+        XCTAssertTrue(devices.first?.platformName == "Load-Balancer")
+        XCTAssertTrue(devices.first?.oob?.address == "10.17.123.153")
+        XCTAssertTrue(devices.first?.networkInterfaces.first?.vlanID == 1220)
+        XCTAssertTrue(devices.first?.isClusterEligible == false)
+        XCTAssertTrue(runner.invocations.first?.arguments.contains("account-devices") == true)
     }
 
-    @Test
-    func physicalServerEligibilityExcludesNetworkDevicesAndVMs() throws {
+    func testPhysicalServerEligibilityExcludesNetworkDevicesAndVMs() throws {
         let server = DiscoveredDevice(
             id: "node-1",
             accountNumber: "0000000",
@@ -210,23 +202,20 @@ struct TalosDeployCoreTests {
             platformName: "Virtual Machine for Infrastructure - Linux (Internal Use Only) Required"
         )
 
-        #expect(server.isClusterEligible)
-        #expect(firewall.isClusterEligible == false)
-        #expect(vm.isClusterEligible == false)
+        XCTAssertTrue(server.isClusterEligible)
+        XCTAssertTrue(firewall.isClusterEligible == false)
+        XCTAssertTrue(vm.isClusterEligible == false)
     }
 
-    @Test
-    func hammertimeDefaultsSkipChecksForPreProvisionAccess() {
-        #expect(HammertimeSettings().skipDeviceChecks)
+    func testHammertimeDefaultsSkipChecksForPreProvisionAccess() {
+        XCTAssertTrue(HammertimeSettings().skipDeviceChecks)
     }
 
-    @Test
-    func talosDefaultsPreferVirtualMedia() {
-        #expect(TalosDefaults().installerPreference == .virtualMedia)
+    func testTalosDefaultsPreferVirtualMedia() {
+        XCTAssertTrue(TalosDefaults().installerPreference == .virtualMedia)
     }
 
-    @Test
-    func preinstallSnapshotCapturePersistsArtifacts() async throws {
+    func testPreinstallSnapshotCapturePersistsArtifacts() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let device = DiscoveredDevice(
             id: "123456",
@@ -307,17 +296,16 @@ struct TalosDeployCoreTests {
             baseDirectory: temp
         )
 
-        #expect(snapshot.device.id == "123456")
-        #expect(snapshot.summary.hostname == "123456-lab2-director.example.test")
-        #expect(snapshot.summary.oobIP == "10.17.123.132")
-        #expect(snapshot.summary.dnsServers == ["172.22.216.10", "69.20.0.164"])
-        #expect(FileManager.default.fileExists(atPath: URL(fileURLWithPath: snapshot.directory).appending(path: "snapshot.json").path))
-        #expect(FileManager.default.fileExists(atPath: URL(fileURLWithPath: snapshot.directory).appending(path: "captures").appending(path: "hostnamectl.json").path))
-        #expect(runner.invocations.first?.arguments.contains("--no-checks") == true)
+        XCTAssertTrue(snapshot.device.id == "123456")
+        XCTAssertTrue(snapshot.summary.hostname == "123456-lab2-director.example.test")
+        XCTAssertTrue(snapshot.summary.oobIP == "10.17.123.132")
+        XCTAssertTrue(snapshot.summary.dnsServers == ["172.22.216.10", "69.20.0.164"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: URL(fileURLWithPath: snapshot.directory).appending(path: "snapshot.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: URL(fileURLWithPath: snapshot.directory).appending(path: "captures").appending(path: "hostnamectl.json").path))
+        XCTAssertTrue(runner.invocations.first?.arguments.contains("--no-checks") == true)
     }
 
-    @Test
-    func ubuntuNetworkPlanPreservesBridgesVlansAndRoutes() throws {
+    func testUbuntuNetworkPlanPreservesBridgesVlansAndRoutes() throws {
         let snapshot = NetworkPreservationSnapshot(
             accountNumber: "0000000",
             device: DiscoveredDevice(id: "123456", accountNumber: "0000000", name: "director"),
@@ -392,17 +380,16 @@ struct TalosDeployCoreTests {
         let brIPMI = plan.bridges.first(where: { $0.name == "br-ipmi" })
         let brCtlplane = plan.bridges.first(where: { $0.name == "br-ctlplane" })
 
-        #expect(eno1?.macAddress == "94:57:a5:6d:9c:c0")
-        #expect(plan.vlans.contains(NetplanVLAN(name: "eno3.901", id: 901, link: "eno3")))
-        #expect(brIPMI?.interfaces == ["eno3.901"])
-        #expect(brIPMI?.addresses == ["10.17.123.182/26"])
-        #expect(brCtlplane?.routes.contains(NetplanRoute(to: "192.168.100.0/24", via: "172.22.216.36")) == true)
-        #expect(plan.bridges.contains(where: { $0.name == "virbr0" }) == false)
-        #expect(plan.renderNetplanYAML().contains("nameservers:"))
+        XCTAssertTrue(eno1?.macAddress == "94:57:a5:6d:9c:c0")
+        XCTAssertTrue(plan.vlans.contains(NetplanVLAN(name: "eno3.901", id: 901, link: "eno3")))
+        XCTAssertTrue(brIPMI?.interfaces == ["eno3.901"])
+        XCTAssertTrue(brIPMI?.addresses == ["10.17.123.182/26"])
+        XCTAssertTrue(brCtlplane?.routes.contains(NetplanRoute(to: "192.168.100.0/24", via: "172.22.216.36")) == true)
+        XCTAssertTrue(plan.bridges.contains(where: { $0.name == "virbr0" }) == false)
+        XCTAssertTrue(plan.renderNetplanYAML().contains("nameservers:"))
     }
 
-    @Test
-    func ubuntuAutoinstallSeedCreatesRackRootAndEvidence() throws {
+    func testUbuntuAutoinstallSeedCreatesRackRootAndEvidence() throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let spec = UbuntuInstallSpec(
             accountNumber: "0000000",
@@ -438,13 +425,13 @@ struct TalosDeployCoreTests {
         let userData = try String(contentsOf: URL(fileURLWithPath: artifacts.userDataPath), encoding: .utf8)
         let metaData = try String(contentsOf: URL(fileURLWithPath: artifacts.metaDataPath), encoding: .utf8)
 
-        #expect(userData.contains("autoinstall:"))
-        #expect(userData.contains("name: rack"))
-        #expect(userData.contains("name: root"))
-        #expect(userData.contains("PermitRootLogin yes"))
-        #expect(userData.contains("/var/log/installer/tds"))
-        #expect(userData.contains("br-ipmi:"))
-        #expect(metaData.contains("instance-id: tds-0000000-123456-director"))
+        XCTAssertTrue(userData.contains("autoinstall:"))
+        XCTAssertTrue(userData.contains("name: rack"))
+        XCTAssertTrue(userData.contains("name: root"))
+        XCTAssertTrue(userData.contains("PermitRootLogin yes"))
+        XCTAssertTrue(userData.contains("/var/log/installer/tds"))
+        XCTAssertTrue(userData.contains("br-ipmi:"))
+        XCTAssertTrue(metaData.contains("instance-id: tds-0000000-123456-director"))
     }
 
 }
