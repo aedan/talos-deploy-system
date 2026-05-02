@@ -5,8 +5,6 @@ Useful for iLO/iDRAC URL virtual media, which may require byte-range requests
 to mount ISO images reliably.
 """
 
-from __future__ import annotations
-
 import argparse
 import contextlib
 import email.utils
@@ -15,20 +13,24 @@ import io
 import os
 import posixpath
 import shutil
-from dataclasses import dataclass
+import socketserver
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote
 
 
-@dataclass
 class ByteRange:
-    start: int
-    end: int
+    def __init__(self, start: int, end: int) -> None:
+        self.start = start
+        self.end = end
 
     @property
     def length(self) -> int:
         return self.end - self.start + 1
+
+
+class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
 
 
 class RangeRequestHandler(http.server.SimpleHTTPRequestHandler):
@@ -36,7 +38,8 @@ class RangeRequestHandler(http.server.SimpleHTTPRequestHandler):
 
     def __init__(self, *args, directory: Optional[str] = None, **kwargs):
         self.range: Optional[ByteRange] = None
-        super().__init__(*args, directory=directory, **kwargs)
+        self.directory = directory or os.getcwd()
+        super().__init__(*args, **kwargs)
 
     def send_head(self):
         path = self.translate_path(self.path)
@@ -168,7 +171,7 @@ def main() -> int:
     handler = lambda *a, **kw: RangeRequestHandler(
         *a, directory=directory, **kw
     )
-    server = http.server.ThreadingHTTPServer((args.bind, args.port), handler)
+    server = ThreadingHTTPServer((args.bind, args.port), handler)
 
     print(f"Serving {directory} on http://{args.bind}:{args.port}", flush=True)
     with contextlib.suppress(KeyboardInterrupt):
