@@ -335,113 +335,116 @@ private struct InventoryView: View {
     @EnvironmentObject private var controller: AppController
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                TextField("Account Number", text: $controller.accountNumber)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    TextField("Account Number", text: $controller.accountNumber)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 220)
+                        .fieldHelp("Core account number to inventory; tds does not ship with a default real account.")
+                    Button("Load Devices") {
+                        Task { await controller.refreshInventory() }
+                    }
+                    Button("Refresh Live Facts") {
+                        Task { await controller.refreshLiveFacts() }
+                    }
+                }
+                TextField("Filter physical servers by name, ID, IP, OOB, platform, or role", text: $controller.inventoryFilterText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 220)
-                    .fieldHelp("Core account number to inventory; tds does not ship with a default real account.")
-                Button("Load Devices") {
-                    Task { await controller.refreshInventory() }
-                }
-                Button("Refresh Live Facts") {
-                    Task { await controller.refreshLiveFacts() }
-                }
-            }
-            TextField("Filter physical servers by name, ID, IP, OOB, platform, or role", text: $controller.inventoryFilterText)
-                .textFieldStyle(.roundedBorder)
-                .fieldHelp("Narrows the physical-server table without changing selected roles or install choices; clear it to show every eligible server.")
+                    .fieldHelp("Narrows the physical-server table without changing selected roles or install choices; clear it to show every eligible server.")
 
-            if !controller.devices.isEmpty {
-                Text("Showing \(controller.filteredClusterEligibleDevices.count) of \(controller.clusterEligibleDevices.count) physical server candidates; \(controller.filteredDevices.count) non-server devices filtered out.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                if !controller.devices.isEmpty {
+                    Text("Showing \(controller.filteredClusterEligibleDevices.count) of \(controller.clusterEligibleDevices.count) physical server candidates; \(controller.filteredDevices.count) non-server devices filtered out.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
-            Table(controller.filteredClusterEligibleDevices) {
-                TableColumn("Device") { device in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(device.name)
-                        if !device.platformName.isEmpty {
-                            Text(device.platformName)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                TableColumn("Primary IP") { device in
-                    Text(device.primaryIP)
-                }
-                TableColumn("OOB") { device in
-                    Text(device.oob?.address ?? "-")
-                }
-                TableColumn("Role") { device in
-                    Picker("Role", selection: Binding(
-                        get: { controller.binding(for: device).role },
-                        set: {
-                            var assignment = controller.binding(for: device)
-                            assignment.role = $0
-                            controller.updateAssignment(assignment)
-                        }
-                    )) {
-                        ForEach(DeviceRole.selectableRoles, id: \.self) { role in
-                            Text(role.displayName).tag(role)
-                        }
-                    }
-                    .labelsHidden()
-                }
-                TableColumn("Install") { device in
-                    Toggle(
-                        "",
-                        isOn: Binding(
-                            get: { controller.binding(for: device).shouldInstallOS },
-                            set: {
-                                var assignment = controller.binding(for: device)
-                                assignment.shouldInstallOS = $0
-                                if assignment.role.isDeployer && $0 {
-                                    assignment.deployerMode = .bootstrap
-                                }
-                                controller.updateAssignment(assignment)
-                            }
-                        )
-                    )
-                    .labelsHidden()
-                }
-            }
-            Text("Install toggles mark devices whose current OS should be replaced; selecting install on the deployer switches it into bootstrap mode and requires the destructive confirmation.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-
-            NetworkingEditorView()
-
-            if !controller.filteredDevices.isEmpty {
-                DisclosureGroup("Filtered non-server devices (\(controller.filteredDevices.count))") {
-                    List(controller.filteredDevices) { device in
-                        VStack(alignment: .leading, spacing: 4) {
+                Table(controller.filteredClusterEligibleDevices) {
+                    TableColumn("Device") { device in
+                        VStack(alignment: .leading, spacing: 2) {
                             Text(device.name)
-                            Text(device.clusterIneligibilityReason ?? "Filtered out")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                             if !device.platformName.isEmpty {
                                 Text(device.platformName)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        .padding(.vertical, 4)
                     }
-                    .frame(minHeight: 120, maxHeight: 220)
+                    TableColumn("Primary IP") { device in
+                        Text(device.primaryIP)
+                    }
+                    TableColumn("OOB") { device in
+                        Text(device.oob?.address ?? "-")
+                    }
+                    TableColumn("Role") { device in
+                        Picker("Role", selection: Binding(
+                            get: { controller.binding(for: device).role },
+                            set: {
+                                var assignment = controller.binding(for: device)
+                                assignment.role = $0
+                                controller.updateAssignment(assignment)
+                            }
+                        )) {
+                            ForEach(DeviceRole.selectableRoles, id: \.self) { role in
+                                Text(role.displayName).tag(role)
+                            }
+                        }
+                        .labelsHidden()
+                    }
+                    TableColumn("Install") { device in
+                        Toggle(
+                            "",
+                            isOn: Binding(
+                                get: { controller.binding(for: device).shouldInstallOS },
+                                set: {
+                                    var assignment = controller.binding(for: device)
+                                    assignment.shouldInstallOS = $0
+                                    if assignment.role.isDeployer && $0 {
+                                        assignment.deployerMode = .bootstrap
+                                    }
+                                    controller.updateAssignment(assignment)
+                                }
+                            )
+                        )
+                        .labelsHidden()
+                    }
+                }
+                .frame(minHeight: 280, maxHeight: 420)
+                Text("Install toggles mark devices whose current OS should be replaced; selecting install on the deployer switches it into bootstrap mode and requires the destructive confirmation.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+
+                NetworkingEditorView()
+
+                if !controller.filteredDevices.isEmpty {
+                    DisclosureGroup("Filtered non-server devices (\(controller.filteredDevices.count))") {
+                        List(controller.filteredDevices) { device in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(device.name)
+                                Text(device.clusterIneligibilityReason ?? "Filtered out")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                if !device.platformName.isEmpty {
+                                    Text(device.platformName)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .frame(minHeight: 120, maxHeight: 220)
+                    }
+                }
+
+                if let deployer = controller.clusterEligibleDevices.first(where: {
+                    let assignment = controller.binding(for: $0)
+                    return assignment.role.isDeployer && assignment.shouldInstallOS
+                }) {
+                    DeployerWarningView(device: deployer)
                 }
             }
-
-            if let deployer = controller.clusterEligibleDevices.first(where: {
-                let assignment = controller.binding(for: $0)
-                return assignment.role.isDeployer && assignment.shouldInstallOS
-            }) {
-                DeployerWarningView(device: deployer)
-            }
+            .padding()
         }
-        .padding()
         .navigationTitle("Inventory + Role Assignment")
     }
 }
@@ -488,12 +491,15 @@ private struct NetworkingEditorView: View {
     }
 
     var body: some View {
-        DisclosureGroup("Talos Static Networking (\(talosNodes.count))") {
+        SectionCard(title: "Talos Static Networking (\(talosNodes.count))") {
             if talosNodes.isEmpty {
                 Text("Assign controlplane or worker roles to edit final static networking. DHCP may be used only for live boot; machine configs must use Core/captured/manual static IPs.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
+                Text("Review and complete final static networking for each Talos node. This section stays inline so role selection cannot navigate away from the inventory screen.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(talosNodes) { device in
                         DeviceNetworkEditor(device: device)
