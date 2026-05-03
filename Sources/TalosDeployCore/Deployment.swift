@@ -686,8 +686,10 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
 
         let nodesDirectory = directory.appending(path: "node-patches", directoryHint: .isDirectory)
         let bootNodesDirectory = directory.appending(path: "boot-node-patches", directoryHint: .isDirectory)
+        let bootNetworkMetaDirectory = directory.appending(path: "boot-network-meta", directoryHint: .isDirectory)
         try fileManager.createDirectory(at: nodesDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: bootNodesDirectory, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: bootNetworkMetaDirectory, withIntermediateDirectories: true)
         for node in spec.nodes where node.assignment.role == .controlplane || node.assignment.role == .worker {
             let yaml = renderNodePatch(
                 node: node,
@@ -708,6 +710,12 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             )
             try bootYAML.write(
                 to: bootNodesDirectory.appending(path: "\(node.device.name).yaml"),
+                atomically: true,
+                encoding: .utf8
+            )
+            let bootNetworkMeta = renderInitialNetworkMeta(node: node)
+            try bootNetworkMeta.write(
+                to: bootNetworkMetaDirectory.appending(path: "\(node.device.name).yaml"),
                 atomically: true,
                 encoding: .utf8
             )
@@ -766,6 +774,44 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             lines.append("    disk: \(node.device.installDisk.isEmpty ? "/dev/sda" : node.device.installDisk)")
             lines.append("    image: \(installerImage)")
             lines.append(contentsOf: renderExtraKernelArgs(spec.talosFactory.extraKernelArgs))
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private func renderInitialNetworkMeta(node: DeploymentNodeSpec) -> String {
+        let staticConfig = StaticNetworkPlanner().config(for: node)
+        let interfaceName = firstNonEmptyStatic(staticConfig.managementInterface, node.device.networkInterfaces.first?.name ?? "eth0")
+        var lines = [
+            "addresses:",
+            "  - address: \(yamlScalar(staticConfig.managementAddressCIDR))",
+            "    linkName: \(yamlScalar(interfaceName))",
+            "    family: inet4",
+            "    scope: global",
+            "    flags: permanent",
+            "    layer: platform",
+            "links:",
+            "  - name: \(yamlScalar(interfaceName))",
+            "    up: true",
+            "    layer: platform",
+        ]
+        if !staticConfig.gateway.isEmpty {
+            lines.append(contentsOf: [
+                "routes:",
+                "  - gateway: \(yamlScalar(staticConfig.gateway))",
+                "    outLinkName: \(yamlScalar(interfaceName))",
+                "    table: main",
+                "    priority: 1024",
+                "    scope: global",
+                "    type: unicast",
+                "    protocol: static",
+                "    layer: platform",
+            ])
+        }
+        if !staticConfig.nameservers.isEmpty {
+            lines.append("resolvers:")
+            lines.append("  - dnsServers:")
+            lines.append(contentsOf: staticConfig.nameservers.map { "      - \(yamlScalar($0))" })
+            lines.append("    layer: platform")
         }
         return lines.joined(separator: "\n") + "\n"
     }

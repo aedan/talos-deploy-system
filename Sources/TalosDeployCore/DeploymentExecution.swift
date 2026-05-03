@@ -47,6 +47,7 @@ public struct MaintenanceBundleBuilder {
                 "talos-artifacts.json",
                 "talos-factory-schematic.yaml",
                 "boot-node-patches/",
+                "boot-network-meta/",
                 "node-patches/",
                 "inventory/selected-devices.json",
                 "inventory/networking-summary.json",
@@ -136,8 +137,13 @@ public struct MaintenanceBundleBuilder {
         capture_live_links() {
           local name="$1"
           local ip="$2"
+          local mode="${3:-configured}"
           mkdir -p inventory/talos-live
-          "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" get links -o yaml > "inventory/talos-live/${name}-links.yaml" 2>"inventory/talos-live/${name}-links.stderr" || true
+          if [ "$mode" = "insecure" ]; then
+            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" --insecure get links -o yaml > "inventory/talos-live/${name}-links.yaml" 2>"inventory/talos-live/${name}-links.stderr" || true
+          else
+            "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" get links -o yaml > "inventory/talos-live/${name}-links.yaml" 2>"inventory/talos-live/${name}-links.stderr" || true
+          fi
         }
 
         apply_final_config() {
@@ -153,10 +159,16 @@ public struct MaintenanceBundleBuilder {
         "$ROOT/maintenance/tds-prepare-talos-media.sh"
         cd "$ROOT"
 
-        while IFS='|' read -r name role ip patch boot_patch device_id media_file; do
+        while IFS='|' read -r name role ip patch boot_patch meta_path device_id media_file boot_mode; do
           [ -n "$name" ] || continue
           embedded_media="${TDS_MEDIA_ROOT}/${media_file}"
-          if [ -f "$embedded_media" ]; then
+          if [ -f "$embedded_media" ] && [ "$boot_mode" = "meta" ]; then
+            wait_for_live_api "$name" "$ip"
+            capture_live_links "$name" "$ip" insecure
+            log "applying static machine config to $name ($ip)"
+            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --file "machine-configs/${name}.yaml"
+            wait_for_configured_api "$name" "$ip" 90 "after static config apply"
+          elif [ -f "$embedded_media" ]; then
             wait_for_configured_api "$name" "$ip" 180 "from boot ISO static networking config"
             capture_live_links "$name" "$ip"
             apply_final_config "$name" "$ip"
@@ -189,7 +201,7 @@ public struct MaintenanceBundleBuilder {
         let allNodes = controlPlanes + workers
         let installerImage = state.plan.talosArtifacts.installerImage
         let nodeLines = allNodes.map {
-            "\($0.name)|\($0.role.rawValue)|\($0.ip)|\($0.patchPath)|\($0.bootPatchPath)|\($0.deviceID)|\($0.mediaFileName)"
+            "\($0.name)|\($0.role.rawValue)|\($0.ip)|\($0.patchPath)|\($0.bootPatchPath)|\($0.metaPath)|\($0.deviceID)|\($0.mediaFileName)|meta"
         }.joined(separator: "\n")
 
         return """
@@ -219,7 +231,7 @@ public struct MaintenanceBundleBuilder {
         \(nodeLines)
         EOF_NODES
 
-        while IFS='|' read -r name role ip patch boot_patch device_id media_file; do
+        while IFS='|' read -r name role ip patch boot_patch meta_path device_id media_file boot_mode; do
           [ -n "$name" ] || continue
           base="generated/controlplane.yaml"
           if [ "$role" = "worker" ]; then
@@ -245,7 +257,7 @@ public struct MaintenanceBundleBuilder {
             !skip { print }
           ' "boot-machine-configs/${name}.yaml" > "$boot_no_install"
           mv "$boot_no_install" "boot-machine-configs/${name}.yaml"
-          "$TALOSCTL" validate --mode metal --config "boot-machine-configs/${name}.yaml" --strict
+          "$TALOSCTL" validate --mode cloud --config "boot-machine-configs/${name}.yaml" --strict
           if [ -f "$TDS_BASE_TALOS_ISO" ]; then
             if ! command -v xorriso >/dev/null 2>&1; then
               echo "xorriso is required to build node-specific Talos ISO media" >&2
@@ -256,14 +268,11 @@ public struct MaintenanceBundleBuilder {
             rm -f "$out" "$out.tmp"
             xorriso -osirrox on -indev "$TDS_BASE_TALOS_ISO" \\
               -extract /boot/grub/grub.cfg "$work/grub.cfg" >/dev/null 2>&1
-            if ! grep -q "talos.config=metal-iso" "$work/grub.cfg"; then
-              sed -i "s/talos.platform=metal /talos.platform=metal talos.config=metal-iso ${TDS_TALOS_BOOT_ARGS_EXTRA} /g" "$work/grub.cfg"
-            fi
-            cp "boot-machine-configs/${name}.yaml" "$work/config.yaml"
+            meta_payload="$( { printf '0xa='; cat "${meta_path}"; } | gzip -9 | base64 | tr -d '\\n' )"
+            sed -i "s/talos.platform=metal /talos.platform=metal talos.environment=INSTALLER_META_BASE64=${meta_payload} ${TDS_TALOS_BOOT_ARGS_EXTRA} /g" "$work/grub.cfg"
             xorriso -indev "$TDS_BASE_TALOS_ISO" -outdev "$out.tmp" \\
               -volid metal-iso \\
               -map "$work/grub.cfg" /boot/grub/grub.cfg \\
-              -map "$work/config.yaml" /config.yaml \\
               -boot_image any replay >/dev/null 2>&1
             mv "$out.tmp" "$out"
 
@@ -405,6 +414,7 @@ public struct MaintenanceBundleBuilder {
                     ip: config.managementAddressCIDR.split(separator: "/").first.map(String.init) ?? node.device.privateIP,
                     patchPath: "node-patches/\(node.device.name).yaml",
                     bootPatchPath: "boot-node-patches/\(node.device.name).yaml",
+                    metaPath: "boot-network-meta/\(node.device.name).yaml",
                     deviceID: node.device.id,
                     mediaFileName: talosNodeMediaFileName(deviceID: node.device.id, talosVersion: state.spec.talosVersion)
                 )
@@ -417,6 +427,7 @@ public struct MaintenanceBundleBuilder {
         var ip: String
         var patchPath: String
         var bootPatchPath: String
+        var metaPath: String
         var deviceID: String
         var mediaFileName: String
     }

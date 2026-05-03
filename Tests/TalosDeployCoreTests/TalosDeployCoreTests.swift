@@ -271,8 +271,10 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "talos-factory-schematic.yaml").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "talos-artifacts.json").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "boot-node-patches").appending(path: "cp-1.yaml").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "boot-network-meta").appending(path: "cp-1.yaml").path))
         let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
         let bootPatch = try String(contentsOf: output.appending(path: "boot-node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+        let bootMeta = try String(contentsOf: output.appending(path: "boot-network-meta").appending(path: "cp-1.yaml"), encoding: .utf8)
         XCTAssertTrue(patch.contains("image: factory.talos.dev/installer/abc123:v1.11.3"))
         XCTAssertFalse(patch.contains("hostname: cp-1"))
         XCTAssertTrue(patch.contains("name: br_netfilter"))
@@ -285,6 +287,8 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("destination: /var/lib/longhorn"))
         XCTAssertFalse(bootPatch.contains("  install:\n"))
         XCTAssertFalse(bootPatch.contains("image: factory.talos.dev/installer/abc123:v1.11.3"))
+        XCTAssertTrue(bootMeta.contains("address: 198.51.100.10/22"))
+        XCTAssertTrue(bootMeta.contains("gateway: 198.51.100.1"))
     }
 
     func testStageWritesMaintenanceBundleForDeployerOwnedOperations() async throws {
@@ -313,6 +317,7 @@ final class TalosDeployCoreTests: XCTestCase {
 
         XCTAssertTrue(manifest.scripts.contains("maintenance/tds-prepare-talos-media.sh"))
         XCTAssertTrue(manifest.scripts.contains("maintenance/tds-run-talos-deploy.sh"))
+        XCTAssertTrue(manifest.files.contains("boot-network-meta/"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: stateDirectory.appending(path: "maintenance/tds-prepare-talos-media.sh").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: stateDirectory.appending(path: "maintenance/health-check.sh").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: stateDirectory.appending(path: "inventory/selected-devices.json").path))
@@ -321,11 +326,12 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(deployScript.contains("TDS_DEPLOYER_STATE_ROOT='/var/lib/talos-deploy'"))
         XCTAssertTrue(deployScript.contains("${TDS_DEPLOYER_STATE_ROOT}/bin/talosctl"))
         let prepareScript = try String(contentsOf: stateDirectory.appending(path: "maintenance/tds-prepare-talos-media.sh"))
-        XCTAssertTrue(prepareScript.contains("talos.config=metal-iso"))
+        XCTAssertTrue(prepareScript.contains("INSTALLER_META_BASE64"))
         XCTAssertTrue(prepareScript.contains("talos-v1.13.0-cp1.iso"))
         XCTAssertTrue(prepareScript.contains("wipe_out=\"${out%.iso}-wipe.iso\""))
         XCTAssertTrue(prepareScript.contains("talos.experimental.wipe=system"))
         XCTAssertTrue(prepareScript.contains("boot-machine-configs/${name}.yaml"))
+        XCTAssertTrue(prepareScript.contains("boot-network-meta/cp-1.yaml"))
         XCTAssertTrue(prepareScript.contains("/^    install:[[:space:]]*$/"))
         XCTAssertTrue(prepareScript.contains("boot-node-patches/cp-1.yaml"))
         XCTAssertTrue(prepareScript.contains("gen config 'cluster' 'https://cluster.example.com:6443'"))
