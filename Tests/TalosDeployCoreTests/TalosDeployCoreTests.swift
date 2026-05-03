@@ -992,7 +992,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(runner.invocations.first?.arguments.last?.contains("socket.create_connection") == true)
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("tds-registry-address.service") == true })
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("tds-node-routes.service") == true })
-        XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("route replace '198.51.100.10/32' dev 'br-ctlplane'") == true })
+        XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("route replace '198.51.100.10/32' dev 'br-ctlplane' src '198.51.100.55'") == true })
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("addr replace '198.51.100.55/32' dev 'br-ctlplane'") == true })
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("chown -R docker-registry:docker-registry '/var/lib/talos-deploy/registry'") == true })
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("chmod -R 0777 '/var/lib/talos-deploy/registry'") == true })

@@ -547,15 +547,21 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         guard !interface.isEmpty else { return "" }
         let ips = talosNodeManagementIPs(state: state)
         guard !ips.isEmpty else { return "" }
+        let sourceIP = state.spec.talosProvisioning.deployerRegistryAddressCIDR
+            .split(separator: "/")
+            .first
+            .map(String.init) ?? ""
+        let sourceArgument = sourceIP.isEmpty ? "" : " src \(shellEscape(sourceIP))"
+        let systemdSourceArgument = sourceIP.isEmpty ? "" : " src \(sourceIP)"
 
         let replaceRoutes = ips.map {
-            "sudo \"$IP_BIN\" route replace \(shellEscape("\($0)/32")) dev \(shellEscape(interface))"
+            "sudo \"$IP_BIN\" route replace \(shellEscape("\($0)/32")) dev \(shellEscape(interface))\(sourceArgument)"
         }.joined(separator: "\n")
         let deleteRoutes = ips.map {
             "sudo \"$IP_BIN\" route del \(shellEscape("\($0)/32")) dev \(shellEscape(interface)) 2>/dev/null || true"
         }.joined(separator: "\n")
         let systemdStarts = ips.map {
-            "ExecStart=${IP_BIN} route replace \($0)/32 dev \(interface)"
+            "ExecStart=${IP_BIN} route replace \($0)/32 dev \(interface)\(systemdSourceArgument)"
         }.joined(separator: "\n")
         let systemdStops = ips.map {
             "ExecStop=-${IP_BIN} route del \($0)/32 dev \(interface)"
