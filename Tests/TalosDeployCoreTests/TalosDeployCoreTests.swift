@@ -945,6 +945,8 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertEqual(oob.urlRequests.map(\.deviceID), ["cp1"])
         XCTAssertEqual(oob.urlRequests.first?.imageURL, "http://198.51.100.20:8080/talos-v1.13.0-cp1.iso")
         XCTAssertTrue(execution.0.executedActions.contains { $0.contains("OOB URL boot connected") })
+        XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("chown -R docker-registry:docker-registry '/var/lib/talos-deploy/registry'") == true })
+        XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("chmod -R 0777 '/var/lib/talos-deploy/registry'") == true })
         XCTAssertTrue(runner.invocations.last?.arguments.last?.contains("tds-run-talos-deploy.sh") == true)
     }
 

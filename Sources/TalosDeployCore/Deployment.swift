@@ -227,7 +227,7 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
             X-Content-Type-Options: [nosniff]
         EOF
           sudo mv /tmp/tds-docker-registry.yml /etc/docker/registry/config.yml || true
-          sudo chown -R docker-registry:docker-registry \(shellEscape(registryRoot)) 2>/dev/null || true
+        \(dockerRegistryWritableCommand(registryRoot: registryRoot))
           sudo systemctl enable --now docker-registry || sudo systemctl restart docker-registry || true
         fi
         sudo systemctl daemon-reload || true
@@ -944,6 +944,18 @@ func deployerRegistryEndpoint(for spec: DeploymentSpec) -> String? {
 func deployerRegistryInstallerImage(for spec: DeploymentSpec) -> String? {
     guard let host = deployerRegistryHost(for: spec) else { return nil }
     return "\(host)/installer/\(spec.talosFactory.schematicID):\(spec.talosVersion)"
+}
+
+func dockerRegistryWritableCommand(registryRoot: String) -> String {
+    """
+          sudo mkdir -p \(shellEscape(registryRoot))
+          if id docker-registry >/dev/null 2>&1; then
+            sudo chown -R docker-registry:docker-registry \(shellEscape(registryRoot)) 2>/dev/null || sudo chmod -R 0777 \(shellEscape(registryRoot)) 2>/dev/null || true
+          else
+            sudo chmod -R 0777 \(shellEscape(registryRoot)) 2>/dev/null || true
+          fi
+          sudo chmod -R u+rwX,g+rwX \(shellEscape(registryRoot)) 2>/dev/null || true
+    """
 }
 
 public protocol Provisioner: Sendable {

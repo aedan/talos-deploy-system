@@ -440,6 +440,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             return ""
         }
         let localRegistry = "127.0.0.1:\(configuration.registryPort)"
+        let registryRoot = "\(configuration.stateRoot)/registry"
         let targetPath = registryInstallerImage.split(separator: "/", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
         guard !targetPath.isEmpty else { return "" }
         let localTarget = "\(localRegistry)/\(targetPath)"
@@ -449,6 +450,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
           echo "skopeo is required to cache Talos installer image in the deployer registry" >&2
           exit 1
         fi
+        \(dockerRegistryWritableCommand(registryRoot: registryRoot))
         if command -v systemctl >/dev/null 2>&1; then
           sudo systemctl restart docker-registry || sudo systemctl start docker-registry || true
         fi
