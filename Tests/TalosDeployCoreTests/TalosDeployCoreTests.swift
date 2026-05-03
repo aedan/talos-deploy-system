@@ -88,7 +88,7 @@ final class TalosDeployCoreTests: XCTestCase {
     }
 
     func testBootstrapDeployerCreatesGreenfieldLocalMediaPlan() throws {
-        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1", primaryIP: "198.51.100.20", privateIP: "198.51.100.20")
         let cp = talosDevice()
         var deployerAssignment = DeviceAssignment(deviceID: "deployer", role: .deployer, deployerMode: .bootstrap, shouldInstallOS: true)
         deployerAssignment.typedConfirmation = "INSTALL deployer-1"
@@ -113,7 +113,7 @@ final class TalosDeployCoreTests: XCTestCase {
     }
 
     func testPlannerRejectsExistingOSMediaHostUnlessExplicitlyAllowed() throws {
-        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1", primaryIP: "198.51.100.20", privateIP: "198.51.100.20")
         let cp = talosDevice()
         var deployerAssignment = DeviceAssignment(deviceID: "deployer", role: .deployer, deployerMode: .bootstrap, shouldInstallOS: true)
         deployerAssignment.typedConfirmation = "INSTALL deployer-1"
@@ -141,7 +141,7 @@ final class TalosDeployCoreTests: XCTestCase {
     }
 
     func testPlannerAllowsExplicitExistingOSMediaHost() throws {
-        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1", primaryIP: "198.51.100.20", privateIP: "198.51.100.20")
         let cp = talosDevice()
         var deployerAssignment = DeviceAssignment(deviceID: "deployer", role: .deployer, deployerMode: .bootstrap, shouldInstallOS: true)
         deployerAssignment.typedConfirmation = "INSTALL deployer-1"
@@ -243,7 +243,7 @@ final class TalosDeployCoreTests: XCTestCase {
 
     func testTalosBuilderCreatesArtifacts() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1", primaryIP: "198.51.100.20", privateIP: "198.51.100.20")
         let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
         var deployerAssignment = DeviceAssignment(deviceID: "deployer", role: .deployer, deployerMode: .existing)
         deployerAssignment.typedConfirmation = ""
@@ -255,6 +255,7 @@ final class TalosDeployCoreTests: XCTestCase {
             kubernetesVersion: "v1.34.1",
             deployerStateRoot: "/var/lib/talos-deploy",
             talosFactory: TalosImageFactorySettings(schematicID: "abc123", extraKernelArgs: ["console=ttyS1"]),
+            talosProvisioning: TalosProvisioningDefaults(allowDeployerRegistry: false),
             talosKernelModules: [
                 TalosKernelModule(name: "br_netfilter"),
                 TalosKernelModule(name: "zfs", parameters: ["zfs_arc_max=123"]),
@@ -283,6 +284,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("network: 0.0.0.0/0"))
         XCTAssertTrue(patch.contains("gateway: 198.51.100.1"))
         XCTAssertTrue(patch.contains("  kubelet:\n    extraMounts:"))
+        XCTAssertTrue(patch.contains("  time:\n    servers:"))
         XCTAssertFalse(patch.contains("  extraMounts:\n    - destination: /var/lib/longhorn"))
         XCTAssertTrue(patch.contains("destination: /var/lib/longhorn"))
         XCTAssertFalse(bootPatch.contains("  install:\n"))
@@ -328,6 +330,8 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(deployScript.contains("run_role_nodes controlplane strict"))
         XCTAssertTrue(deployScript.contains("run_role_nodes worker continue"))
         XCTAssertTrue(deployScript.contains("get links --nodes \"$ip\" --endpoints \"$ip\" --insecure -o yaml"))
+        XCTAssertTrue(deployScript.contains("wait_for_time_sync"))
+        XCTAssertTrue(deployScript.contains("bootstrap_control_plane"))
         let prepareScript = try String(contentsOf: stateDirectory.appending(path: "maintenance/tds-prepare-talos-media.sh"))
         XCTAssertTrue(prepareScript.contains("INSTALLER_META_BASE64"))
         XCTAssertTrue(prepareScript.contains("talos-v1.13.0-cp1.iso"))
@@ -1390,8 +1394,10 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(plan.packages.contains("xorriso"))
         XCTAssertTrue(plan.packages.contains("docker-registry"))
         XCTAssertTrue(plan.packages.contains("skopeo"))
+        XCTAssertTrue(plan.packages.contains("chrony"))
         XCTAssertTrue(plan.systemdUnits.contains("tds-media-http.service"))
         XCTAssertTrue(plan.systemdUnits.contains("tds-dnsmasq.service"))
+        XCTAssertTrue(plan.systemdUnits.contains("chrony.service"))
         XCTAssertTrue(plan.cacheFallbackCommands.contains { $0.contains("/var/cache/tds") })
     }
 

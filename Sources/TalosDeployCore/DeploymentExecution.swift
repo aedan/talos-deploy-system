@@ -165,6 +165,55 @@ public struct MaintenanceBundleBuilder {
           fi
         }
 
+        wait_for_time_sync() {
+          local name="$1"
+          local ip="$2"
+          local attempts="${3:-30}"
+          log "waiting for Talos time sync on $name ($ip)"
+          for attempt in $(seq 1 "$attempts"); do
+            if "$TALOSCTL" get timestatus --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" -o yaml 2>/dev/null | grep -q "synced: true"; then
+              log "Talos time is synchronized on $name ($ip)"
+              return 0
+            fi
+            if [ "$attempt" -eq "$attempts" ]; then
+              echo "Timed out waiting for Talos time sync on $name ($ip)" >&2
+              "$TALOSCTL" get timestatus --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" -o yaml || true
+              return 1
+            fi
+            if [ $((attempt % 3)) -eq 0 ]; then
+              log "still waiting for Talos time sync on $name ($ip), attempt $attempt/$attempts"
+            fi
+            sleep 20
+          done
+        }
+
+        bootstrap_control_plane() {
+          local ip="$1"
+          local attempts="${2:-30}"
+          for attempt in $(seq 1 "$attempts"); do
+            out="$(mktemp)"
+            if "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" bootstrap >"$out" 2>&1; then
+              cat "$out"
+              rm -f "$out"
+              log "etcd bootstrap command completed on $ip"
+              return 0
+            fi
+            cat "$out"
+            if grep -Eiq "already.*bootstrap|bootstrap.*already" "$out"; then
+              rm -f "$out"
+              log "etcd bootstrap already completed on $ip"
+              return 0
+            fi
+            rm -f "$out"
+            if [ "$attempt" -eq "$attempts" ]; then
+              echo "Timed out retrying etcd bootstrap on $ip" >&2
+              return 1
+            fi
+            log "etcd bootstrap on $ip is not ready yet, attempt $attempt/$attempts"
+            sleep 20
+          done
+        }
+
         log "starting Talos deployer-owned apply/bootstrap/health run; log=$LOG_FILE"
         "$ROOT/maintenance/tds-prepare-talos-media.sh"
         cd "$ROOT"
@@ -190,7 +239,9 @@ public struct MaintenanceBundleBuilder {
           local embedded_media="${TDS_MEDIA_ROOT}/${media_file}"
 
           if configured_api_ready "$ip"; then
-            log "configured Talos API is already reachable on $name ($ip); skipping apply"
+            log "configured Talos API is already reachable on $name ($ip); converging final config"
+            apply_final_config "$name" "$ip"
+            wait_for_configured_api "$name" "$ip" "$configured_attempts" "after final config convergence"
             capture_live_links "$name" "$ip"
             return 0
           fi
@@ -246,9 +297,11 @@ public struct MaintenanceBundleBuilder {
         run_role_nodes controlplane strict 120 90
 
         first_cp=\(shellEscape(firstControlPlane?.ip ?? ""))
+        first_cp_name=\(shellEscape(firstControlPlane?.name ?? ""))
         if [ -n "$first_cp" ]; then
           log "bootstrapping etcd on first control plane $first_cp"
-          "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$first_cp" --endpoints "$first_cp" bootstrap || true
+          wait_for_time_sync "${first_cp_name:-first-control-plane}" "$first_cp" 30
+          bootstrap_control_plane "$first_cp" 30
           "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$first_cp" --endpoints "$first_cp" kubeconfig . --force || true
         fi
 

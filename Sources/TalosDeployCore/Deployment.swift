@@ -109,7 +109,7 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
     }
 
     public func planDeployerServices(configuration: DeployerMediaServiceConfiguration) -> DeployerServicePlan {
-        let packages = ["ca-certificates", "curl", "dnsmasq", "python3", "openssh-client", "xorriso", "docker-registry", "skopeo"]
+        let packages = ["ca-certificates", "curl", "dnsmasq", "python3", "openssh-client", "xorriso", "docker-registry", "skopeo", "chrony"]
         let talosctlVersion = configuration.talosctlVersion.isEmpty ? "configured Talos version" : configuration.talosctlVersion
         return DeployerServicePlan(
             packages: packages,
@@ -125,6 +125,7 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
             systemdUnits: [
                 "tds-media-http.service",
                 "tds-dnsmasq.service",
+                "chrony.service",
             ],
             notes: [
                 "Use online package/tool sources first.",
@@ -229,6 +230,20 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
           sudo mv /tmp/tds-docker-registry.yml /etc/docker/registry/config.yml || true
         \(dockerRegistryWritableCommand(registryRoot: registryRoot))
           sudo systemctl enable --now docker-registry || sudo systemctl restart docker-registry || true
+        fi
+        if command -v chronyd >/dev/null 2>&1; then
+          sudo mkdir -p /etc/chrony/conf.d
+          cat > /tmp/tds-chrony-server.conf <<'EOF'
+        # Managed by tds. Allows Talos nodes to sync time from the deployer.
+        server ntp.ubuntu.com iburst
+        server time.cloudflare.com iburst
+        local stratum 10
+        allow 10.0.0.0/8
+        allow 172.16.0.0/12
+        allow 192.168.0.0/16
+        EOF
+          sudo mv /tmp/tds-chrony-server.conf /etc/chrony/conf.d/tds-server.conf || true
+          sudo systemctl enable --now chrony || sudo systemctl restart chrony || true
         fi
         sudo systemctl daemon-reload || true
         """
@@ -752,6 +767,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         lines.append(contentsOf: renderKernelModules(spec.talosKernelModules))
         lines.append(contentsOf: renderLonghornExtraMounts(enabled: spec.enableLonghornExtraMounts))
         lines.append(contentsOf: renderRegistryMirror(spec: spec))
+        lines.append(contentsOf: renderTimeServers(spec: spec))
         lines.append("  network:")
         lines.append(contentsOf: renderNameservers(staticConfig))
         lines.append("    interfaces:")
@@ -838,6 +854,16 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             "        endpoints:",
             "          - \(yamlScalar(endpoint))",
             "        skipFallback: true",
+        ]
+    }
+
+    private func renderTimeServers(spec: DeploymentSpec) -> [String] {
+        let server = deployerNodeAddress(for: spec).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !server.isEmpty else { return [] }
+        return [
+            "  time:",
+            "    servers:",
+            "      - \(yamlScalar(server))",
         ]
     }
 
@@ -1046,13 +1072,16 @@ private func firstNonEmptyStatic(_ values: String...) -> String {
 
 func deployerRegistryHost(for spec: DeploymentSpec) -> String? {
     guard spec.talosProvisioning.allowDeployerRegistry else { return nil }
-    let host = firstNonEmptyStatic(
-        spec.talosProvisioning.deployerRegistryHost,
+    let host = firstNonEmptyStatic(spec.talosProvisioning.deployerRegistryHost, deployerNodeAddress(for: spec))
+    return host.isEmpty ? nil : "\(host):\(spec.talosProvisioning.deployerRegistryPort)"
+}
+
+func deployerNodeAddress(for spec: DeploymentSpec) -> String {
+    firstNonEmptyStatic(
         spec.talosProvisioning.deployerRegistryAddressCIDR.split(separator: "/").first.map(String.init) ?? "",
         spec.deployerNode?.device.privateIP ?? "",
         spec.deployerNode?.device.primaryIP ?? ""
     )
-    return host.isEmpty ? nil : "\(host):\(spec.talosProvisioning.deployerRegistryPort)"
 }
 
 func deployerRegistryEndpoint(for spec: DeploymentSpec) -> String? {
