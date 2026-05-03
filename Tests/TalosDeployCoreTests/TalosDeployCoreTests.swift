@@ -277,6 +277,8 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("addresses:\n          - 198.51.100.10/22"))
         XCTAssertTrue(patch.contains("network: 0.0.0.0/0"))
         XCTAssertTrue(patch.contains("gateway: 198.51.100.1"))
+        XCTAssertTrue(patch.contains("  kubelet:\n    extraMounts:"))
+        XCTAssertFalse(patch.contains("  extraMounts:\n    - destination: /var/lib/longhorn"))
         XCTAssertTrue(patch.contains("destination: /var/lib/longhorn"))
     }
 

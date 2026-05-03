@@ -842,14 +842,15 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
     private func renderLonghornExtraMounts(enabled: Bool) -> [String] {
         guard enabled else { return [] }
         return [
-            "  extraMounts:",
-            "    - destination: /var/lib/longhorn",
-            "      type: bind",
-            "      source: /var/lib/longhorn",
-            "      options:",
-            "        - bind",
-            "        - rshared",
-            "        - rw",
+            "  kubelet:",
+            "    extraMounts:",
+            "      - destination: /var/lib/longhorn",
+            "        type: bind",
+            "        source: /var/lib/longhorn",
+            "        options:",
+            "          - bind",
+            "          - rshared",
+            "          - rw",
         ]
     }
 
