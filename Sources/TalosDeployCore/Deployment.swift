@@ -1271,6 +1271,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
     }
 
     public func stage(spec: DeploymentSpec, at baseDirectory: URL) async throws -> DeploymentState {
+        tdsProgress("Staging deployment state for \(spec.clusterName)")
         let enrichment = await enrichSpecForOOBHardwareSelectors(spec)
         let spec = enrichment.spec
         let planner = DeploymentPlanner(settings: settings)
@@ -1288,6 +1289,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         _ = try MaintenanceBundleBuilder(fileManager: fileManager).writeBundle(for: state, in: localStateDirectory)
         state.events.append(DeploymentEvent(message: "Maintenance bundle generated for deployer-owned operations."))
         _ = try stateStore.save(state, to: localStateDirectory)
+        tdsProgress("Deployment state staged at \(localStateDirectory.path)")
         return state
     }
 
@@ -1312,11 +1314,14 @@ public final class DeploymentCoordinator: @unchecked Sendable {
 
     public func synchronizeToDeployer(_ state: DeploymentState, transport: any DeployerTransport) async throws -> DeploymentState {
         let localDirectory = URL(fileURLWithPath: state.localStateDirectory, isDirectory: true)
+        tdsProgress("Validating deployer transport before state sync via \(transport.targetDescription)")
         _ = try await deployerHostClient.validate(transport: transport)
+        tdsProgress("Preparing deployer media services via \(transport.targetDescription)")
         let mediaPlan = try await deployerHostClient.prepareMediaServices(
             configuration: DeployerMediaServiceConfiguration(defaults: settings.deployer),
             transport: transport
         )
+        tdsProgress("Syncing deployment state to \(state.plan.durableStateDirectory) via \(transport.targetDescription)")
         try await deployerHostClient.syncState(
             localDirectory: localDirectory,
             remoteStateRoot: state.plan.durableStateDirectory,
@@ -1327,6 +1332,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         updated.events.append(DeploymentEvent(message: "Prepared deployer media services through \(transport.targetDescription) at \(mediaPlan.mediaRoot)."))
         updated.events.append(DeploymentEvent(message: "Deployment state synchronized to deployer through \(transport.targetDescription)."))
         _ = try stateStore.save(updated, to: localDirectory)
+        tdsProgress("Deployment state synchronized to deployer")
         return updated
     }
 
@@ -1384,6 +1390,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             updated.events.append(DeploymentEvent(message: "Dry run planned deployer hostname \(hostname)."))
         } else {
             let request = access ?? defaultAccessRequest(connection: connection, deployer: deployer.device)
+            tdsProgress("Resolving deployer access path for \(deployer.device.id)")
             let selection = try await DeployerTransportResolver(settings: settings).resolve(request: request, deployer: deployer.device)
             let transport = selection.transport
             accessValidation = DeployerAccessValidation(
@@ -1394,11 +1401,15 @@ public final class DeploymentCoordinator: @unchecked Sendable {
                 attempts: selection.failedAttempts + selection.validation.attempts
             )
             updated.events.append(DeploymentEvent(message: "Selected deployer access path: \(selection.validation.method.displayName) via \(selection.validation.target)."))
+            tdsProgress("Selected deployer access path \(selection.validation.method.displayName) via \(selection.validation.target)")
+            tdsProgress("Setting deployer hostname to \(hostname)")
             try await deployerHostClient.setHostname(hostname, transport: transport)
+            tdsProgress("Preparing deployer services")
             servicePlan = try await deployerHostClient.prepareDeployerServices(
                 configuration: serviceConfiguration,
                 transport: transport
             )
+            tdsProgress("Writing maintenance bundle before deployer sync")
             maintenanceBundle = try MaintenanceBundleBuilder(fileManager: fileManager).writeBundle(
                 for: updated,
                 in: URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)
@@ -1425,6 +1436,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
                 updated.events.append(DeploymentEvent(message: "Core device rename requested: \(hostname)."))
             }
 
+            tdsProgress("Starting Talos provisioning and bootstrap execution")
             let execution = try await TalosDeploymentExecutor(settings: settings).execute(
                 state: updated,
                 transport: transport,
@@ -1433,6 +1445,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             provisioningExecution = execution.0
             bootstrapResult = execution.1
             updated.events.append(DeploymentEvent(message: "Talos deployer-owned execution completed."))
+            tdsProgress("Talos provisioning and bootstrap execution completed")
         }
 
         let localDirectory = URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)

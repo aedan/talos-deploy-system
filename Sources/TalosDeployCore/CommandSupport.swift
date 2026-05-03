@@ -270,6 +270,12 @@ public func shellEscape(_ value: String) -> String {
     "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
+func tdsProgress(_ message: String) {
+    guard ProcessInfo.processInfo.environment["TDS_PROGRESS"] != "0" else { return }
+    let timestamp = ISO8601DateFormatter().string(from: Date())
+    FileHandle.standardError.write(Data("[tds] \(timestamp) \(message)\n".utf8))
+}
+
 public extension String {
     func expandingTildeInPath() -> String {
         (self as NSString).expandingTildeInPath

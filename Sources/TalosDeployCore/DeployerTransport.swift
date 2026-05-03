@@ -149,7 +149,9 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
     }
 
     public func copy(localPath: URL, remotePath: String, delete: Bool) async throws {
+        tdsProgress("Ensuring remote deployer state directory \(remotePath)")
         _ = try await run("mkdir -p \(shellEscape(remotePath))", timeout: TimeInterval(settings.commandTimeoutSeconds))
+        tdsProgress("Preparing Hammertime-safe copy source for \(localPath.path)")
         let source = try hammertimeSafeSource(for: localPath)
         defer {
             if let cleanupURL = source.cleanupURL {
@@ -166,6 +168,7 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
         if delete, copyMethod == "rsync" {
             arguments.append(contentsOf: ["--rsync-args=-rvt --delete"])
         }
+        tdsProgress("Copying deployment state to \(targetDescription):\(remotePath)")
         _ = try await runner.run(
             settings.binaryPath.expandingTildeInPath(),
             arguments: arguments,
@@ -173,6 +176,7 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
             currentDirectory: nil,
             timeout: TimeInterval(max(settings.commandTimeoutSeconds, 300))
         )
+        tdsProgress("Deployment state copy completed for \(targetDescription)")
     }
 
     public func runScript(_ script: String, arguments: [String] = [], asRoot: Bool = false, timeout: TimeInterval? = nil) async throws -> CommandResult {
