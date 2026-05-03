@@ -328,7 +328,7 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
     public init(
         settings: HammertimeSettings = HammertimeSettings(),
         runner: CommandRunning = LocalCommandRunner(),
-        clpResetDelayNanoseconds: UInt64 = 8_000_000_000,
+        clpResetDelayNanoseconds: UInt64 = 90_000_000_000,
         clpPowerOffDelayNanoseconds: UInt64 = 20_000_000_000,
         clpPowerOnDelayNanoseconds: UInt64 = 15_000_000_000
     ) {
