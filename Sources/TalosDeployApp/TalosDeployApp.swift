@@ -941,6 +941,8 @@ private struct SettingsRootView: View {
                     .fieldHelp("Lets tds configure deployer-managed dnsmasq/PXE for nodes that should boot over the data network.")
                 Toggle("Use OOB NIC MAC selectors", isOn: $controller.settings.talos.provisioning.useOOBHardwareAddressSelectors)
                     .fieldHelp("When Hammertime/iLO can read physical NIC MACs, tds renders Talos management networking with deviceSelector.hardwareAddr for safer interface matching.")
+                Toggle("Wipe Talos system disk before install", isOn: $controller.settings.talos.provisioning.wipeSystemDiskBeforeInstall)
+                    .fieldHelp("Boots a tds-generated Talos reset ISO before normal install media so repeat deployments clear any previous or partial Talos install.")
                 Toggle("Use deployer installer registry", isOn: $controller.settings.talos.provisioning.allowDeployerRegistry)
                     .fieldHelp("Caches the Talos installer image in a registry on the Ubuntu deployer so Talos nodes do not need Internet access during install.")
                 TextField("Deployer registry host override", text: $controller.settings.talos.provisioning.deployerRegistryHost)

@@ -349,8 +349,7 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
         if request.connectMedia {
             steps.append(try await runOOBCommand(name: "connect-media", command: "vm cdrom set connect", request: request))
         }
-        steps.append(await runBestEffortOOBCommand(name: "prefer-cd-boot-order", command: "set /system1/bootconfig1/bootsource4 bootorder=4", request: request))
-        steps.append(await runBestEffortOOBCommand(name: "cd-boot-first", command: "set /system1/bootconfig1/bootsource1 bootorder=1", request: request))
+        steps.append(await runBestEffortOOBCommand(name: "disk-boot-order", command: "set /system1/bootconfig1/bootsource2 bootorder=1", request: request))
         if request.bootOnce {
             steps.append(try await runOOBCommand(name: "boot-once", command: "vm cdrom set boot_once", request: request))
         }

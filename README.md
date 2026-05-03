@@ -93,6 +93,7 @@ Talos Defaults:
 - Longhorn `machine.extraMounts` for `/var/lib/longhorn` are rendered by default.
 - Kernel modules, extra kernel args, architecture, platform, and schematic ID are configurable.
 - OOB NIC MAC selectors are enabled by default. If Hammertime/iLO can expose HPE integrated NIC MACs, `tds` maps names such as `eno1` to the matching physical port and writes `deviceSelector.hardwareAddr` into Talos node patches.
+- Talos system-disk wipe pre-boot is enabled by default for node installs. `tds` generates a per-node `*-wipe.iso`, boots it once to clear previous or partial Talos installs, waits for the reset pass, then boots the normal per-node ISO with the embedded static machine config.
 - The deployer installer registry is enabled by default. `tds` installs `docker-registry` and `skopeo`, mirrors the selected Talos installer image into the deployer, and renders Talos configs to install from that in-environment registry when nodes do not have Internet access.
 - When the deployer has separate OOB/media and Talos data networks, configure a node-facing registry address CIDR plus interface. `tds` adds and persists that address on the deployer before caching the installer image, then points Talos machine configs at that reachable registry address.
 - Talos node management host routes are separate from the registry interface and are opt-in. Leave the node route interface blank when the deployer OS can already route to Talos management IPs correctly; set it only when Talos management traffic must be forced out a specific bridge/VLAN.

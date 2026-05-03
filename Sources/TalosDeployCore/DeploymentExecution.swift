@@ -259,6 +259,23 @@ public struct MaintenanceBundleBuilder {
               -map "$work/config.yaml" /config.yaml \\
               -boot_image any replay >/dev/null 2>&1
             mv "$out.tmp" "$out"
+
+            wipe_out="${out%.iso}-wipe.iso"
+            wipe_grub="$work/wipe-grub.cfg"
+            cp "$work/grub.cfg" "$wipe_grub"
+            sed -i "s/talos.config=metal-iso //g" "$wipe_grub"
+            if grep -q "talos.experimental.wipe=system" "$wipe_grub"; then
+              sed -i "s/^set default=.*/set default=1/" "$wipe_grub"
+            else
+              sed -i "s/^set default=.*/set default=0/" "$wipe_grub"
+              sed -i "s/talos.platform=metal /talos.platform=metal talos.experimental.wipe=system /g" "$wipe_grub"
+            fi
+            rm -f "$wipe_out" "$wipe_out.tmp"
+            xorriso -indev "$TDS_BASE_TALOS_ISO" -outdev "$wipe_out.tmp" \\
+              -volid metal-iso \\
+              -map "$wipe_grub" /boot/grub/grub.cfg \\
+              -boot_image any replay >/dev/null 2>&1
+            mv "$wipe_out.tmp" "$wipe_out"
             rm -rf "$work"
           fi
         done < generated/nodes.tsv
@@ -401,10 +418,12 @@ public struct MaintenanceBundleBuilder {
 public final class TalosDeploymentExecutor: @unchecked Sendable {
     private let settings: AppSettings
     private let oobBooter: any OOBNodeBooting
+    private let wipeDelayNanoseconds: UInt64
 
-    public init(settings: AppSettings = AppSettings(), oobBooter: (any OOBNodeBooting)? = nil) {
+    public init(settings: AppSettings = AppSettings(), oobBooter: (any OOBNodeBooting)? = nil, wipeDelayNanoseconds: UInt64 = 300_000_000_000) {
         self.settings = settings
         self.oobBooter = oobBooter ?? HammertimeOOBBooter(settings: settings.hammertime)
+        self.wipeDelayNanoseconds = wipeDelayNanoseconds
     }
 
     public func execute(state: DeploymentState, transport: any DeployerTransport, configuration: DeployerMediaServiceConfiguration) async throws -> (TalosProvisioningExecution, TalosBootstrapResult) {
@@ -475,6 +494,25 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         _ = try await transport.run(prepareMediaCommand, timeout: 1800)
         tdsProgress("Node-specific Talos boot media generated")
         executedActions.append("Generated node-specific Talos boot media with embedded machine configs.")
+
+        if state.spec.talosProvisioning.wipeSystemDiskBeforeInstall {
+            var didRequestWipe = false
+            for install in talosInstalls {
+                tdsProgress("Requesting destructive Talos system-disk wipe for \(install.device.name) (\(install.device.id)) before install")
+                let result = try await provisionTalosWipe(install, mediaBaseURL: mediaBaseURL, state: state)
+                if !result.executedActions.isEmpty {
+                    didRequestWipe = true
+                }
+                executedActions.append(contentsOf: result.executedActions)
+                warnings.append(contentsOf: result.warnings)
+            }
+            if didRequestWipe {
+                tdsProgress("Waiting for Talos wipe boots to reset system disks before normal install media boot")
+                if wipeDelayNanoseconds > 0 {
+                    try await Task.sleep(nanoseconds: wipeDelayNanoseconds)
+                }
+            }
+        }
 
         for install in talosInstalls {
             tdsProgress("Provisioning \(install.device.name) (\(install.device.id)) as \(install.assignment.role.displayName) using \(install.method.rawValue)")
@@ -697,6 +735,37 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         """
     }
 
+    private func provisionTalosWipe(_ install: PlannedDeviceInstall, mediaBaseURL: String, state: DeploymentState) async throws -> TalosProvisioningExecution {
+        switch install.method {
+        case .bootURL:
+            let imageURL = deployerNodeWipeMediaURL(for: install, mediaBaseURL: mediaBaseURL, state: state)
+            guard !imageURL.isEmpty else {
+                return TalosProvisioningExecution(warnings: ["Skipped Talos wipe boot for \(install.device.name): no deployer-hosted wipe media URL was available."])
+            }
+            let result = try await oobBooter.bootURL(
+                OOBBootURLRequest(
+                    deviceID: install.device.id,
+                    imageURL: imageURL,
+                    connectMedia: true,
+                    bootOnce: true,
+                    reboot: true,
+                    proxyVia: settings.hammertime.deployerVia,
+                    oobVendor: install.device.oob?.vendor ?? .unknown
+                )
+            )
+            let status = result.connected ? "connected" : "requested"
+            return TalosProvisioningExecution(executedActions: ["Destructive Talos wipe boot \(status) for \(install.device.name) using \(imageURL)."])
+        case .pxe:
+            return TalosProvisioningExecution(warnings: ["Skipped Talos wipe pre-boot for \(install.device.name): PXE wipe boot is not implemented yet."])
+        case .virtualMedia:
+            return TalosProvisioningExecution(warnings: ["Skipped Talos wipe pre-boot for \(install.device.name): direct external virtual-media wipe boot is not implemented yet."])
+        case .operatorLocalMedia:
+            return TalosProvisioningExecution(warnings: ["\(install.device.name) requires guided operator local-media wipe/install before the deployer apply script can finish."])
+        case .stagedOnly:
+            return TalosProvisioningExecution(warnings: ["Skipped Talos wipe pre-boot for \(install.device.name): device is staged only."])
+        }
+    }
+
     private func provisionTalosNode(_ install: PlannedDeviceInstall, mediaBaseURL: String, state: DeploymentState) async throws -> TalosProvisioningExecution {
         switch install.method {
         case .bootURL:
@@ -760,6 +829,12 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         return "\(mediaBaseURL)/\(fileName)"
     }
 
+    private func deployerNodeWipeMediaURL(for install: PlannedDeviceInstall, mediaBaseURL: String, state: DeploymentState) -> String {
+        guard !mediaBaseURL.isEmpty else { return "" }
+        let fileName = talosNodeWipeMediaFileName(deviceID: install.device.id, talosVersion: state.spec.talosVersion)
+        return "\(mediaBaseURL)/\(fileName)"
+    }
+
     private func externalOOBMediaURL(state: DeploymentState) -> String {
         let base = state.spec.talosProvisioning.externalOOBMediaBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !base.isEmpty else { return "" }
@@ -799,6 +874,10 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
 
 private func talosNodeMediaFileName(deviceID: String, talosVersion: String) -> String {
     "talos-\(sanitizeFileComponent(talosVersion))-\(sanitizeFileComponent(deviceID)).iso"
+}
+
+private func talosNodeWipeMediaFileName(deviceID: String, talosVersion: String) -> String {
+    "talos-\(sanitizeFileComponent(talosVersion))-\(sanitizeFileComponent(deviceID))-wipe.iso"
 }
 
 private func sanitizeFileComponent(_ value: String) -> String {

@@ -320,6 +320,8 @@ final class TalosDeployCoreTests: XCTestCase {
         let prepareScript = try String(contentsOf: stateDirectory.appending(path: "maintenance/tds-prepare-talos-media.sh"))
         XCTAssertTrue(prepareScript.contains("talos.config=metal-iso"))
         XCTAssertTrue(prepareScript.contains("talos-v1.13.0-cp1.iso"))
+        XCTAssertTrue(prepareScript.contains("wipe_out=\"${out%.iso}-wipe.iso\""))
+        XCTAssertTrue(prepareScript.contains("talos.experimental.wipe=system"))
         XCTAssertTrue(prepareScript.contains("boot-machine-configs/${name}.yaml"))
         XCTAssertTrue(prepareScript.contains("boot-node-patches/cp-1.yaml"))
         XCTAssertTrue(prepareScript.contains("gen config 'cluster' 'https://cluster.example.com:6443'"))
@@ -731,8 +733,7 @@ final class TalosDeployCoreTests: XCTestCase {
             responses: [
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "inserted", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "connected", stderr: "", exitCode: 0),
-                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "cd preferred", stderr: "", exitCode: 0),
-                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "cd first", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "disk first", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "boot once", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "clp stop", stderr: "", exitCode: 0),
@@ -766,8 +767,7 @@ final class TalosDeployCoreTests: XCTestCase {
             [
                 "vm cdrom insert http://10.0.0.1:8080/talos.iso",
                 "vm cdrom set connect",
-                "set /system1/bootconfig1/bootsource4 bootorder=4",
-                "set /system1/bootconfig1/bootsource1 bootorder=1",
+                "set /system1/bootconfig1/bootsource2 bootorder=1",
                 "vm cdrom set boot_once",
                 "vm cdrom get",
                 "stop /system1",
@@ -786,7 +786,6 @@ final class TalosDeployCoreTests: XCTestCase {
             responses: [
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "inserted", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "connected", stderr: "", exitCode: 0),
-                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "boot once", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
@@ -988,14 +987,16 @@ final class TalosDeployCoreTests: XCTestCase {
         )
         let oob = MockOOBBooter()
 
-        let execution = try await TalosDeploymentExecutor(oobBooter: oob).execute(
+        let execution = try await TalosDeploymentExecutor(oobBooter: oob, wipeDelayNanoseconds: 0).execute(
             state: state,
             transport: transport,
             configuration: DeployerMediaServiceConfiguration()
         )
 
-        XCTAssertEqual(oob.urlRequests.map(\.deviceID), ["cp1"])
-        XCTAssertEqual(oob.urlRequests.first?.imageURL, "http://198.51.100.20:8080/talos-v1.13.0-cp1.iso")
+        XCTAssertEqual(oob.urlRequests.map(\.deviceID), ["cp1", "cp1"])
+        XCTAssertEqual(oob.urlRequests.first?.imageURL, "http://198.51.100.20:8080/talos-v1.13.0-cp1-wipe.iso")
+        XCTAssertEqual(oob.urlRequests.last?.imageURL, "http://198.51.100.20:8080/talos-v1.13.0-cp1.iso")
+        XCTAssertTrue(execution.0.executedActions.contains { $0.contains("Destructive Talos wipe boot connected") })
         XCTAssertTrue(execution.0.executedActions.contains { $0.contains("OOB URL boot connected") })
         XCTAssertTrue(runner.invocations.first?.arguments.last?.contains("systemctl restart tds-media-http.service") == true)
         XCTAssertTrue(runner.invocations.first?.arguments.last?.contains("socket.create_connection") == true)
@@ -1035,7 +1036,7 @@ final class TalosDeployCoreTests: XCTestCase {
             router: SSHCommandRouter(runner: runner)
         )
 
-        _ = try await TalosDeploymentExecutor(oobBooter: MockOOBBooter()).execute(
+        _ = try await TalosDeploymentExecutor(oobBooter: MockOOBBooter(), wipeDelayNanoseconds: 0).execute(
             state: state,
             transport: transport,
             configuration: DeployerMediaServiceConfiguration()
