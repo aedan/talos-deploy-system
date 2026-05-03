@@ -717,7 +717,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(HammertimeSettings().skipDeviceChecks)
     }
 
-    func testHammertimeOOBBooterAddsCLPResetFallbackAfterPowerReset() async throws {
+    func testHammertimeOOBBooterColdBootsAfterMediaSelection() async throws {
         let runner = MockCommandRunner(
             responses: [
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "inserted", stderr: "", exitCode: 0),
@@ -726,7 +726,6 @@ final class TalosDeployCoreTests: XCTestCase {
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "cd first", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "boot once", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
-                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "clp reset", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "clp stop", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "clp start", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = NO_BOOT", stderr: "", exitCode: 0),
@@ -762,19 +761,18 @@ final class TalosDeployCoreTests: XCTestCase {
                 "set /system1/bootconfig1/bootsource1 bootorder=1",
                 "vm cdrom set boot_once",
                 "vm cdrom get",
-                "reset /system1",
                 "stop /system1",
                 "start /system1",
                 "vm cdrom get",
             ]
         )
-        XCTAssertEqual(result.steps.map(\.name).suffix(4), ["clp-system-reset", "clp-power-off", "clp-power-on", "post-reset-media-status"])
+        XCTAssertEqual(result.steps.map(\.name).suffix(3), ["clp-power-off", "clp-power-on", "post-boot-media-status"])
         XCTAssertTrue(result.connected)
         XCTAssertFalse(result.bootOnce)
         XCTAssertTrue(runner.invocations.allSatisfy { $0.timeout == 120 })
     }
 
-    func testHammertimeOOBBooterRecordsUnsupportedCLPResetWithoutFailing() async throws {
+    func testHammertimeOOBBooterFallsBackToPowerResetWhenColdBootFails() async throws {
         let runner = MockCommandRunner(
             responses: [
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "inserted", stderr: "", exitCode: 0),
@@ -783,7 +781,6 @@ final class TalosDeployCoreTests: XCTestCase {
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "boot once", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
-                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "power reset", stderr: "", exitCode: 0),
@@ -802,8 +799,9 @@ final class TalosDeployCoreTests: XCTestCase {
             OOBBootURLRequest(deviceID: "716182", imageURL: "http://10.0.0.1:8080/talos.iso", reboot: true)
         )
 
-        let fallback = try XCTUnwrap(result.steps.first(where: { $0.name == "clp-system-reset" }))
+        let fallback = try XCTUnwrap(result.steps.first(where: { $0.name == "clp-power-off" }))
         XCTAssertTrue(fallback.stdout.contains("Best-effort OOB command failed"))
+        XCTAssertNotNil(result.steps.first(where: { $0.name == "power-reset" }))
         XCTAssertTrue(result.bootOnce)
     }
 

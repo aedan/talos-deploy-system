@@ -360,10 +360,11 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
         steps.append(try await runOOBCommand(name: "media-status", command: "vm cdrom get", request: request))
         if request.reboot {
             steps.append(contentsOf: try await rebootSteps(for: request))
-            steps.append(await runBestEffortOOBCommand(name: "post-reset-media-status", command: "vm cdrom get", request: request))
+            steps.append(await runBestEffortOOBCommand(name: "post-boot-media-status", command: "vm cdrom get", request: request))
         }
 
-        let status = steps.last(where: { $0.name == "post-reset-media-status" })?.stdout
+        let status = steps.last(where: { $0.name == "post-boot-media-status" })?.stdout
+            ?? steps.last(where: { $0.name == "post-reset-media-status" })?.stdout
             ?? steps.last(where: { $0.name == "media-status" })?.stdout
             ?? ""
         return OOBBootURLResult(
@@ -418,9 +419,6 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
 
     private func rebootSteps(for request: OOBBootURLRequest) async throws -> [OOBBootURLStep] {
         var steps: [OOBBootURLStep] = []
-        steps.append(await runBestEffortOOBCommand(name: "clp-system-reset", command: "reset /system1", request: request))
-        tdsProgress("OOB \(request.deviceID) waiting after system reset")
-        await sleepIfNeeded(clpResetDelayNanoseconds)
         steps.append(await runBestEffortOOBCommand(name: "clp-power-off", command: "stop /system1", request: request))
         tdsProgress("OOB \(request.deviceID) waiting after power off")
         await sleepIfNeeded(clpPowerOffDelayNanoseconds)
