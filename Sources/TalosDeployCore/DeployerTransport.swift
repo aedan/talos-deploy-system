@@ -107,6 +107,7 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
     private let usePrivate: Bool
     private let passportReason: String
     private let copyMethod: String
+    private let validationRetryDelaySeconds: Int
     private let runner: CommandRunning
 
     public init(
@@ -116,6 +117,7 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
         usePrivate: Bool = false,
         passportReason: String = "",
         copyMethod: String = "rsync",
+        validationRetryDelaySeconds: Int = 5,
         runner: CommandRunning = LocalCommandRunner()
     ) {
         self.settings = settings
@@ -124,22 +126,43 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
         self.usePrivate = usePrivate || settings.deployerUsePrivate
         self.passportReason = passportReason.isEmpty ? settings.passportReason : passportReason
         self.copyMethod = copyMethod.isEmpty ? settings.copyMethod : copyMethod
+        self.validationRetryDelaySeconds = validationRetryDelaySeconds
         self.runner = runner
     }
 
     public func validate() async throws -> DeployerAccessValidation {
-        do {
-            _ = try await run("true", timeout: TimeInterval(min(settings.commandTimeoutSeconds, 75)))
-        } catch CommandError.timedOut {
-            throw HammertimeTransportError.validationTimedOut(deviceID)
+        let maximumAttempts = 3
+        var lastError: Error?
+
+        for attempt in 1...maximumAttempts {
+            do {
+                _ = try await run("true", timeout: TimeInterval(min(settings.commandTimeoutSeconds, 75)))
+                return DeployerAccessValidation(
+                    method: .hammertime,
+                    target: targetDescription,
+                    succeeded: true,
+                    message: "Validated deployer command execution through Hammertime.",
+                    attempts: [targetDescription]
+                )
+            } catch {
+                lastError = error
+                if attempt < maximumAttempts {
+                    tdsProgress("Hammertime deployer validation attempt \(attempt) failed for \(deviceID); retrying")
+                    if validationRetryDelaySeconds > 0 {
+                        try await Task.sleep(for: .seconds(attempt * validationRetryDelaySeconds))
+                    }
+                }
+            }
         }
-        return DeployerAccessValidation(
-            method: .hammertime,
-            target: targetDescription,
-            succeeded: true,
-            message: "Validated deployer command execution through Hammertime.",
-            attempts: [targetDescription]
-        )
+
+        if let lastError {
+            if case CommandError.timedOut = lastError {
+                throw HammertimeTransportError.validationTimedOut(deviceID)
+            }
+            throw lastError
+        }
+
+        throw HammertimeTransportError.validationTimedOut(deviceID)
     }
 
     public func run(_ remoteCommand: String, timeout: TimeInterval? = nil) async throws -> CommandResult {

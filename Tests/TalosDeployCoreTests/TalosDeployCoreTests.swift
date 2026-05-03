@@ -882,6 +882,28 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(runner.invocations[3].arguments.contains("--root"))
     }
 
+    func testHammertimeDeployerValidationRetriesTransientFailures() async throws {
+        let runner = MockCommandRunner(
+            responses: [
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "gateway warming up", exitCode: 1),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "", exitCode: 0),
+            ]
+        )
+        let transport = HammertimeDeployerTransport(
+            settings: HammertimeSettings(binaryPath: "/tmp/ht", commandTimeoutSeconds: 60),
+            deviceID: "716181",
+            validationRetryDelaySeconds: 0,
+            runner: runner
+        )
+
+        let validation = try await transport.validate()
+
+        XCTAssertTrue(validation.succeeded)
+        XCTAssertEqual(validation.method, .hammertime)
+        XCTAssertEqual(runner.invocations.count, 2)
+        XCTAssertTrue(runner.invocations.allSatisfy { $0.arguments.contains("command") })
+    }
+
     func testHammertimeCopyUsesNoSpaceTemporarySourceForApplicationSupportPaths() async throws {
         let runner = MockCommandRunner(
             responses: [
