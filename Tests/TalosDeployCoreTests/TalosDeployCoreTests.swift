@@ -1146,6 +1146,7 @@ final class TalosDeployCoreTests: XCTestCase {
             "http://198.51.100.20:8080/talos-v1.13.0-cp1.iso",
             "http://198.51.100.20:8080/talos-v1.13.0-cp1.iso",
         ])
+        XCTAssertEqual(oob.urlRequests.map(\.preferPowerReset), [false, true])
         XCTAssertTrue(execution.0.executedActions.contains { $0.contains("OOB URL boot connected") })
     }
 

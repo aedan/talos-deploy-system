@@ -861,7 +861,11 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         let maximumAttempts = 3
         var lastResult: OOBBootURLResult?
         for attempt in 1...maximumAttempts {
-            let result = try await oobBooter.bootURL(request)
+            var attemptRequest = request
+            if attempt > 1 {
+                attemptRequest.preferPowerReset = true
+            }
+            let result = try await oobBooter.bootURL(attemptRequest)
             if result.connected {
                 return result
             }

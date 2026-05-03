@@ -225,6 +225,7 @@ public struct OOBBootURLRequest: Codable, Equatable, Sendable {
     public var reboot: Bool
     public var proxyVia: String?
     public var oobVendor: OOBVendor
+    public var preferPowerReset: Bool
 
     public init(
         deviceID: String,
@@ -234,7 +235,8 @@ public struct OOBBootURLRequest: Codable, Equatable, Sendable {
         oneTimeBoot: String? = nil,
         reboot: Bool = false,
         proxyVia: String? = nil,
-        oobVendor: OOBVendor = .unknown
+        oobVendor: OOBVendor = .unknown,
+        preferPowerReset: Bool = false
     ) {
         self.deviceID = deviceID
         self.imageURL = imageURL
@@ -244,6 +246,7 @@ public struct OOBBootURLRequest: Codable, Equatable, Sendable {
         self.reboot = reboot
         self.proxyVia = proxyVia
         self.oobVendor = oobVendor
+        self.preferPowerReset = preferPowerReset
     }
 }
 
@@ -418,6 +421,12 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
 
     private func rebootSteps(for request: OOBBootURLRequest) async throws -> [OOBBootURLStep] {
         var steps: [OOBBootURLStep] = []
+        if request.preferPowerReset {
+            steps.append(try await runOOBCommand(name: "power-reset", command: "power reset", request: request))
+            tdsProgress("OOB \(request.deviceID) waiting after power reset")
+            await sleepIfNeeded(clpResetDelayNanoseconds)
+            return steps
+        }
         steps.append(await runBestEffortOOBCommand(name: "clp-power-off", command: "stop /system1", request: request))
         tdsProgress("OOB \(request.deviceID) waiting after power off")
         await sleepIfNeeded(clpPowerOffDelayNanoseconds)
@@ -456,7 +465,8 @@ private extension OOBPXEBootRequest {
             oneTimeBoot: oneTimeBoot,
             reboot: reboot,
             proxyVia: proxyVia,
-            oobVendor: .unknown
+            oobVendor: .unknown,
+            preferPowerReset: false
         )
     }
 }
