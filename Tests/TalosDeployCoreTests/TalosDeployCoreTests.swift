@@ -1401,6 +1401,20 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(plan.cacheFallbackCommands.contains { $0.contains("/var/cache/tds") })
     }
 
+    func testPrepareDeployerServicesConfiguresChronyAsNTPServer() async throws {
+        let transport = RecordingDeployerTransport()
+
+        _ = try await DefaultDeployerHostClient().prepareDeployerServices(
+            configuration: DeployerMediaServiceConfiguration(),
+            transport: transport
+        )
+
+        let command = try XCTUnwrap(transport.commands.first)
+        XCTAssertTrue(command.contains("port 123"))
+        XCTAssertTrue(command.contains("allow 172.16.0.0/12"))
+        XCTAssertTrue(command.contains("systemctl enable --now chrony"))
+    }
+
     func testPreinstallSnapshotCapturePersistsArtifacts() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let device = DiscoveredDevice(
@@ -1851,6 +1865,38 @@ private struct FailingDeployerHostClient: DeployerHostClient {
     func syncState(localDirectory: URL, remoteStateRoot: String, connection: SSHConnection) async throws {}
 
     func syncState(localDirectory: URL, remoteStateRoot: String, transport: any DeployerTransport) async throws {}
+}
+
+private final class RecordingDeployerTransport: DeployerTransport, @unchecked Sendable {
+    let method: DeployerAccessMethod = .hammertime
+    let targetDescription = "recording-deployer"
+    private(set) var commands: [String] = []
+    private(set) var scriptCommands: [String] = []
+    private(set) var copies: [(localPath: URL, remotePath: String, delete: Bool)] = []
+
+    func validate() async throws -> DeployerAccessValidation {
+        DeployerAccessValidation(
+            method: method,
+            target: targetDescription,
+            succeeded: true,
+            message: "recorded",
+            attempts: [targetDescription]
+        )
+    }
+
+    func run(_ remoteCommand: String, timeout: TimeInterval?) async throws -> CommandResult {
+        commands.append(remoteCommand)
+        return CommandResult(executable: "recording", arguments: [], stdout: "", stderr: "", exitCode: 0)
+    }
+
+    func copy(localPath: URL, remotePath: String, delete: Bool) async throws {
+        copies.append((localPath, remotePath, delete))
+    }
+
+    func runScript(_ script: String, arguments: [String], asRoot: Bool, timeout: TimeInterval?) async throws -> CommandResult {
+        scriptCommands.append(script)
+        return CommandResult(executable: "recording", arguments: arguments, stdout: "", stderr: "", exitCode: 0)
+    }
 }
 
 private struct StaticHammertimeAdapter: HammertimeAdapter {

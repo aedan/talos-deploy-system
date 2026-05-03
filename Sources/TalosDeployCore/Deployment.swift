@@ -237,6 +237,7 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
         # Managed by tds. Allows Talos nodes to sync time from the deployer.
         server ntp.ubuntu.com iburst
         server time.cloudflare.com iburst
+        port 123
         local stratum 10
         allow 10.0.0.0/8
         allow 172.16.0.0/12
