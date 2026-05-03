@@ -128,7 +128,11 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
     }
 
     public func validate() async throws -> DeployerAccessValidation {
-        _ = try await run("true", timeout: TimeInterval(settings.commandTimeoutSeconds))
+        do {
+            _ = try await run("true", timeout: TimeInterval(min(settings.commandTimeoutSeconds, 75)))
+        } catch CommandError.timedOut {
+            throw HammertimeTransportError.validationTimedOut(deviceID)
+        }
         return DeployerAccessValidation(
             method: .hammertime,
             target: targetDescription,
@@ -249,6 +253,17 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
         var path: String
         var isDirectory: Bool
         var cleanupURL: URL?
+    }
+}
+
+public enum HammertimeTransportError: Error, LocalizedError {
+    case validationTimedOut(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .validationTimedOut(let deviceID):
+            return "Hammertime access to \(deviceID) timed out while validating deployer command execution. Refresh Hammertime/Core SSO on the runtime host, for example by running `ht --no-checks login \(deviceID)` interactively, then retry."
+        }
     }
 }
 
