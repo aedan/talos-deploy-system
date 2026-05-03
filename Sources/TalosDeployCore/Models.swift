@@ -688,6 +688,8 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
     public var deployerRegistryHost: String
     public var deployerRegistryAddressCIDR: String
     public var deployerRegistryInterface: String
+    public var deployerNodeRouteInterface: String
+    public var deployerNodeRouteSourceCIDR: String
     public var deployerRegistryPort: Int
 
     public init(
@@ -707,6 +709,8 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
         deployerRegistryHost: String = "",
         deployerRegistryAddressCIDR: String = "",
         deployerRegistryInterface: String = "",
+        deployerNodeRouteInterface: String = "",
+        deployerNodeRouteSourceCIDR: String = "",
         deployerRegistryPort: Int = 5000
     ) {
         self.preferredStrategies = preferredStrategies
@@ -719,6 +723,8 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
         self.deployerRegistryHost = deployerRegistryHost
         self.deployerRegistryAddressCIDR = deployerRegistryAddressCIDR
         self.deployerRegistryInterface = deployerRegistryInterface
+        self.deployerNodeRouteInterface = deployerNodeRouteInterface
+        self.deployerNodeRouteSourceCIDR = deployerNodeRouteSourceCIDR
         self.deployerRegistryPort = deployerRegistryPort
     }
 }
@@ -735,6 +741,8 @@ extension TalosProvisioningDefaults {
         case deployerRegistryHost
         case deployerRegistryAddressCIDR
         case deployerRegistryInterface
+        case deployerNodeRouteInterface
+        case deployerNodeRouteSourceCIDR
         case deployerRegistryPort
     }
 
@@ -752,6 +760,8 @@ extension TalosProvisioningDefaults {
             deployerRegistryHost: try container.decodeIfPresent(String.self, forKey: .deployerRegistryHost) ?? defaults.deployerRegistryHost,
             deployerRegistryAddressCIDR: try container.decodeIfPresent(String.self, forKey: .deployerRegistryAddressCIDR) ?? defaults.deployerRegistryAddressCIDR,
             deployerRegistryInterface: try container.decodeIfPresent(String.self, forKey: .deployerRegistryInterface) ?? defaults.deployerRegistryInterface,
+            deployerNodeRouteInterface: try container.decodeIfPresent(String.self, forKey: .deployerNodeRouteInterface) ?? defaults.deployerNodeRouteInterface,
+            deployerNodeRouteSourceCIDR: try container.decodeIfPresent(String.self, forKey: .deployerNodeRouteSourceCIDR) ?? defaults.deployerNodeRouteSourceCIDR,
             deployerRegistryPort: try container.decodeIfPresent(Int.self, forKey: .deployerRegistryPort) ?? defaults.deployerRegistryPort
         )
     }

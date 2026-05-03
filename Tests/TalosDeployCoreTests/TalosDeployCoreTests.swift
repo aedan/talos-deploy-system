@@ -954,7 +954,9 @@ final class TalosDeployCoreTests: XCTestCase {
             deployerStateRoot: "/var/lib/talos-deploy",
             talosProvisioning: TalosProvisioningDefaults(
                 deployerRegistryAddressCIDR: "198.51.100.55/32",
-                deployerRegistryInterface: "br-ctlplane"
+                deployerRegistryInterface: "br-ctlplane",
+                deployerNodeRouteInterface: "br-ctlplane",
+                deployerNodeRouteSourceCIDR: "198.51.100.55/32"
             ),
             nodes: [
                 DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer, deployerMode: .existing)),
@@ -995,6 +997,44 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("chown -R docker-registry:docker-registry '/var/lib/talos-deploy/registry'") == true })
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("chmod -R 0777 '/var/lib/talos-deploy/registry'") == true })
         XCTAssertTrue(runner.invocations.last?.arguments.last?.contains("tds-run-talos-deploy.sh") == true)
+    }
+
+    func testTalosExecutorDoesNotForceNodeRoutesFromRegistryInterfaceAlone() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = talosDevice(id: "deployer", name: "deployer-1", primaryIP: "198.51.100.20", privateIP: "198.51.100.20")
+        let cp = talosDevice(id: "cp1", name: "cp-1", primaryIP: "198.51.100.10", privateIP: "198.51.100.10")
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            talosProvisioning: TalosProvisioningDefaults(
+                deployerRegistryAddressCIDR: "198.51.100.55/32",
+                deployerRegistryInterface: "br-ctlplane"
+            ),
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer, deployerMode: .existing)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
+            ]
+        )
+        let state = try await DeploymentCoordinator(settings: AppSettings()).stage(spec: spec, at: temp)
+        let runner = MockCommandRunner(responses: Array(repeating: CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0), count: 8))
+        let transport = DirectSSHDeployerTransport(
+            connection: SSHConnection(host: "198.51.100.20", user: "rack"),
+            router: SSHCommandRouter(runner: runner)
+        )
+
+        _ = try await TalosDeploymentExecutor(oobBooter: MockOOBBooter()).execute(
+            state: state,
+            transport: transport,
+            configuration: DeployerMediaServiceConfiguration()
+        )
+
+        XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("tds-node-routes.service") == true })
+        XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("disable --now tds-node-routes.service") == true })
+        XCTAssertFalse(runner.invocations.contains { $0.arguments.last?.contains("route replace '198.51.100.10/32' dev 'br-ctlplane'") == true })
     }
 
     func testTalosDefaultsPreferVirtualMedia() {

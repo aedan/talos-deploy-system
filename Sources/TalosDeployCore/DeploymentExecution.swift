@@ -69,7 +69,25 @@ public struct MaintenanceBundleBuilder {
         ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
         \(talosctlResolver(state: state))
         TDS_MEDIA_ROOT="${TDS_MEDIA_ROOT:-\(state.spec.deployerStateRoot)/media}"
+        mkdir -p "$ROOT/logs"
+        LOG_FILE="$ROOT/logs/talos-deploy-$(date -u +%Y%m%dT%H%M%SZ).log"
+        exec > >(tee -a "$LOG_FILE") 2>&1
 
+        log() {
+          printf '[tds-deployer] %s %s\\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
+        }
+
+        diagnose_node() {
+          local name="$1"
+          local ip="$2"
+          log "diagnostics for ${name} (${ip})"
+          ip route get "$ip" || true
+          ping -c1 -W1 "$ip" || true
+          timeout 5 bash -c "</dev/tcp/$ip/50000" >/dev/null 2>&1 && echo "talos-api-port=open" || echo "talos-api-port=closed"
+          "$TALOSCTL" --nodes "$ip" --endpoints "$ip" version --insecure || true
+        }
+
+        log "starting Talos deployer-owned apply/bootstrap/health run; log=$LOG_FILE"
         "$ROOT/maintenance/tds-prepare-talos-media.sh"
         cd "$ROOT"
 
@@ -77,35 +95,53 @@ public struct MaintenanceBundleBuilder {
           [ -n "$name" ] || continue
           embedded_media="${TDS_MEDIA_ROOT}/${media_file}"
           if [ -f "$embedded_media" ]; then
+            log "waiting for configured Talos API on $name ($ip) from embedded ISO config"
             for attempt in $(seq 1 180); do
-              if "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" version >/dev/null 2>&1; then
+              if "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" version >/dev/null 2>&1; then
+                log "configured Talos API is reachable on $name ($ip)"
                 break
               fi
               if [ "$attempt" -eq 180 ]; then
                 echo "Timed out waiting for configured Talos boot on $name ($ip)" >&2
+                diagnose_node "$name" "$ip"
                 exit 1
+              fi
+              if [ $((attempt % 6)) -eq 0 ]; then
+                log "still waiting for configured Talos API on $name ($ip), attempt $attempt/180"
               fi
               sleep 10
             done
           else
+            log "waiting for Talos live maintenance API on $name ($ip)"
             for attempt in $(seq 1 120); do
-              if "$TALOSCTL" --nodes "$ip" version --insecure >/dev/null 2>&1; then
+              if "$TALOSCTL" --nodes "$ip" --endpoints "$ip" version --insecure >/dev/null 2>&1; then
+                log "Talos live maintenance API is reachable on $name ($ip)"
                 break
               fi
               if [ "$attempt" -eq 120 ]; then
                 echo "Timed out waiting for Talos live boot on $name ($ip)" >&2
+                diagnose_node "$name" "$ip"
                 exit 1
+              fi
+              if [ $((attempt % 6)) -eq 0 ]; then
+                log "still waiting for Talos live maintenance API on $name ($ip), attempt $attempt/120"
               fi
               sleep 10
             done
-            "$TALOSCTL" --nodes "$ip" apply-config --insecure --file "machine-configs/${name}.yaml"
+            log "applying static machine config to $name ($ip)"
+            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --file "machine-configs/${name}.yaml"
             for attempt in $(seq 1 60); do
-              if "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" version >/dev/null 2>&1; then
+              if "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" version >/dev/null 2>&1; then
+                log "configured Talos API is reachable on $name ($ip)"
                 break
               fi
               if [ "$attempt" -eq 60 ]; then
                 echo "Timed out waiting for configured Talos API on $name ($ip)" >&2
+                diagnose_node "$name" "$ip"
                 exit 1
+              fi
+              if [ $((attempt % 6)) -eq 0 ]; then
+                log "still waiting for configured Talos API on $name ($ip), attempt $attempt/60"
               fi
               sleep 10
             done
@@ -114,12 +150,15 @@ public struct MaintenanceBundleBuilder {
 
         first_cp=\(shellEscape(firstControlPlane?.ip ?? ""))
         if [ -n "$first_cp" ]; then
+          log "bootstrapping etcd on first control plane $first_cp"
           "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$first_cp" --endpoints "$first_cp" bootstrap || true
           "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$first_cp" --endpoints "$first_cp" kubeconfig . --force || true
         fi
         if [ -n "\(allIPs)" ] && [ -n "\(cpIPs)" ]; then
+          log "running Talos health across all nodes"
           "$TALOSCTL" --talosconfig generated/talosconfig --nodes \(shellEscape(allIPs)) --endpoints \(shellEscape(cpIPs)) health --wait-timeout 20m
         fi
+        log "Talos deployer-owned run completed"
         """
     }
 
@@ -387,10 +426,10 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             }
         }
         if !nodeRouteCommand.isEmpty {
-            tdsProgress("Installing deployer host routes to Talos nodes")
+            tdsProgress("Reconciling deployer host routes to Talos nodes")
             _ = try await transport.run(nodeRouteCommand, timeout: 120)
-            tdsProgress("Deployer host routes to Talos nodes are installed")
-            executedActions.append("Installed deployer host routes to Talos node management IPs.")
+            tdsProgress("Deployer host routes to Talos nodes are reconciled")
+            executedActions.append("Reconciled deployer host routes to Talos node management IPs.")
         }
         if mediaBaseURL.isEmpty {
             warnings.append("No deployer media address is configured; OOB boot URL actions must use PXE, direct virtual media, or operator local media.")
@@ -518,6 +557,11 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
           echo "Deployer registry interface \(interface) does not exist" >&2
           exit 1
         fi
+        for existing_dev in $("${IP_BIN}" -o addr show | awk '$4 == "\(cidr)" { print $2 }'); do
+          if [ "$existing_dev" != \(shellEscape(interface)) ]; then
+            sudo "$IP_BIN" addr del \(shellEscape(cidr)) dev "$existing_dev" 2>/dev/null || true
+          fi
+        done
         sudo "$IP_BIN" addr replace \(shellEscape(cidr)) dev \(shellEscape(interface))
         if command -v systemctl >/dev/null 2>&1; then
           cat > /tmp/tds-registry-address.service <<EOF
@@ -537,17 +581,36 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         EOF
           sudo mv /tmp/tds-registry-address.service /etc/systemd/system/tds-registry-address.service
           sudo systemctl daemon-reload
-          sudo systemctl enable --now tds-registry-address.service
+          sudo systemctl enable tds-registry-address.service
+          sudo systemctl restart tds-registry-address.service
         fi
         """
     }
 
     private func renderTalosNodeRouteCommand(state: DeploymentState) -> String {
-        let interface = state.spec.talosProvisioning.deployerRegistryInterface.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !interface.isEmpty else { return "" }
         let ips = talosNodeManagementIPs(state: state)
         guard !ips.isEmpty else { return "" }
-        let sourceIP = state.spec.talosProvisioning.deployerRegistryAddressCIDR
+        let interface = state.spec.talosProvisioning.deployerNodeRouteInterface.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !interface.isEmpty else {
+            let deleteRoutes = ips.map {
+                "sudo \"$IP_BIN\" route del \(shellEscape("\($0)/32")) 2>/dev/null || true"
+            }.joined(separator: "\n")
+            return """
+            set -e
+            IP_BIN="$(command -v ip || true)"
+            if [ -z "$IP_BIN" ]; then
+              echo "iproute2 is required to reconcile deployer Talos node routes" >&2
+              exit 1
+            fi
+            if command -v systemctl >/dev/null 2>&1; then
+              sudo systemctl disable --now tds-node-routes.service 2>/dev/null || true
+              sudo rm -f /etc/systemd/system/tds-node-routes.service
+              sudo systemctl daemon-reload
+            fi
+            \(deleteRoutes)
+            """
+        }
+        let sourceIP = state.spec.talosProvisioning.deployerNodeRouteSourceCIDR
             .split(separator: "/")
             .first
             .map(String.init) ?? ""
@@ -571,7 +634,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         set -e
         IP_BIN="$(command -v ip || true)"
         if [ -z "$IP_BIN" ]; then
-          echo "iproute2 is required to configure deployer Talos node routes" >&2
+          echo "iproute2 is required to reconcile deployer Talos node routes" >&2
           exit 1
         fi
         if ! "$IP_BIN" link show dev \(shellEscape(interface)) >/dev/null 2>&1; then
