@@ -326,6 +326,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(prepareScript.contains("wipe_out=\"${out%.iso}-wipe.iso\""))
         XCTAssertTrue(prepareScript.contains("talos.experimental.wipe=system"))
         XCTAssertTrue(prepareScript.contains("boot-machine-configs/${name}.yaml"))
+        XCTAssertTrue(prepareScript.contains("/^    install:[[:space:]]*$/"))
         XCTAssertTrue(prepareScript.contains("boot-node-patches/cp-1.yaml"))
         XCTAssertTrue(prepareScript.contains("gen config 'cluster' 'https://cluster.example.com:6443'"))
         XCTAssertTrue(prepareScript.contains("validate --mode metal --config \"machine-configs/${name}.yaml\" --strict"))

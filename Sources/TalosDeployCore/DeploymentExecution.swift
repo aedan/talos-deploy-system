@@ -238,6 +238,13 @@ public struct MaintenanceBundleBuilder {
             --patch "@${boot_patch}" \\
             --output "$boot_patched"
           mv "$boot_patched" "boot-machine-configs/${name}.yaml"
+          boot_no_install="$(mktemp)"
+          awk '
+            /^    install:[[:space:]]*$/ { skip=1; next }
+            skip && (/^    [^ ].*:/ || /^cluster:/ || /^---/) { skip=0 }
+            !skip { print }
+          ' "boot-machine-configs/${name}.yaml" > "$boot_no_install"
+          mv "$boot_no_install" "boot-machine-configs/${name}.yaml"
           "$TALOSCTL" validate --mode metal --config "boot-machine-configs/${name}.yaml" --strict
           if [ -f "$TDS_BASE_TALOS_ISO" ]; then
             if ! command -v xorriso >/dev/null 2>&1; then
