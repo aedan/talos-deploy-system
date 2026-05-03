@@ -96,7 +96,8 @@ Talos Defaults:
 - Talos system-disk wipe pre-boot is enabled by default for node installs. `tds` generates a per-node `*-wipe.iso`, boots it once to clear previous or partial Talos installs, waits for the reset pass, then boots the normal per-node ISO with the embedded static machine config.
 - The deployer installer registry is enabled by default. `tds` installs `docker-registry` and `skopeo`, mirrors the selected Talos installer image into the deployer, and renders Talos configs to install from that in-environment registry when nodes do not have Internet access.
 - When the deployer has separate OOB/media and Talos data networks, configure a node-facing registry address CIDR plus interface. `tds` adds and persists that address on the deployer before caching the installer image, then points Talos machine configs at that reachable registry address.
-- Talos node management host routes are separate from the registry interface and are opt-in. Leave the node route interface blank when the deployer OS can already route to Talos management IPs correctly; set it only when Talos management traffic must be forced out a specific bridge/VLAN.
+- The node-facing registry interface means the interface where Talos node management NICs can actually ARP/reach the deployer. This can be different from the interface that owns the deployer private IP from Core, especially on hosts with bridges, VLANs, or overlapping lab networks.
+- Talos node management host routes are separate from the registry interface and are opt-in. Leave the node route interface blank when the deployer OS can already route to Talos management IPs correctly; set it when Talos management traffic must be forced out a specific bridge/VLAN. In isolated bridged environments, the route source CIDR is commonly the same `/32` alias used for the deployer registry.
 
 Provisioning Priority:
 
@@ -115,8 +116,8 @@ Deployer Defaults:
 
 - Access method, SSH user, optional SSH ProxyJump host, state root, hostname suffix, PXE address, HTTP bind/port, package cache, local mirror behavior, and pinned `talosctl` version are managed by `tds`.
 - Registry port controls the deployer-hosted OCI registry used for Talos installer images. The default is `5000`.
-- Registry host override, address CIDR, and interface let `tds` host the installer registry on a specific node-facing deployer address. A `/32` alias is useful when Talos nodes share an L2 with a deployer interface but the deployer primary IP lives elsewhere.
-- Node route interface and source CIDR are only for unusual routing cases where Talos node management IPs are not reachable through the deployer OS routing table. These fields should not be reused as registry settings.
+- Registry host override, address CIDR, and interface let `tds` host the installer registry on a specific node-facing deployer address. A `/32` alias is useful when Talos nodes share an L2 with a deployer bridge/VLAN but the deployer primary IP lives elsewhere.
+- Node route interface and source CIDR are for routing cases where Talos node management IPs are not reachable through the deployer OS routing table. If the same isolated bridge/VLAN carries both Talos API traffic and installer registry pulls, use the same node-facing interface and registry alias source for both settings.
 - Generated deployer hostnames use `<deviceNumber>-deployer` plus an optional suffix, for example `100001-deployer-lab2`.
 
 Deployer Ownership:
