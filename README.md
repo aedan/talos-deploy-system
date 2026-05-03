@@ -79,8 +79,9 @@ Core Session:
 
 Hammertime:
 
-- Binary path defaults to `ht`.
+- Binary path defaults to `~/.local/bin/ht`.
 - `--no-checks` is enabled by default so old OS records do not block pre-provision access attempts.
+- Deployer automation can use `ht command`, `ht copy`, and `ht script` when direct SSH or SSH ProxyJump is not reachable.
 - Live facts are optional enrichment and never block deployment.
 
 Talos Defaults:
@@ -105,8 +106,14 @@ Bootstrap Media:
 
 Deployer Defaults:
 
-- SSH user, state root, hostname suffix, PXE address, HTTP bind/port, package cache, and pinned `talosctl` version are managed by `tds`.
+- Access method, SSH user, optional SSH ProxyJump host, state root, hostname suffix, PXE address, HTTP bind/port, package cache, local mirror behavior, and pinned `talosctl` version are managed by `tds`.
 - Generated deployer hostnames use `<deviceNumber>-deployer` plus an optional suffix, for example `100001-deployer-lab2`.
+
+Deployer Ownership:
+
+- `tds` validates the selected access path, prepares services, syncs generated state, boots Talos nodes, runs `talosctl` from the deployer, and leaves maintenance state under `/var/lib/talos-deploy/<account>/<cluster>/`.
+- The deployer copy is the operational source for future maintenance. The workstation copy exists for UI resume and debugging.
+- Maintenance scripts include health checks, per-node apply, Talos/Kubernetes upgrade helpers, config rotation, and log collection.
 
 Safety:
 
@@ -127,8 +134,11 @@ tds talos versions --output table
 tds talos artifacts --version v1.13.0 --arch amd64
 tds deploy plan --spec examples/deployment-spec.example.json
 tds deploy run --spec examples/deployment-spec.example.json --dry-run true
-tds deploy run --spec examples/deployment-spec.example.json --execute true --deployer-host 192.0.2.20 --deployer-user rack
-tds deploy verify --path ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
+tds deployer access-test --account 0000000 --device 100001 --access auto
+tds deployer prepare --account 0000000 --device 100001 --access auto
+tds deploy run --spec examples/deployment-spec.example.json --execute true --access auto
+tds deploy verify --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
+tds deploy maintenance-bundle --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
 ```
 
 ## Full Example
@@ -186,10 +196,11 @@ tds ubuntu validate-iso --iso ~/iso/tds-100001-ubuntu.iso
 - Boot once from virtual CD/DVD.
 - Keep `tds.app` open until Ubuntu has finished copying media and the server reboots to disk.
 
-7. Prepare the deployer and dry-run the Talos execution:
+7. Validate and prepare deployer access, then dry-run the Talos execution:
 
 ```bash
-tds deploy deployer prepare --deployer-host 192.0.2.20 --deployer-user rack
+tds deployer access-test --account 0000000 --device 100001 --access auto
+tds deployer prepare --account 0000000 --device 100001 --access auto
 tds deploy plan --spec examples/deployment-spec.example.json
 tds deploy run --spec examples/deployment-spec.example.json --dry-run true
 ```
@@ -200,10 +211,10 @@ tds deploy run --spec examples/deployment-spec.example.json --dry-run true
 tds deploy run \
   --spec examples/deployment-spec.example.json \
   --execute true \
-  --deployer-host 192.0.2.20 \
-  --deployer-user rack
+  --access auto
 
-tds deploy verify --path ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
+tds deploy verify --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
+tds deploy maintenance-bundle --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
 ```
 
 ## Lab2 End-To-End Acceptance Runbook

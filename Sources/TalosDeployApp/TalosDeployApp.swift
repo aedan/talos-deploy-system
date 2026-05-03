@@ -635,8 +635,22 @@ private struct DeploymentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Button("Stage Deployment") {
-                Task { await controller.stageDeployment() }
+            HStack {
+                Button("Stage Deployment") {
+                    Task { await controller.stageDeployment() }
+                }
+                .fieldHelp("Builds the local deployment state, Talos artifacts, network validation, and deployer maintenance bundle without touching servers.")
+
+                Button("Dry Run") {
+                    Task { await controller.runDeployment(dryRun: true) }
+                }
+                .fieldHelp("Plans deployer access, provisioning, and bootstrap actions without running OOB, SSH, Hammertime, or talosctl commands.")
+
+                Button("Execute Deployment") {
+                    Task { await controller.runDeployment(dryRun: false) }
+                }
+                .buttonStyle(.borderedProminent)
+                .fieldHelp("Runs the full owned workflow: validate deployer access, prepare services, sync state, boot Talos nodes, apply configs, bootstrap, and verify health.")
             }
             if let plan = controller.lastPlan {
                 Text("Phases")
@@ -655,6 +669,45 @@ private struct DeploymentView: View {
             } else {
                 Text("No deployment has been staged yet.")
                     .foregroundStyle(.secondary)
+            }
+
+            if let run = controller.lastRun {
+                GroupBox("Last Run") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let access = run.accessValidation {
+                            Text("Access path: \(access.method.displayName) via \(access.target)")
+                            Text(access.message)
+                                .foregroundStyle(access.succeeded ? Color.secondary : Color.red)
+                        }
+                        if let provisioning = run.provisioningExecution {
+                            Text("Provisioning")
+                                .font(.headline)
+                            ForEach(provisioning.executedActions, id: \.self) { action in
+                                Text(action)
+                                    .foregroundStyle(.secondary)
+                            }
+                            ForEach(provisioning.warnings, id: \.self) { warning in
+                                Text(warning)
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        if let bootstrap = run.bootstrapResult {
+                            Text("Bootstrap node: \(bootstrap.bootstrapNode)")
+                            Text(bootstrap.succeeded ? "Bootstrap/health completed." : "Bootstrap/health not executed.")
+                                .foregroundStyle(bootstrap.succeeded ? Color.green : Color.secondary)
+                        }
+                        if !run.state.events.isEmpty {
+                            Text("Run Log")
+                                .font(.headline)
+                            ForEach(Array(run.state.events.suffix(8).enumerated()), id: \.offset) { _, event in
+                                Text(event.message)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
         .padding()
@@ -778,6 +831,16 @@ private struct SettingsRootView: View {
                     .fieldHelp("Optional Python interpreter for the bundled Core bridge; leave blank for system Python.")
                 TextField("Session Cache Path", text: $controller.settings.hammertime.sessionCachePath)
                     .fieldHelp("Optional hammertime cache path to inspect for active Core auth; blank uses the default discovery paths.")
+                TextField("Deployer Via (optional)", text: $controller.settings.hammertime.deployerVia)
+                    .fieldHelp("Optional Hammertime region or gateway hint used when tds reaches the Ubuntu deployer through ht command/copy/script.")
+                Toggle("Use private deployer path", isOn: $controller.settings.hammertime.deployerUsePrivate)
+                    .fieldHelp("Adds --private to Hammertime deployer automation when the private network path is the reachable one.")
+                TextField("Passport Reason (optional)", text: $controller.settings.hammertime.passportReason)
+                    .fieldHelp("Optional Passport/access request reason passed to Hammertime for deployer automation when required.")
+                TextField("Copy Method", text: $controller.settings.hammertime.copyMethod)
+                    .fieldHelp("Hammertime copy method for deployer state sync, normally rsync or scp.")
+                Stepper("Command Timeout Seconds: \(controller.settings.hammertime.commandTimeoutSeconds)", value: $controller.settings.hammertime.commandTimeoutSeconds, in: 30...3600)
+                    .fieldHelp("Maximum time tds waits for Hammertime deployer command/script operations before failing the deployment step.")
                 TextField("Default Fact Groups", text: Binding(
                     get: { controller.settings.hammertime.defaultFactGroups.joined(separator: ",") },
                     set: { controller.settings.hammertime.defaultFactGroups = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
@@ -906,8 +969,15 @@ private struct SettingsRootView: View {
                     .foregroundStyle(.secondary)
             }
             Section("Deployer Defaults") {
+                Picker("Access Method", selection: $controller.settings.deployer.accessMethod) {
+                    ForEach(DeployerAccessMethod.allCases, id: \.self) { method in
+                        Text(method.displayName).tag(method)
+                    }
+                }
                 TextField("Deployer SSH User", text: $controller.settings.deployer.sshUser)
                     .fieldHelp("SSH user tds uses after Ubuntu is installed or when preparing an existing deployer.")
+                TextField("SSH ProxyJump Host", text: $controller.settings.deployer.proxyJumpHost)
+                    .fieldHelp("Optional SSH -J jump host used before falling back to Hammertime in automatic deployer access mode.")
                 TextField("State Root", text: $controller.settings.deployer.stateRoot)
                     .fieldHelp("Durable deployer directory for cluster state, cached media, generated configs, and run logs.")
                 TextField("Hostname Suffix", text: $controller.settings.deployer.hostnameSuffix)
@@ -924,6 +994,8 @@ private struct SettingsRootView: View {
                     .fieldHelp("Cache directory for offline/repeat package and talosctl installs when the deployer has limited internet.")
                 TextField("Pinned talosctl Version", text: $controller.settings.deployer.talosctlVersion)
                     .fieldHelp("talosctl version installed and managed by tds on the deployer.")
+                Toggle("Keep local state mirror", isOn: $controller.settings.deployer.keepLocalMirror)
+                    .fieldHelp("Keeps a workstation copy for UI resume/debug while treating the deployer copy as the maintenance source of truth.")
                 Stepper("HTTP Port: \(controller.settings.deployer.httpPort)", value: $controller.settings.deployer.httpPort, in: 1...65535)
                     .fieldHelp("TCP port used by the deployer-hosted media HTTP service.")
             }

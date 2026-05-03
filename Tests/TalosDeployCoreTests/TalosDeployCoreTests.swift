@@ -222,7 +222,7 @@ final class TalosDeployCoreTests: XCTestCase {
         )
         let coreClient = RenameTrackingCoreClient()
         let coordinator = DeploymentCoordinator(
-            settings: AppSettings(),
+            settings: AppSettings(hammertime: HammertimeSettings(enabled: false)),
             deployerHostClient: FailingDeployerHostClient(),
             coreClient: coreClient
         )
@@ -232,7 +232,7 @@ final class TalosDeployCoreTests: XCTestCase {
         do {
             _ = try await coordinator.run(
                 state: state,
-                connection: SSHConnection(host: "198.51.100.10", user: "rack"),
+                connection: nil,
                 dryRun: false
             )
             XCTFail("Expected deployer validation to fail")
@@ -278,6 +278,61 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("network: 0.0.0.0/0"))
         XCTAssertTrue(patch.contains("gateway: 198.51.100.1"))
         XCTAssertTrue(patch.contains("destination: /var/lib/longhorn"))
+    }
+
+    func testStageWritesMaintenanceBundleForDeployerOwnedOperations() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
+        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer, deployerMode: .existing)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
+            ]
+        )
+
+        let state = try await DeploymentCoordinator(settings: AppSettings()).stage(spec: spec, at: temp)
+        let stateDirectory = URL(fileURLWithPath: state.localStateDirectory, isDirectory: true)
+        let manifestData = try Data(contentsOf: stateDirectory.appending(path: "maintenance-bundle.json"))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(MaintenanceBundleManifest.self, from: manifestData)
+
+        XCTAssertTrue(manifest.scripts.contains("maintenance/tds-run-talos-deploy.sh"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stateDirectory.appending(path: "maintenance/health-check.sh").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stateDirectory.appending(path: "inventory/selected-devices.json").path))
+    }
+
+    func testDryRunReportsAccessProvisioningAndBootstrapPlan() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
+        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer, deployerMode: .existing)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
+            ]
+        )
+        let coordinator = DeploymentCoordinator(settings: AppSettings())
+        let state = try await coordinator.stage(spec: spec, at: temp)
+        let run = try await coordinator.run(state: state, dryRun: true)
+
+        XCTAssertEqual(run.accessValidation?.method, .auto)
+        XCTAssertFalse(run.provisioningExecution?.plannedActions.isEmpty ?? true)
+        XCTAssertEqual(run.bootstrapResult?.bootstrapNode, cp.name)
+        XCTAssertTrue(run.maintenanceBundle?.scripts.contains("maintenance/tds-run-talos-deploy.sh") == true)
     }
 
     func testTalosBuilderRendersManualVLANsAndBridges() async throws {
@@ -483,6 +538,133 @@ final class TalosDeployCoreTests: XCTestCase {
         _ = try await adapter.inventory(accountNumber: "0000000")
 
         XCTAssertEqual(runner.invocations.first?.timeout, 90)
+    }
+
+    func testHammertimeDeployerTransportBuildsCommandCopyAndScriptCalls() async throws {
+        let runner = MockCommandRunner(
+            responses: [
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "", exitCode: 0),
+            ]
+        )
+        let transport = HammertimeDeployerTransport(
+            settings: HammertimeSettings(binaryPath: "/tmp/ht", deployerVia: "ORD", deployerUsePrivate: true, copyMethod: "rsync", commandTimeoutSeconds: 60),
+            deviceID: "716181",
+            runner: runner
+        )
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+
+        _ = try await transport.run("hostname", timeout: 60)
+        try await transport.copy(localPath: temp, remotePath: "/var/lib/talos-deploy/test", delete: true)
+        _ = try await transport.runScript("echo ok", asRoot: true, timeout: 60)
+
+        XCTAssertTrue(runner.invocations[0].arguments.starts(with: ["--batch", "--no-colors", "--no-checks", "command"]))
+        XCTAssertTrue(runner.invocations[0].arguments.contains("--via"))
+        XCTAssertTrue(runner.invocations[0].arguments.contains("ORD"))
+        XCTAssertTrue(runner.invocations[0].arguments.contains("--private"))
+        XCTAssertTrue(runner.invocations[0].arguments.contains("716181"))
+        XCTAssertTrue(runner.invocations[2].arguments.contains("copy"))
+        XCTAssertTrue(runner.invocations[2].arguments.contains("--dest"))
+        XCTAssertTrue(runner.invocations[2].arguments.contains("716181:/var/lib/talos-deploy/test/"))
+        XCTAssertTrue(runner.invocations[3].arguments.contains("script"))
+        XCTAssertTrue(runner.invocations[3].arguments.contains("--root"))
+    }
+
+    func testTransportResolverFallsBackFromSSHToHammertime() async throws {
+        let runner = MockCommandRunner(
+            responses: [
+                CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "timeout", exitCode: 255),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "", exitCode: 0),
+            ]
+        )
+        let settings = AppSettings(
+            hammertime: HammertimeSettings(binaryPath: "/tmp/ht", commandTimeoutSeconds: 60)
+        )
+        let resolver = DeployerTransportResolver(settings: settings, runner: runner)
+        let selection = try await resolver.resolve(
+            request: DeployerAccessRequest(
+                method: .auto,
+                sshConnection: SSHConnection(host: "192.0.2.10", user: "rack"),
+                hammertimeDeviceID: "716181"
+            ),
+            deployer: talosDevice(id: "716181", name: "716181-lab2-director")
+        )
+
+        XCTAssertEqual(selection.validation.method, .hammertime)
+        XCTAssertTrue(selection.failedAttempts.first?.contains("directSSH") == true)
+        XCTAssertEqual(runner.invocations.first?.executable, "/usr/bin/ssh")
+        XCTAssertEqual(runner.invocations.last?.executable, "/tmp/ht")
+    }
+
+    func testTransportResolverKeepsDirectSSHSeparateFromProxyJump() async throws {
+        let runner = MockCommandRunner(
+            responses: [
+                CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "timeout", exitCode: 255),
+                CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0),
+            ]
+        )
+        let settings = AppSettings(
+            hammertime: HammertimeSettings(enabled: false),
+            deployer: DeployerDefaults(proxyJumpHost: "bastion.example.test")
+        )
+        let resolver = DeployerTransportResolver(settings: settings, runner: runner)
+
+        let selection = try await resolver.resolve(
+            request: DeployerAccessRequest(
+                method: .auto,
+                sshConnection: SSHConnection(host: "192.0.2.10", user: "rack", proxyJump: "bastion.example.test")
+            ),
+            deployer: talosDevice(id: "716181", name: "716181-lab2-director")
+        )
+
+        XCTAssertEqual(selection.validation.method, .proxyJumpSSH)
+        XCTAssertFalse(runner.invocations[0].arguments.contains("-J"))
+        XCTAssertTrue(runner.invocations[1].arguments.contains("-J"))
+        XCTAssertTrue(runner.invocations[1].arguments.contains("bastion.example.test"))
+    }
+
+    func testTalosExecutorBootsNodesBeforeRunningDeployerBootstrap() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = talosDevice(id: "deployer", name: "deployer-1", primaryIP: "198.51.100.20", privateIP: "198.51.100.20")
+        let cp = talosDevice(id: "cp1", name: "cp-1", primaryIP: "198.51.100.10", privateIP: "198.51.100.10")
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer, deployerMode: .existing)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
+            ]
+        )
+        let state = try await DeploymentCoordinator(settings: AppSettings()).stage(spec: spec, at: temp)
+        let runner = MockCommandRunner(
+            responses: [
+                CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0),
+                CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0),
+            ]
+        )
+        let transport = DirectSSHDeployerTransport(
+            connection: SSHConnection(host: "198.51.100.20", user: "rack"),
+            router: SSHCommandRouter(runner: runner)
+        )
+        let oob = MockOOBBooter()
+
+        let execution = try await TalosDeploymentExecutor(oobBooter: oob).execute(
+            state: state,
+            transport: transport,
+            configuration: DeployerMediaServiceConfiguration()
+        )
+
+        XCTAssertEqual(oob.urlRequests.map(\.deviceID), ["cp1"])
+        XCTAssertEqual(oob.urlRequests.first?.imageURL, "http://198.51.100.20:8080/talos-v1.13.0.iso")
+        XCTAssertTrue(execution.0.executedActions.contains { $0.contains("OOB URL boot connected") })
+        XCTAssertTrue(runner.invocations.last?.arguments.last?.contains("tds-run-talos-deploy.sh") == true)
     }
 
     func testTalosDefaultsPreferVirtualMedia() {
@@ -972,7 +1154,11 @@ private final class MockCommandRunner: CommandRunning, @unchecked Sendable {
         guard !responses.isEmpty else {
             throw CoreBridgeError.invalidBridgeOutput
         }
-        return responses.removeFirst()
+        let response = responses.removeFirst()
+        if response.exitCode != 0 {
+            throw CommandError.executionFailed(response)
+        }
+        return response
     }
 }
 
@@ -982,6 +1168,33 @@ private struct CommandInvocation {
     var environment: [String: String]
     var currentDirectory: URL?
     var timeout: TimeInterval?
+}
+
+private final class MockOOBBooter: OOBNodeBooting, @unchecked Sendable {
+    private(set) var urlRequests: [OOBBootURLRequest] = []
+    private(set) var pxeRequests: [OOBPXEBootRequest] = []
+
+    func bootURL(_ request: OOBBootURLRequest) async throws -> OOBBootURLResult {
+        urlRequests.append(request)
+        return OOBBootURLResult(
+            deviceID: request.deviceID,
+            imageURL: request.imageURL,
+            connected: true,
+            bootOnce: request.bootOnce,
+            rebooted: request.reboot,
+            steps: [OOBBootURLStep(name: "mock", stdout: "Image Connected = Yes")]
+        )
+    }
+
+    func bootPXE(_ request: OOBPXEBootRequest) async throws -> OOBPXEBootResult {
+        pxeRequests.append(request)
+        return OOBPXEBootResult(
+            deviceID: request.deviceID,
+            oneTimeBoot: request.oneTimeBoot,
+            rebooted: request.reboot,
+            steps: [OOBBootURLStep(name: "mock", stdout: "pxe")]
+        )
+    }
 }
 
 private struct StaticCoreClient: CoreClient, EnvironmentCoreSessionProviding {
@@ -1022,13 +1235,23 @@ private struct FailingDeployerHostClient: DeployerHostClient {
         throw CommandError.timedOut("/usr/bin/ssh", [connection.host], 60)
     }
 
+    func validate(transport: any DeployerTransport) async throws -> DeployerAccessValidation {
+        throw CommandError.timedOut("deployer-transport", [transport.targetDescription], 60)
+    }
+
     func setHostname(_ hostname: String, connection: SSHConnection) async throws {}
+
+    func setHostname(_ hostname: String, transport: any DeployerTransport) async throws {}
 
     func planDeployerServices(configuration: DeployerMediaServiceConfiguration) -> DeployerServicePlan {
         DefaultDeployerHostClient().planDeployerServices(configuration: configuration)
     }
 
     func prepareDeployerServices(configuration: DeployerMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerServicePlan {
+        planDeployerServices(configuration: configuration)
+    }
+
+    func prepareDeployerServices(configuration: DeployerMediaServiceConfiguration, transport: any DeployerTransport) async throws -> DeployerServicePlan {
         planDeployerServices(configuration: configuration)
     }
 
@@ -1042,7 +1265,13 @@ private struct FailingDeployerHostClient: DeployerHostClient {
         )
     }
 
+    func prepareMediaServices(configuration: DeployerMediaServiceConfiguration, transport: any DeployerTransport) async throws -> DeployerMediaServicePlan {
+        try await prepareMediaServices(configuration: configuration, connection: SSHConnection(host: "192.0.2.10", user: "rack"))
+    }
+
     func syncState(localDirectory: URL, remoteStateRoot: String, connection: SSHConnection) async throws {}
+
+    func syncState(localDirectory: URL, remoteStateRoot: String, transport: any DeployerTransport) async throws {}
 }
 
 private struct StaticHammertimeAdapter: HammertimeAdapter {

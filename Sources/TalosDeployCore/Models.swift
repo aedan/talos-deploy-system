@@ -74,6 +74,22 @@ public enum TalosProvisioningStrategy: String, Codable, CaseIterable, Sendable {
     case directVirtualMedia
 }
 
+public enum DeployerAccessMethod: String, Codable, CaseIterable, Sendable {
+    case auto
+    case directSSH
+    case proxyJumpSSH
+    case hammertime
+
+    public var displayName: String {
+        switch self {
+        case .auto: "Auto"
+        case .directSSH: "Direct SSH"
+        case .proxyJumpSSH: "SSH ProxyJump"
+        case .hammertime: "Hammertime"
+        }
+    }
+}
+
 public enum BootstrapMediaDeliveryMode: String, Codable, CaseIterable, Sendable {
     case operatorLocalMedia
     case oobReachableURL
@@ -783,7 +799,9 @@ extension TalosDefaults {
 }
 
 public struct DeployerDefaults: Codable, Equatable, Sendable {
+    public var accessMethod: DeployerAccessMethod
     public var sshUser: String
+    public var proxyJumpHost: String
     public var stateRoot: String
     public var pxeAddress: String
     public var httpPort: Int
@@ -793,9 +811,12 @@ public struct DeployerDefaults: Codable, Equatable, Sendable {
     public var hostnameSuffix: String
     public var packageCacheRoot: String
     public var talosctlVersion: String
+    public var keepLocalMirror: Bool
 
     public init(
+        accessMethod: DeployerAccessMethod = .auto,
         sshUser: String = "root",
+        proxyJumpHost: String = "",
         stateRoot: String = "/var/lib/talos-deploy",
         pxeAddress: String = "",
         httpPort: Int = 8080,
@@ -804,9 +825,12 @@ public struct DeployerDefaults: Codable, Equatable, Sendable {
         pxeDirectoryName: String = "pxe",
         hostnameSuffix: String = "",
         packageCacheRoot: String = "/var/cache/tds",
-        talosctlVersion: String = ""
+        talosctlVersion: String = "",
+        keepLocalMirror: Bool = true
     ) {
+        self.accessMethod = accessMethod
         self.sshUser = sshUser
+        self.proxyJumpHost = proxyJumpHost
         self.stateRoot = stateRoot
         self.pxeAddress = pxeAddress
         self.httpPort = httpPort
@@ -816,12 +840,15 @@ public struct DeployerDefaults: Codable, Equatable, Sendable {
         self.hostnameSuffix = hostnameSuffix
         self.packageCacheRoot = packageCacheRoot
         self.talosctlVersion = talosctlVersion
+        self.keepLocalMirror = keepLocalMirror
     }
 }
 
 extension DeployerDefaults {
     enum CodingKeys: String, CodingKey {
+        case accessMethod
         case sshUser
+        case proxyJumpHost
         case stateRoot
         case pxeAddress
         case httpPort
@@ -831,11 +858,14 @@ extension DeployerDefaults {
         case hostnameSuffix
         case packageCacheRoot
         case talosctlVersion
+        case keepLocalMirror
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.accessMethod = try container.decodeIfPresent(DeployerAccessMethod.self, forKey: .accessMethod) ?? .auto
         self.sshUser = try container.decodeIfPresent(String.self, forKey: .sshUser) ?? "root"
+        self.proxyJumpHost = try container.decodeIfPresent(String.self, forKey: .proxyJumpHost) ?? ""
         self.stateRoot = try container.decodeIfPresent(String.self, forKey: .stateRoot) ?? "/var/lib/talos-deploy"
         self.pxeAddress = try container.decodeIfPresent(String.self, forKey: .pxeAddress) ?? ""
         self.httpPort = try container.decodeIfPresent(Int.self, forKey: .httpPort) ?? 8080
@@ -845,6 +875,7 @@ extension DeployerDefaults {
         self.hostnameSuffix = try container.decodeIfPresent(String.self, forKey: .hostnameSuffix) ?? ""
         self.packageCacheRoot = try container.decodeIfPresent(String.self, forKey: .packageCacheRoot) ?? "/var/cache/tds"
         self.talosctlVersion = try container.decodeIfPresent(String.self, forKey: .talosctlVersion) ?? ""
+        self.keepLocalMirror = try container.decodeIfPresent(Bool.self, forKey: .keepLocalMirror) ?? true
     }
 }
 
@@ -983,6 +1014,10 @@ public struct TalosExecutionRun: Codable, Equatable, Sendable {
     public var coreRename: CoreRenameResult?
     public var deployerServices: DeployerServicePlan
     public var networkValidation: [StaticNetworkValidationResult]
+    public var accessValidation: DeployerAccessValidation?
+    public var provisioningExecution: TalosProvisioningExecution?
+    public var bootstrapResult: TalosBootstrapResult?
+    public var maintenanceBundle: MaintenanceBundleManifest?
     public var dryRun: Bool
 
     public init(
@@ -991,6 +1026,10 @@ public struct TalosExecutionRun: Codable, Equatable, Sendable {
         coreRename: CoreRenameResult? = nil,
         deployerServices: DeployerServicePlan = DeployerServicePlan(),
         networkValidation: [StaticNetworkValidationResult] = [],
+        accessValidation: DeployerAccessValidation? = nil,
+        provisioningExecution: TalosProvisioningExecution? = nil,
+        bootstrapResult: TalosBootstrapResult? = nil,
+        maintenanceBundle: MaintenanceBundleManifest? = nil,
         dryRun: Bool = true
     ) {
         self.state = state
@@ -998,7 +1037,81 @@ public struct TalosExecutionRun: Codable, Equatable, Sendable {
         self.coreRename = coreRename
         self.deployerServices = deployerServices
         self.networkValidation = networkValidation
+        self.accessValidation = accessValidation
+        self.provisioningExecution = provisioningExecution
+        self.bootstrapResult = bootstrapResult
+        self.maintenanceBundle = maintenanceBundle
         self.dryRun = dryRun
+    }
+}
+
+public struct DeployerAccessValidation: Codable, Equatable, Sendable {
+    public var method: DeployerAccessMethod
+    public var target: String
+    public var succeeded: Bool
+    public var message: String
+    public var attempts: [String]
+
+    public init(
+        method: DeployerAccessMethod,
+        target: String,
+        succeeded: Bool,
+        message: String,
+        attempts: [String] = []
+    ) {
+        self.method = method
+        self.target = target
+        self.succeeded = succeeded
+        self.message = message
+        self.attempts = attempts
+    }
+}
+
+public struct TalosProvisioningExecution: Codable, Equatable, Sendable {
+    public var plannedActions: [String]
+    public var executedActions: [String]
+    public var warnings: [String]
+
+    public init(plannedActions: [String] = [], executedActions: [String] = [], warnings: [String] = []) {
+        self.plannedActions = plannedActions
+        self.executedActions = executedActions
+        self.warnings = warnings
+    }
+}
+
+public struct TalosBootstrapResult: Codable, Equatable, Sendable {
+    public var bootstrapNode: String
+    public var commands: [String]
+    public var succeeded: Bool
+    public var warnings: [String]
+
+    public init(bootstrapNode: String = "", commands: [String] = [], succeeded: Bool = false, warnings: [String] = []) {
+        self.bootstrapNode = bootstrapNode
+        self.commands = commands
+        self.succeeded = succeeded
+        self.warnings = warnings
+    }
+}
+
+public struct MaintenanceBundleManifest: Codable, Equatable, Sendable {
+    public var stateRoot: String
+    public var clusterName: String
+    public var generatedAt: Date
+    public var scripts: [String]
+    public var files: [String]
+
+    public init(
+        stateRoot: String,
+        clusterName: String,
+        generatedAt: Date = .now,
+        scripts: [String],
+        files: [String]
+    ) {
+        self.stateRoot = stateRoot
+        self.clusterName = clusterName
+        self.generatedAt = generatedAt
+        self.scripts = scripts
+        self.files = files
     }
 }
 
@@ -1027,6 +1140,11 @@ public struct HammertimeSettings: Codable, Equatable, Sendable {
     public var sessionCachePath: String
     public var enabled: Bool
     public var skipDeviceChecks: Bool
+    public var deployerVia: String
+    public var deployerUsePrivate: Bool
+    public var passportReason: String
+    public var copyMethod: String
+    public var commandTimeoutSeconds: Int
     public var defaultFactGroups: [String]
     public var preferredTerminal: String
     public var saveExpectScripts: Bool
@@ -1038,6 +1156,11 @@ public struct HammertimeSettings: Codable, Equatable, Sendable {
         sessionCachePath: String = "~/.rackspace/hammertime/cache/sessions.db",
         enabled: Bool = true,
         skipDeviceChecks: Bool = true,
+        deployerVia: String = "",
+        deployerUsePrivate: Bool = false,
+        passportReason: String = "",
+        copyMethod: String = "rsync",
+        commandTimeoutSeconds: Int = 300,
         defaultFactGroups: [String] = ["hardware", "storage", "setup", "routes"],
         preferredTerminal: String = "iterm",
         saveExpectScripts: Bool = false,
@@ -1048,10 +1171,55 @@ public struct HammertimeSettings: Codable, Equatable, Sendable {
         self.sessionCachePath = sessionCachePath
         self.enabled = enabled
         self.skipDeviceChecks = skipDeviceChecks
+        self.deployerVia = deployerVia
+        self.deployerUsePrivate = deployerUsePrivate
+        self.passportReason = passportReason
+        self.copyMethod = copyMethod
+        self.commandTimeoutSeconds = commandTimeoutSeconds
         self.defaultFactGroups = defaultFactGroups
         self.preferredTerminal = preferredTerminal
         self.saveExpectScripts = saveExpectScripts
         self.timeoutSeconds = timeoutSeconds
+    }
+}
+
+extension HammertimeSettings {
+    enum CodingKeys: String, CodingKey {
+        case binaryPath
+        case pythonPath
+        case sessionCachePath
+        case enabled
+        case skipDeviceChecks
+        case deployerVia
+        case deployerUsePrivate
+        case passportReason
+        case copyMethod
+        case commandTimeoutSeconds
+        case defaultFactGroups
+        case preferredTerminal
+        case saveExpectScripts
+        case timeoutSeconds
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = HammertimeSettings()
+        self.init(
+            binaryPath: try container.decodeIfPresent(String.self, forKey: .binaryPath) ?? defaults.binaryPath,
+            pythonPath: try container.decodeIfPresent(String.self, forKey: .pythonPath) ?? defaults.pythonPath,
+            sessionCachePath: try container.decodeIfPresent(String.self, forKey: .sessionCachePath) ?? defaults.sessionCachePath,
+            enabled: try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? defaults.enabled,
+            skipDeviceChecks: try container.decodeIfPresent(Bool.self, forKey: .skipDeviceChecks) ?? defaults.skipDeviceChecks,
+            deployerVia: try container.decodeIfPresent(String.self, forKey: .deployerVia) ?? defaults.deployerVia,
+            deployerUsePrivate: try container.decodeIfPresent(Bool.self, forKey: .deployerUsePrivate) ?? defaults.deployerUsePrivate,
+            passportReason: try container.decodeIfPresent(String.self, forKey: .passportReason) ?? defaults.passportReason,
+            copyMethod: try container.decodeIfPresent(String.self, forKey: .copyMethod) ?? defaults.copyMethod,
+            commandTimeoutSeconds: try container.decodeIfPresent(Int.self, forKey: .commandTimeoutSeconds) ?? defaults.commandTimeoutSeconds,
+            defaultFactGroups: try container.decodeIfPresent([String].self, forKey: .defaultFactGroups) ?? defaults.defaultFactGroups,
+            preferredTerminal: try container.decodeIfPresent(String.self, forKey: .preferredTerminal) ?? defaults.preferredTerminal,
+            saveExpectScripts: try container.decodeIfPresent(Bool.self, forKey: .saveExpectScripts) ?? defaults.saveExpectScripts,
+            timeoutSeconds: try container.decodeIfPresent(Int.self, forKey: .timeoutSeconds) ?? defaults.timeoutSeconds
+        )
     }
 }
 

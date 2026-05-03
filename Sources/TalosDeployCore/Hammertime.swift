@@ -279,7 +279,40 @@ public struct OOBBootURLResult: Codable, Equatable, Sendable {
     }
 }
 
-public final class HammertimeOOBBooter: @unchecked Sendable {
+public struct OOBPXEBootRequest: Codable, Equatable, Sendable {
+    public var deviceID: String
+    public var oneTimeBoot: String
+    public var reboot: Bool
+    public var proxyVia: String?
+
+    public init(deviceID: String, oneTimeBoot: String = "pxe", reboot: Bool = true, proxyVia: String? = nil) {
+        self.deviceID = deviceID
+        self.oneTimeBoot = oneTimeBoot
+        self.reboot = reboot
+        self.proxyVia = proxyVia
+    }
+}
+
+public struct OOBPXEBootResult: Codable, Equatable, Sendable {
+    public var deviceID: String
+    public var oneTimeBoot: String
+    public var rebooted: Bool
+    public var steps: [OOBBootURLStep]
+
+    public init(deviceID: String, oneTimeBoot: String, rebooted: Bool, steps: [OOBBootURLStep]) {
+        self.deviceID = deviceID
+        self.oneTimeBoot = oneTimeBoot
+        self.rebooted = rebooted
+        self.steps = steps
+    }
+}
+
+public protocol OOBNodeBooting: Sendable {
+    func bootURL(_ request: OOBBootURLRequest) async throws -> OOBBootURLResult
+    func bootPXE(_ request: OOBPXEBootRequest) async throws -> OOBPXEBootResult
+}
+
+public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
     private let settings: HammertimeSettings
     private let runner: CommandRunning
 
@@ -323,6 +356,24 @@ public final class HammertimeOOBBooter: @unchecked Sendable {
         )
     }
 
+    public func bootPXE(_ request: OOBPXEBootRequest) async throws -> OOBPXEBootResult {
+        guard !request.deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw HammertimeError.missingDeviceID
+        }
+
+        var steps: [OOBBootURLStep] = []
+        steps.append(try await runOOBCommand(name: "one-time-pxe", command: "onetimeboot \(request.oneTimeBoot)", request: request.asURLRequest()))
+        if request.reboot {
+            steps.append(try await runOOBCommand(name: "power-reset", command: "power reset", request: request.asURLRequest()))
+        }
+        return OOBPXEBootResult(
+            deviceID: request.deviceID,
+            oneTimeBoot: request.oneTimeBoot,
+            rebooted: request.reboot,
+            steps: steps
+        )
+    }
+
     private func runOOBCommand(name: String, command: String, request: OOBBootURLRequest) async throws -> OOBBootURLStep {
         var arguments = ["--batch", "--no-colors"]
         if settings.skipDeviceChecks {
@@ -341,6 +392,20 @@ public final class HammertimeOOBBooter: @unchecked Sendable {
             timeout: TimeInterval(settings.timeoutSeconds)
         )
         return OOBBootURLStep(name: name, stdout: result.stdout)
+    }
+}
+
+private extension OOBPXEBootRequest {
+    func asURLRequest() -> OOBBootURLRequest {
+        OOBBootURLRequest(
+            deviceID: deviceID,
+            imageURL: "pxe",
+            connectMedia: false,
+            bootOnce: false,
+            oneTimeBoot: oneTimeBoot,
+            reboot: reboot,
+            proxyVia: proxyVia
+        )
     }
 }
 

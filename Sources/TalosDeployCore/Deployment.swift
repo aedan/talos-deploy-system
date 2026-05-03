@@ -72,11 +72,16 @@ public final class DefaultRedfishClient: RedfishClient, @unchecked Sendable {
 
 public protocol DeployerHostClient: Sendable {
     func validate(connection: SSHConnection) async throws
+    func validate(transport: any DeployerTransport) async throws -> DeployerAccessValidation
     func setHostname(_ hostname: String, connection: SSHConnection) async throws
+    func setHostname(_ hostname: String, transport: any DeployerTransport) async throws
     func planDeployerServices(configuration: DeployerMediaServiceConfiguration) -> DeployerServicePlan
     func prepareDeployerServices(configuration: DeployerMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerServicePlan
+    func prepareDeployerServices(configuration: DeployerMediaServiceConfiguration, transport: any DeployerTransport) async throws -> DeployerServicePlan
     func prepareMediaServices(configuration: DeployerMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerMediaServicePlan
+    func prepareMediaServices(configuration: DeployerMediaServiceConfiguration, transport: any DeployerTransport) async throws -> DeployerMediaServicePlan
     func syncState(localDirectory: URL, remoteStateRoot: String, connection: SSHConnection) async throws
+    func syncState(localDirectory: URL, remoteStateRoot: String, transport: any DeployerTransport) async throws
 }
 
 public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sendable {
@@ -87,16 +92,24 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
     }
 
     public func validate(connection: SSHConnection) async throws {
-        try await router.validateAccess(connection)
+        _ = try await validate(transport: DirectSSHDeployerTransport(connection: connection, router: router))
+    }
+
+    public func validate(transport: any DeployerTransport) async throws -> DeployerAccessValidation {
+        try await transport.validate()
     }
 
     public func setHostname(_ hostname: String, connection: SSHConnection) async throws {
+        try await setHostname(hostname, transport: DirectSSHDeployerTransport(connection: connection, router: router))
+    }
+
+    public func setHostname(_ hostname: String, transport: any DeployerTransport) async throws {
         let escaped = shellEscape(hostname)
-        _ = try await router.run(connection: connection, remoteCommand: "sudo hostnamectl set-hostname \(escaped) || hostnamectl set-hostname \(escaped)")
+        _ = try await transport.run("sudo hostnamectl set-hostname \(escaped) || hostnamectl set-hostname \(escaped)", timeout: 120)
     }
 
     public func planDeployerServices(configuration: DeployerMediaServiceConfiguration) -> DeployerServicePlan {
-        let packages = ["ca-certificates", "curl", "dnsmasq", "python3", "openssh-client"]
+        let packages = ["ca-certificates", "curl", "dnsmasq", "python3", "openssh-client", "kubernetes-client"]
         let talosctlVersion = configuration.talosctlVersion.isEmpty ? "configured Talos version" : configuration.talosctlVersion
         return DeployerServicePlan(
             packages: packages,
@@ -121,6 +134,13 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
     }
 
     public func prepareDeployerServices(configuration: DeployerMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerServicePlan {
+        try await prepareDeployerServices(
+            configuration: configuration,
+            transport: DirectSSHDeployerTransport(connection: connection, router: router)
+        )
+    }
+
+    public func prepareDeployerServices(configuration: DeployerMediaServiceConfiguration, transport: any DeployerTransport) async throws -> DeployerServicePlan {
         let plan = planDeployerServices(configuration: configuration)
         let packageList = plan.packages.joined(separator: " ")
         let binRoot = "\(configuration.stateRoot)/bin"
@@ -132,6 +152,7 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
         let remoteCommand = """
         set -e
         sudo mkdir -p \(shellEscape(binRoot)) \(shellEscape(dnsmasqRoot)) \(shellEscape(mediaRoot)) \(shellEscape(logRoot)) \(shellEscape(cacheRoot))/apt \(shellEscape(cacheRoot))/talosctl
+        sudo mkdir -p \(shellEscape("\(configuration.stateRoot)/maintenance")) \(shellEscape("\(configuration.stateRoot)/machine-configs")) \(shellEscape("\(configuration.stateRoot)/generated")) \(shellEscape("\(configuration.stateRoot)/run"))
         sudo chown -R "$(id -un):$(id -gn)" \(shellEscape(configuration.stateRoot)) \(shellEscape(cacheRoot)) || true
         if command -v apt-get >/dev/null 2>&1; then
           sudo apt-get update || true
@@ -189,11 +210,18 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
         sudo mv /tmp/tds-dnsmasq.service /etc/systemd/system/tds-dnsmasq.service || true
         sudo systemctl daemon-reload || true
         """
-        _ = try await router.run(connection: connection, remoteCommand: remoteCommand)
+        _ = try await transport.run(remoteCommand, timeout: 900)
         return plan
     }
 
     public func prepareMediaServices(configuration: DeployerMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerMediaServicePlan {
+        try await prepareMediaServices(
+            configuration: configuration,
+            transport: DirectSSHDeployerTransport(connection: connection, router: router)
+        )
+    }
+
+    public func prepareMediaServices(configuration: DeployerMediaServiceConfiguration, transport: any DeployerTransport) async throws -> DeployerMediaServicePlan {
         let mediaRoot = configuration.mediaRoot
         let pxeRoot = configuration.pxeRoot
         let binRoot = "\(configuration.stateRoot)/bin"
@@ -308,14 +336,14 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
         PY
         chmod 0755 \(shellEscape(scriptPath))
         cat > \(shellEscape("\(configuration.stateRoot)/media-service.env")) <<'EOF'
-        MEDIA_ROOT=\(mediaRoot)
-        PXE_ROOT=\(pxeRoot)
-        HTTP_BIND=\(configuration.httpBindAddress)
+        MEDIA_ROOT=\(shellEscape(mediaRoot))
+        PXE_ROOT=\(shellEscape(pxeRoot))
+        HTTP_BIND=\(shellEscape(configuration.httpBindAddress))
         HTTP_PORT=\(configuration.httpPort)
-        START_COMMAND=\(startCommand)
+        START_COMMAND=\(shellEscape(startCommand))
         EOF
         """
-        _ = try await router.run(connection: connection, remoteCommand: remoteCommand)
+        _ = try await transport.run(remoteCommand, timeout: 300)
 
         return DeployerMediaServicePlan(
             mediaRoot: mediaRoot,
@@ -331,8 +359,16 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
     }
 
     public func syncState(localDirectory: URL, remoteStateRoot: String, connection: SSHConnection) async throws {
-        try await router.ensureDirectory(remoteStateRoot, connection: connection)
-        try await router.sync(localPath: localDirectory, remotePath: remoteStateRoot, connection: connection, delete: false)
+        try await syncState(
+            localDirectory: localDirectory,
+            remoteStateRoot: remoteStateRoot,
+            transport: DirectSSHDeployerTransport(connection: connection, router: router)
+        )
+    }
+
+    public func syncState(localDirectory: URL, remoteStateRoot: String, transport: any DeployerTransport) async throws {
+        _ = try await transport.run("mkdir -p \(shellEscape(remoteStateRoot))", timeout: 120)
+        try await transport.copy(localPath: localDirectory, remotePath: remoteStateRoot, delete: false)
     }
 }
 
@@ -957,7 +993,7 @@ public struct DeploymentPlanner: Sendable {
                 DeploymentPhase(
                     title: "Prepare Existing Deployer",
                     steps: [
-                        "Validate SSH access to deployer \(deployer.device.name).",
+                        "Validate the configured deployer access path for \(deployer.device.name).",
                         "Create durable state root at \(remotePath).",
                         "tds prepares media and PXE directories plus a range-capable HTTP media service on the selected existing device.",
                         "Stage generated Talos/Ubuntu media through tds before booting any dependent nodes.",
@@ -1154,33 +1190,42 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         let localStateDirectory = baseDirectory.appending(path: spec.accountNumber).appending(path: spec.clusterName)
         try fileManager.createDirectory(at: localStateDirectory, withIntermediateDirectories: true)
         _ = try await builder.buildArtifacts(for: spec, plan: plan, in: localStateDirectory)
-        let state = DeploymentState(
+        var state = DeploymentState(
             spec: spec,
             plan: plan,
             events: [DeploymentEvent(message: "Deployment staged locally.")],
             localStateDirectory: localStateDirectory.path,
             deployerSynchronized: false
         )
+        _ = try MaintenanceBundleBuilder(fileManager: fileManager).writeBundle(for: state, in: localStateDirectory)
+        state.events.append(DeploymentEvent(message: "Maintenance bundle generated for deployer-owned operations."))
         _ = try stateStore.save(state, to: localStateDirectory)
         return state
     }
 
     public func synchronizeToDeployer(_ state: DeploymentState, connection: SSHConnection) async throws -> DeploymentState {
+        try await synchronizeToDeployer(
+            state,
+            transport: DirectSSHDeployerTransport(connection: connection)
+        )
+    }
+
+    public func synchronizeToDeployer(_ state: DeploymentState, transport: any DeployerTransport) async throws -> DeploymentState {
         let localDirectory = URL(fileURLWithPath: state.localStateDirectory, isDirectory: true)
-        try await deployerHostClient.validate(connection: connection)
+        _ = try await deployerHostClient.validate(transport: transport)
         let mediaPlan = try await deployerHostClient.prepareMediaServices(
             configuration: DeployerMediaServiceConfiguration(defaults: settings.deployer),
-            connection: connection
+            transport: transport
         )
         try await deployerHostClient.syncState(
             localDirectory: localDirectory,
             remoteStateRoot: state.plan.durableStateDirectory,
-            connection: connection
+            transport: transport
         )
         var updated = state
         updated.deployerSynchronized = true
-        updated.events.append(DeploymentEvent(message: "Prepared deployer media services on \(connection.host) at \(mediaPlan.mediaRoot)."))
-        updated.events.append(DeploymentEvent(message: "Deployment state synchronized to deployer \(connection.host)."))
+        updated.events.append(DeploymentEvent(message: "Prepared deployer media services through \(transport.targetDescription) at \(mediaPlan.mediaRoot)."))
+        updated.events.append(DeploymentEvent(message: "Deployment state synchronized to deployer through \(transport.targetDescription)."))
         _ = try stateStore.save(updated, to: localDirectory)
         return updated
     }
@@ -1188,6 +1233,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
     public func run(
         state: DeploymentState,
         connection: SSHConnection? = nil,
+        access: DeployerAccessRequest? = nil,
         dryRun: Bool = true
     ) async throws -> TalosExecutionRun {
         let deployer = state.plan.deployer
@@ -1196,6 +1242,10 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         var updated = state
         var servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
         let renameResult: CoreRenameResult?
+        var accessValidation: DeployerAccessValidation?
+        var provisioningExecution: TalosProvisioningExecution?
+        var bootstrapResult: TalosBootstrapResult?
+        var maintenanceBundle: MaintenanceBundleManifest?
 
         if dryRun {
             renameResult = CoreRenameResult(
@@ -1203,19 +1253,54 @@ public final class DeploymentCoordinator: @unchecked Sendable {
                 didRename: false,
                 warning: "Dry run: Core rename was planned but not executed."
             )
+            maintenanceBundle = try? MaintenanceBundleBuilder(fileManager: fileManager).writeBundle(
+                for: updated,
+                in: URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)
+            )
+            accessValidation = DeployerAccessValidation(
+                method: access?.method ?? settings.deployer.accessMethod,
+                target: deployer.device.id,
+                succeeded: false,
+                message: "Dry run: deployer access validation was planned but not executed.",
+                attempts: []
+            )
+            provisioningExecution = TalosProvisioningExecution(
+                plannedActions: state.plan.installs
+                    .filter { $0.assignment.role == .controlplane || $0.assignment.role == .worker }
+                    .map { plannedExecutionAction(for: $0, talosArtifacts: state.plan.talosArtifacts) },
+                executedActions: [],
+                warnings: ["Dry run: Talos node boot/apply/bootstrap commands were not executed."]
+            )
+            bootstrapResult = TalosBootstrapResult(
+                bootstrapNode: state.spec.nodes.first(where: { $0.assignment.role == .controlplane })?.device.name ?? "",
+                commands: ["Dry run: deployer maintenance/tds-run-talos-deploy.sh would be executed."],
+                succeeded: false,
+                warnings: ["Dry run only."]
+            )
             updated.events.append(DeploymentEvent(message: "Dry run planned deployer hostname \(hostname)."))
         } else {
-            guard let connection else {
-                throw DeploymentCoordinatorError.missingDeployerConnection
-            }
-            try await deployerHostClient.validate(connection: connection)
-            try await deployerHostClient.setHostname(hostname, connection: connection)
+            let request = access ?? defaultAccessRequest(connection: connection, deployer: deployer.device)
+            let selection = try await DeployerTransportResolver(settings: settings).resolve(request: request, deployer: deployer.device)
+            let transport = selection.transport
+            accessValidation = DeployerAccessValidation(
+                method: selection.validation.method,
+                target: selection.validation.target,
+                succeeded: true,
+                message: selection.validation.message,
+                attempts: selection.failedAttempts + selection.validation.attempts
+            )
+            updated.events.append(DeploymentEvent(message: "Selected deployer access path: \(selection.validation.method.displayName) via \(selection.validation.target)."))
+            try await deployerHostClient.setHostname(hostname, transport: transport)
             servicePlan = try await deployerHostClient.prepareDeployerServices(
                 configuration: serviceConfiguration,
-                connection: connection
+                transport: transport
             )
-            updated = try await synchronizeToDeployer(updated, connection: connection)
-            updated.events.append(DeploymentEvent(message: "Deployer services prepared on \(connection.host)."))
+            maintenanceBundle = try MaintenanceBundleBuilder(fileManager: fileManager).writeBundle(
+                for: updated,
+                in: URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)
+            )
+            updated = try await synchronizeToDeployer(updated, transport: transport)
+            updated.events.append(DeploymentEvent(message: "Deployer services prepared through \(transport.targetDescription)."))
 
             if let coreClient {
                 renameResult = await coreClient.renameDevice(
@@ -1235,6 +1320,15 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             } else if renameResult?.didRename == true {
                 updated.events.append(DeploymentEvent(message: "Core device rename requested: \(hostname)."))
             }
+
+            let execution = try await TalosDeploymentExecutor(settings: settings).execute(
+                state: updated,
+                transport: transport,
+                configuration: serviceConfiguration
+            )
+            provisioningExecution = execution.0
+            bootstrapResult = execution.1
+            updated.events.append(DeploymentEvent(message: "Talos deployer-owned execution completed."))
         }
 
         let localDirectory = URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)
@@ -1246,8 +1340,43 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             coreRename: renameResult,
             deployerServices: servicePlan,
             networkValidation: state.plan.networkValidation,
+            accessValidation: accessValidation,
+            provisioningExecution: provisioningExecution,
+            bootstrapResult: bootstrapResult,
+            maintenanceBundle: maintenanceBundle,
             dryRun: dryRun
         )
+    }
+
+    private func defaultAccessRequest(connection: SSHConnection?, deployer: DiscoveredDevice) -> DeployerAccessRequest {
+        var resolvedConnection = connection
+        if resolvedConnection?.proxyJump.isEmpty == true, !settings.deployer.proxyJumpHost.isEmpty {
+            resolvedConnection?.proxyJump = settings.deployer.proxyJumpHost
+        }
+        return DeployerAccessRequest(
+            method: settings.deployer.accessMethod,
+            sshConnection: resolvedConnection,
+            hammertimeDeviceID: deployer.id,
+            hammertimeVia: settings.hammertime.deployerVia,
+            hammertimePrivate: settings.hammertime.deployerUsePrivate,
+            passportReason: settings.hammertime.passportReason,
+            copyMethod: settings.hammertime.copyMethod
+        )
+    }
+
+    private func plannedExecutionAction(for install: PlannedDeviceInstall, talosArtifacts: TalosFactoryArtifacts) -> String {
+        switch install.method {
+        case .operatorLocalMedia:
+            return "Wait for operator-attached Talos media on \(install.device.name), then apply static machine config from the deployer."
+        case .virtualMedia:
+            return "Boot \(install.device.name) through direct OOB virtual media using \(talosArtifacts.isoURL), then apply static machine config from the deployer."
+        case .bootURL:
+            return "Boot \(install.device.name) through OOB boot URL media, preferring deployer-hosted Talos ISO, then apply static machine config from the deployer."
+        case .pxe:
+            return "Boot \(install.device.name) through deployer-managed PXE/DHCP/TFTP/HTTP, then apply static machine config from the deployer."
+        case .stagedOnly:
+            return "Stage \(install.device.name) config on the deployer without booting."
+        }
     }
 
     public func verify(state: DeploymentState) -> ClusterHealthResult {
@@ -1299,6 +1428,7 @@ public final class AppController: ObservableObject {
     @Published public var liveFactsErrors: [String: String]
     @Published public var lastPlan: DeploymentPlan?
     @Published public var lastState: DeploymentState?
+    @Published public var lastRun: TalosExecutionRun?
     @Published public var ubuntuCapturePath: String
     @Published public var ubuntuSourceISOPath: String
     @Published public var ubuntuOutputISOPath: String
@@ -1353,6 +1483,7 @@ public final class AppController: ObservableObject {
         self.devices = []
         self.assignments = [:]
         self.liveFactsErrors = [:]
+        self.lastRun = nil
         self.ubuntuCapturePath = ""
         self.ubuntuSourceISOPath = ""
         self.ubuntuOutputISOPath = ""
@@ -1670,7 +1801,31 @@ public final class AppController: ObservableObject {
             let state = try await coordinator.stage(spec: spec, at: paths.stateDirectory)
             lastState = state
             lastPlan = state.plan
+            lastRun = nil
             statusMessage = "Deployment staged at \(state.localStateDirectory)."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    public func runDeployment(dryRun: Bool) async {
+        guard let state = lastState else {
+            await stageDeployment()
+            guard let staged = lastState else { return }
+            await runDeployment(state: staged, dryRun: dryRun)
+            return
+        }
+        await runDeployment(state: state, dryRun: dryRun)
+    }
+
+    private func runDeployment(state: DeploymentState, dryRun: Bool) async {
+        let coordinator = DeploymentCoordinator(settings: settings)
+        do {
+            let run = try await coordinator.run(state: state, dryRun: dryRun)
+            lastRun = run
+            lastState = run.state
+            lastPlan = run.state.plan
+            statusMessage = dryRun ? "Deployment dry run completed." : "Deployment execution completed."
         } catch {
             statusMessage = error.localizedDescription
         }

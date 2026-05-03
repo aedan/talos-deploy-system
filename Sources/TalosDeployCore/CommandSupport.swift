@@ -179,12 +179,35 @@ public struct SSHConnection: Codable, Equatable, Sendable {
     public var user: String
     public var port: Int
     public var identityFile: String
+    public var proxyJump: String
 
-    public init(host: String, user: String, port: Int = 22, identityFile: String = "") {
+    public init(host: String, user: String, port: Int = 22, identityFile: String = "", proxyJump: String = "") {
         self.host = host
         self.user = user
         self.port = port
         self.identityFile = identityFile
+        self.proxyJump = proxyJump
+    }
+}
+
+extension SSHConnection {
+    enum CodingKeys: String, CodingKey {
+        case host
+        case user
+        case port
+        case identityFile
+        case proxyJump
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            host: try container.decode(String.self, forKey: .host),
+            user: try container.decode(String.self, forKey: .user),
+            port: try container.decodeIfPresent(Int.self, forKey: .port) ?? 22,
+            identityFile: try container.decodeIfPresent(String.self, forKey: .identityFile) ?? "",
+            proxyJump: try container.decodeIfPresent(String.self, forKey: .proxyJump) ?? ""
+        )
     }
 }
 
@@ -209,7 +232,10 @@ public final class SSHCommandRouter: @unchecked Sendable {
         if delete {
             arguments.append("--delete")
         }
-        let sshOptions = "-o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10"
+        var sshOptions = "-o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10"
+        if !connection.proxyJump.isEmpty {
+            sshOptions += " -J \(connection.proxyJump)"
+        }
         if !connection.identityFile.isEmpty {
             arguments.append(contentsOf: ["-e", "ssh \(sshOptions) -i \(connection.identityFile) -p \(connection.port)"])
         } else {
@@ -221,19 +247,22 @@ public final class SSHCommandRouter: @unchecked Sendable {
     }
 
     @discardableResult
-    public func run(connection: SSHConnection, remoteCommand: String) async throws -> CommandResult {
+    public func run(connection: SSHConnection, remoteCommand: String, timeout: TimeInterval? = 60) async throws -> CommandResult {
         var arguments = [
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=no",
             "-o", "ConnectTimeout=10",
             "-p", "\(connection.port)",
         ]
+        if !connection.proxyJump.isEmpty {
+            arguments.append(contentsOf: ["-J", connection.proxyJump])
+        }
         if !connection.identityFile.isEmpty {
             arguments.append(contentsOf: ["-i", connection.identityFile])
         }
         arguments.append("\(connection.user)@\(connection.host)")
         arguments.append(remoteCommand)
-        return try await runner.run("/usr/bin/ssh", arguments: arguments, environment: [:], currentDirectory: nil, timeout: 60)
+        return try await runner.run("/usr/bin/ssh", arguments: arguments, environment: [:], currentDirectory: nil, timeout: timeout)
     }
 }
 

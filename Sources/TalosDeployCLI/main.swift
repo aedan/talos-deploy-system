@@ -36,6 +36,8 @@ struct TalosDeployCLI {
             try await handlePlan(arguments: Array(arguments.dropFirst()))
         case "deploy":
             try await handleDeploy(arguments: Array(arguments.dropFirst()))
+        case "deployer":
+            try await handleStandaloneDeployer(arguments: Array(arguments.dropFirst()))
         case "resume":
             try handleResume(arguments: Array(arguments.dropFirst()))
         default:
@@ -373,6 +375,8 @@ struct TalosDeployCLI {
             try handleResume(arguments: remaining)
         case "verify":
             try handleDeployVerify(arguments: remaining)
+        case "maintenance-bundle":
+            try handleDeployMaintenanceBundle(arguments: remaining)
         case "deployer":
             try await handleDeployDeployer(arguments: remaining)
         default:
@@ -396,6 +400,7 @@ struct TalosDeployCLI {
         let run = try await coordinator.run(
             state: state,
             connection: deployerConnection(options: options),
+            access: deployerAccessRequest(options: options, settings: settings, deployerID: spec.deployerNode?.device.id ?? ""),
             dryRun: dryRun
         )
         let data = try JSONEncoder.pretty.encode(run)
@@ -404,10 +409,19 @@ struct TalosDeployCLI {
 
     private static func handleDeployVerify(arguments: [String]) throws {
         let options = parseOptions(arguments)
-        let state = try loadState(path: options["path"])
+        let state = try loadState(path: options["state"] ?? options["path"])
         let settings = (try? SettingsController().load()) ?? AppSettings()
         let result = DeploymentCoordinator(settings: settings).verify(state: state)
         let data = try JSONEncoder.pretty.encode(result)
+        print(String(decoding: data, as: UTF8.self))
+    }
+
+    private static func handleDeployMaintenanceBundle(arguments: [String]) throws {
+        let options = parseOptions(arguments)
+        let state = try loadState(path: options["state"] ?? options["path"])
+        let localDirectory = URL(fileURLWithPath: state.localStateDirectory, isDirectory: true)
+        let manifest = try MaintenanceBundleBuilder().writeBundle(for: state, in: localDirectory)
+        let data = try JSONEncoder.pretty.encode(manifest)
         print(String(decoding: data, as: UTF8.self))
     }
 
@@ -426,15 +440,41 @@ struct TalosDeployCLI {
             let data = try JSONEncoder.pretty.encode(plan)
             print(String(decoding: data, as: UTF8.self))
         case "prepare":
-            guard let connection = deployerConnection(options: options) else {
-                throw CLIError.missingRequired("deploy deployer prepare requires --deployer-host HOST and --deployer-user USER")
-            }
-            let plan = try await client.prepareDeployerServices(configuration: configuration, connection: connection)
+            let device = DiscoveredDevice(
+                id: options["device"] ?? options["deployer-device"] ?? "",
+                accountNumber: options["account"] ?? "",
+                name: options["device"] ?? options["deployer-device"] ?? "deployer"
+            )
+            let selection = try await DeployerTransportResolver(settings: settings).resolve(
+                request: deployerAccessRequest(options: options, settings: settings, deployerID: device.id),
+                deployer: device
+            )
+            let plan = try await client.prepareDeployerServices(configuration: configuration, transport: selection.transport)
             let data = try JSONEncoder.pretty.encode(plan)
+            print(String(decoding: data, as: UTF8.self))
+        case "access-test":
+            let device = DiscoveredDevice(
+                id: options["device"] ?? options["deployer-device"] ?? "",
+                accountNumber: options["account"] ?? "",
+                name: options["device"] ?? options["deployer-device"] ?? "deployer"
+            )
+            let selection = try await DeployerTransportResolver(settings: settings).resolve(
+                request: deployerAccessRequest(options: options, settings: settings, deployerID: device.id),
+                deployer: device
+            )
+            let data = try JSONEncoder.pretty.encode(selection.validation)
             print(String(decoding: data, as: UTF8.self))
         default:
             printDeployUsage()
         }
+    }
+
+    private static func handleStandaloneDeployer(arguments: [String]) async throws {
+        guard !arguments.isEmpty else {
+            printDeployerUsage()
+            return
+        }
+        try await handleDeployDeployer(arguments: arguments)
     }
 
     private static func handleResume(arguments: [String]) throws {
@@ -474,7 +514,21 @@ struct TalosDeployCLI {
             host: host,
             user: user,
             port: Int(options["deployer-port"] ?? "22") ?? 22,
-            identityFile: options["identity-file"] ?? ""
+            identityFile: options["identity-file"] ?? "",
+            proxyJump: options["proxy-jump"] ?? options["jump-host"] ?? ""
+        )
+    }
+
+    private static func deployerAccessRequest(options: [String: String], settings: AppSettings, deployerID: String) -> DeployerAccessRequest {
+        let method = DeployerAccessMethod(rawValue: options["access"] ?? options["access-method"] ?? settings.deployer.accessMethod.rawValue) ?? settings.deployer.accessMethod
+        return DeployerAccessRequest(
+            method: method,
+            sshConnection: deployerConnection(options: options),
+            hammertimeDeviceID: options["device"] ?? options["deployer-device"] ?? deployerID,
+            hammertimeVia: options["via"] ?? options["hammertime-via"] ?? settings.hammertime.deployerVia,
+            hammertimePrivate: parseBool(options["private"]) ?? settings.hammertime.deployerUsePrivate,
+            passportReason: options["passport-reason"] ?? settings.hammertime.passportReason,
+            copyMethod: options["copy-method"] ?? settings.hammertime.copyMethod
         )
     }
 
@@ -605,9 +659,13 @@ struct TalosDeployCLI {
               plan --spec path/to/spec.json
               deploy plan --spec path/to/spec.json
               deploy run --spec path/to/spec.json [--execute true] [--deployer-host HOST --deployer-user USER]
-              deploy verify --path /path/to/deployment-state.json
+              deploy verify --state /path/to/deployment-state.json
+              deploy maintenance-bundle --state /path/to/deployment-state.json
+              deployer access-test --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
+              deployer prepare --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
               deploy deployer plan
-              deploy deployer prepare --deployer-host HOST --deployer-user USER
+              deploy deployer access-test --account ACCOUNT --device DEVICE
+              deploy deployer prepare --account ACCOUNT --device DEVICE
               resume --path /path/to/deployment-state.json
             """
         )
@@ -651,13 +709,27 @@ struct TalosDeployCLI {
             """
             tds deploy commands:
               plan --spec path/to/spec.json
-              run --spec path/to/spec.json [--dry-run true|false] [--execute true] [--deployer-host HOST --deployer-user USER]
+              run --spec path/to/spec.json [--dry-run true|false] [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime] [--deployer-host HOST --deployer-user USER]
               resume --path /path/to/deployment-state.json
-              verify --path /path/to/deployment-state.json
+              verify --state /path/to/deployment-state.json
+              maintenance-bundle --state /path/to/deployment-state.json
               deployer plan
-              deployer prepare --deployer-host HOST --deployer-user USER
+              deployer access-test --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
+              deployer prepare --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
 
-            Non-dry-run execution requires --execute true plus a deployer SSH connection.
+            Non-dry-run execution requires --execute true plus a deployer access path. Auto mode tries SSH, ProxyJump, then Hammertime.
+            """
+        )
+    }
+
+    private static func printDeployerUsage() {
+        print(
+            """
+            tds deployer commands:
+              access-test --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
+              prepare --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
+
+            Hammertime access uses ht command/copy/script with configured --no-checks behavior.
             """
         )
     }
