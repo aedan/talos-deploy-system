@@ -352,6 +352,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             configuration: configuration,
             registryInstallerImage: registryInstallerImage
         )
+        let nodeRouteCommand = renderTalosNodeRouteCommand(state: state)
         let startMediaCommand = """
         set -e
         mkdir -p \(shellEscape(configuration.mediaRoot)) \(shellEscape("\(configuration.stateRoot)/logs"))
@@ -384,6 +385,12 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             if !state.spec.talosProvisioning.deployerRegistryAddressCIDR.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 executedActions.append("Ensured deployer node-facing registry address \(state.spec.talosProvisioning.deployerRegistryAddressCIDR).")
             }
+        }
+        if !nodeRouteCommand.isEmpty {
+            tdsProgress("Installing deployer host routes to Talos nodes")
+            _ = try await transport.run(nodeRouteCommand, timeout: 120)
+            tdsProgress("Deployer host routes to Talos nodes are installed")
+            executedActions.append("Installed deployer host routes to Talos node management IPs.")
         }
         if mediaBaseURL.isEmpty {
             warnings.append("No deployer media address is configured; OOB boot URL actions must use PXE, direct virtual media, or operator local media.")
@@ -535,6 +542,62 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         """
     }
 
+    private func renderTalosNodeRouteCommand(state: DeploymentState) -> String {
+        let interface = state.spec.talosProvisioning.deployerRegistryInterface.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !interface.isEmpty else { return "" }
+        let ips = talosNodeManagementIPs(state: state)
+        guard !ips.isEmpty else { return "" }
+
+        let replaceRoutes = ips.map {
+            "sudo \"$IP_BIN\" route replace \(shellEscape("\($0)/32")) dev \(shellEscape(interface))"
+        }.joined(separator: "\n")
+        let deleteRoutes = ips.map {
+            "sudo \"$IP_BIN\" route del \(shellEscape("\($0)/32")) dev \(shellEscape(interface)) 2>/dev/null || true"
+        }.joined(separator: "\n")
+        let systemdStarts = ips.map {
+            "ExecStart=${IP_BIN} route replace \($0)/32 dev \(interface)"
+        }.joined(separator: "\n")
+        let systemdStops = ips.map {
+            "ExecStop=-${IP_BIN} route del \($0)/32 dev \(interface)"
+        }.joined(separator: "\n")
+
+        return """
+        set -e
+        IP_BIN="$(command -v ip || true)"
+        if [ -z "$IP_BIN" ]; then
+          echo "iproute2 is required to configure deployer Talos node routes" >&2
+          exit 1
+        fi
+        if ! "$IP_BIN" link show dev \(shellEscape(interface)) >/dev/null 2>&1; then
+          echo "Deployer Talos node route interface \(interface) does not exist" >&2
+          exit 1
+        fi
+        \(replaceRoutes)
+        if command -v systemctl >/dev/null 2>&1; then
+          cat > /tmp/tds-node-routes.service <<EOF
+        [Unit]
+        Description=TDS Talos node management host routes
+        After=network-online.target tds-registry-address.service
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        \(systemdStarts)
+        \(systemdStops)
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+          sudo mv /tmp/tds-node-routes.service /etc/systemd/system/tds-node-routes.service
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now tds-node-routes.service
+        fi
+        \(deleteRoutes)
+        \(replaceRoutes)
+        """
+    }
+
     private func provisionTalosNode(_ install: PlannedDeviceInstall, mediaBaseURL: String, state: DeploymentState) async throws -> TalosProvisioningExecution {
         switch install.method {
         case .bootURL:
@@ -613,6 +676,25 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
 
     private func firstNonEmpty(_ values: String...) -> String {
         values.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+    }
+
+    private func talosNodeManagementIPs(state: DeploymentState) -> [String] {
+        let planner = StaticNetworkPlanner()
+        var seen: Set<String> = []
+        return state.spec.nodes.compactMap { node in
+            guard node.assignment.role == .controlplane || node.assignment.role == .worker else {
+                return nil
+            }
+            let address = planner.config(for: node).managementAddressCIDR
+            guard let ip = address.split(separator: "/").first.map(String.init),
+                  !ip.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !seen.contains(ip)
+            else {
+                return nil
+            }
+            seen.insert(ip)
+            return ip
+        }
     }
 }
 
