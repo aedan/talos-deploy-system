@@ -46,6 +46,8 @@ public struct MaintenanceBundleBuilder {
                 "cluster.yaml",
                 "talos-artifacts.json",
                 "talos-factory-schematic.yaml",
+                "boot-node-patches/",
+                "node-patches/",
                 "inventory/selected-devices.json",
                 "inventory/networking-summary.json",
             ]
@@ -87,64 +89,83 @@ public struct MaintenanceBundleBuilder {
           "$TALOSCTL" --nodes "$ip" --endpoints "$ip" version --insecure || true
         }
 
+        wait_for_configured_api() {
+          local name="$1"
+          local ip="$2"
+          local attempts="$3"
+          local context="$4"
+          log "waiting for configured Talos API on $name ($ip) ${context}"
+          for attempt in $(seq 1 "$attempts"); do
+            if "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" version >/dev/null 2>&1; then
+              log "configured Talos API is reachable on $name ($ip)"
+              return 0
+            fi
+            if [ "$attempt" -eq "$attempts" ]; then
+              echo "Timed out waiting for configured Talos API on $name ($ip)" >&2
+              diagnose_node "$name" "$ip"
+              return 1
+            fi
+            if [ $((attempt % 6)) -eq 0 ]; then
+              log "still waiting for configured Talos API on $name ($ip), attempt $attempt/$attempts"
+            fi
+            sleep 10
+          done
+        }
+
+        wait_for_live_api() {
+          local name="$1"
+          local ip="$2"
+          log "waiting for Talos live maintenance API on $name ($ip)"
+          for attempt in $(seq 1 120); do
+            if "$TALOSCTL" --nodes "$ip" --endpoints "$ip" version --insecure >/dev/null 2>&1; then
+              log "Talos live maintenance API is reachable on $name ($ip)"
+              return 0
+            fi
+            if [ "$attempt" -eq 120 ]; then
+              echo "Timed out waiting for Talos live boot on $name ($ip)" >&2
+              diagnose_node "$name" "$ip"
+              return 1
+            fi
+            if [ $((attempt % 6)) -eq 0 ]; then
+              log "still waiting for Talos live maintenance API on $name ($ip), attempt $attempt/120"
+            fi
+            sleep 10
+          done
+        }
+
+        capture_live_links() {
+          local name="$1"
+          local ip="$2"
+          mkdir -p inventory/talos-live
+          "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" get links -o yaml > "inventory/talos-live/${name}-links.yaml" 2>"inventory/talos-live/${name}-links.stderr" || true
+        }
+
+        apply_final_config() {
+          local name="$1"
+          local ip="$2"
+          log "applying final static machine config to $name ($ip)"
+          if ! "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" apply-config --file "machine-configs/${name}.yaml"; then
+            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --file "machine-configs/${name}.yaml"
+          fi
+        }
+
         log "starting Talos deployer-owned apply/bootstrap/health run; log=$LOG_FILE"
         "$ROOT/maintenance/tds-prepare-talos-media.sh"
         cd "$ROOT"
 
-        while IFS='|' read -r name role ip patch device_id media_file; do
+        while IFS='|' read -r name role ip patch boot_patch device_id media_file; do
           [ -n "$name" ] || continue
           embedded_media="${TDS_MEDIA_ROOT}/${media_file}"
           if [ -f "$embedded_media" ]; then
-            log "waiting for configured Talos API on $name ($ip) from embedded ISO config"
-            for attempt in $(seq 1 180); do
-              if "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" version >/dev/null 2>&1; then
-                log "configured Talos API is reachable on $name ($ip)"
-                break
-              fi
-              if [ "$attempt" -eq 180 ]; then
-                echo "Timed out waiting for configured Talos boot on $name ($ip)" >&2
-                diagnose_node "$name" "$ip"
-                exit 1
-              fi
-              if [ $((attempt % 6)) -eq 0 ]; then
-                log "still waiting for configured Talos API on $name ($ip), attempt $attempt/180"
-              fi
-              sleep 10
-            done
+            wait_for_configured_api "$name" "$ip" 180 "from bootstrap ISO config"
+            capture_live_links "$name" "$ip"
+            apply_final_config "$name" "$ip"
+            wait_for_configured_api "$name" "$ip" 90 "after final config apply"
           else
-            log "waiting for Talos live maintenance API on $name ($ip)"
-            for attempt in $(seq 1 120); do
-              if "$TALOSCTL" --nodes "$ip" --endpoints "$ip" version --insecure >/dev/null 2>&1; then
-                log "Talos live maintenance API is reachable on $name ($ip)"
-                break
-              fi
-              if [ "$attempt" -eq 120 ]; then
-                echo "Timed out waiting for Talos live boot on $name ($ip)" >&2
-                diagnose_node "$name" "$ip"
-                exit 1
-              fi
-              if [ $((attempt % 6)) -eq 0 ]; then
-                log "still waiting for Talos live maintenance API on $name ($ip), attempt $attempt/120"
-              fi
-              sleep 10
-            done
+            wait_for_live_api "$name" "$ip"
             log "applying static machine config to $name ($ip)"
             "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --file "machine-configs/${name}.yaml"
-            for attempt in $(seq 1 60); do
-              if "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" version >/dev/null 2>&1; then
-                log "configured Talos API is reachable on $name ($ip)"
-                break
-              fi
-              if [ "$attempt" -eq 60 ]; then
-                echo "Timed out waiting for configured Talos API on $name ($ip)" >&2
-                diagnose_node "$name" "$ip"
-                exit 1
-              fi
-              if [ $((attempt % 6)) -eq 0 ]; then
-                log "still waiting for configured Talos API on $name ($ip), attempt $attempt/60"
-              fi
-              sleep 10
-            done
+            wait_for_configured_api "$name" "$ip" 60 "after static config apply"
           fi
         done < generated/nodes.tsv
 
@@ -168,7 +189,7 @@ public struct MaintenanceBundleBuilder {
         let allNodes = controlPlanes + workers
         let installerImage = state.plan.talosArtifacts.installerImage
         let nodeLines = allNodes.map {
-            "\($0.name)|\($0.role.rawValue)|\($0.ip)|\($0.patchPath)|\($0.deviceID)|\($0.mediaFileName)"
+            "\($0.name)|\($0.role.rawValue)|\($0.ip)|\($0.patchPath)|\($0.bootPatchPath)|\($0.deviceID)|\($0.mediaFileName)"
         }.joined(separator: "\n")
 
         return """
@@ -182,7 +203,7 @@ public struct MaintenanceBundleBuilder {
         TDS_BASE_TALOS_ISO="${TDS_BASE_TALOS_ISO:-${TDS_MEDIA_ROOT}/talos-${TDS_TALOS_VERSION}.iso}"
         TDS_TALOS_BOOT_ARGS_EXTRA="${TDS_TALOS_BOOT_ARGS_EXTRA:-console=ttyS1,115200n8}"
 
-        mkdir -p "$ROOT/generated" "$ROOT/machine-configs" "$ROOT/logs" "$TDS_MEDIA_ROOT"
+        mkdir -p "$ROOT/generated" "$ROOT/machine-configs" "$ROOT/boot-machine-configs" "$ROOT/logs" "$TDS_MEDIA_ROOT"
         cd "$ROOT"
 
         if [ ! -f generated/secrets.yaml ]; then
@@ -198,7 +219,7 @@ public struct MaintenanceBundleBuilder {
         \(nodeLines)
         EOF_NODES
 
-        while IFS='|' read -r name role ip patch device_id media_file; do
+        while IFS='|' read -r name role ip patch boot_patch device_id media_file; do
           [ -n "$name" ] || continue
           base="generated/controlplane.yaml"
           if [ "$role" = "worker" ]; then
@@ -211,6 +232,13 @@ public struct MaintenanceBundleBuilder {
             --output "$patched"
           mv "$patched" "machine-configs/${name}.yaml"
           "$TALOSCTL" validate --mode metal --config "machine-configs/${name}.yaml" --strict
+          cp "$base" "boot-machine-configs/${name}.yaml"
+          boot_patched="$(mktemp)"
+          "$TALOSCTL" machineconfig patch "boot-machine-configs/${name}.yaml" \\
+            --patch "@${boot_patch}" \\
+            --output "$boot_patched"
+          mv "$boot_patched" "boot-machine-configs/${name}.yaml"
+          "$TALOSCTL" validate --mode metal --config "boot-machine-configs/${name}.yaml" --strict
           if [ -f "$TDS_BASE_TALOS_ISO" ]; then
             if ! command -v xorriso >/dev/null 2>&1; then
               echo "xorriso is required to build node-specific Talos ISO media" >&2
@@ -224,7 +252,7 @@ public struct MaintenanceBundleBuilder {
             if ! grep -q "talos.config=metal-iso" "$work/grub.cfg"; then
               sed -i "s/talos.platform=metal /talos.platform=metal talos.config=metal-iso ${TDS_TALOS_BOOT_ARGS_EXTRA} /g" "$work/grub.cfg"
             fi
-            cp "machine-configs/${name}.yaml" "$work/config.yaml"
+            cp "boot-machine-configs/${name}.yaml" "$work/config.yaml"
             xorriso -indev "$TDS_BASE_TALOS_ISO" -outdev "$out.tmp" \\
               -volid metal-iso \\
               -map "$work/grub.cfg" /boot/grub/grub.cfg \\
@@ -320,7 +348,7 @@ public struct MaintenanceBundleBuilder {
         ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
         ts="$(date -u +%Y%m%dT%H%M%SZ)"
         mkdir -p "$ROOT/archive/$ts"
-        cp -a "$ROOT/generated" "$ROOT/machine-configs" "$ROOT/archive/$ts/" 2>/dev/null || true
+        cp -a "$ROOT/generated" "$ROOT/machine-configs" "$ROOT/boot-machine-configs" "$ROOT/archive/$ts/" 2>/dev/null || true
         echo "Archived generated config material to $ROOT/archive/$ts"
         """
     }
@@ -352,6 +380,7 @@ public struct MaintenanceBundleBuilder {
                     role: node.assignment.role,
                     ip: config.managementAddressCIDR.split(separator: "/").first.map(String.init) ?? node.device.privateIP,
                     patchPath: "node-patches/\(node.device.name).yaml",
+                    bootPatchPath: "boot-node-patches/\(node.device.name).yaml",
                     deviceID: node.device.id,
                     mediaFileName: talosNodeMediaFileName(deviceID: node.device.id, talosVersion: state.spec.talosVersion)
                 )
@@ -363,6 +392,7 @@ public struct MaintenanceBundleBuilder {
         var role: DeviceRole
         var ip: String
         var patchPath: String
+        var bootPatchPath: String
         var deviceID: String
         var mediaFileName: String
     }

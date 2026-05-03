@@ -440,7 +440,9 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
         do {
             return try await runOOBCommand(name: name, command: command, request: request)
         } catch {
-            return OOBBootURLStep(name: name, stdout: "Best-effort OOB command failed: \(error.localizedDescription)")
+            let message = "Best-effort OOB command failed: \(error.localizedDescription)"
+            tdsProgress("OOB \(request.deviceID) \(name) warning: \(message)")
+            return OOBBootURLStep(name: name, stdout: message)
         }
     }
 }

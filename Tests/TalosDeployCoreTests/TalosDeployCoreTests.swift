@@ -270,6 +270,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "cluster.yaml").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "talos-factory-schematic.yaml").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "talos-artifacts.json").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "boot-node-patches").appending(path: "cp-1.yaml").path))
         let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
         XCTAssertTrue(patch.contains("image: factory.talos.dev/installer/abc123:v1.11.3"))
         XCTAssertFalse(patch.contains("hostname: cp-1"))
@@ -319,6 +320,8 @@ final class TalosDeployCoreTests: XCTestCase {
         let prepareScript = try String(contentsOf: stateDirectory.appending(path: "maintenance/tds-prepare-talos-media.sh"))
         XCTAssertTrue(prepareScript.contains("talos.config=metal-iso"))
         XCTAssertTrue(prepareScript.contains("talos-v1.13.0-cp1.iso"))
+        XCTAssertTrue(prepareScript.contains("boot-machine-configs/${name}.yaml"))
+        XCTAssertTrue(prepareScript.contains("boot-node-patches/cp-1.yaml"))
         XCTAssertTrue(prepareScript.contains("gen config 'cluster' 'https://cluster.example.com:6443'"))
         XCTAssertTrue(prepareScript.contains("validate --mode metal --config \"machine-configs/${name}.yaml\" --strict"))
         XCTAssertFalse(prepareScript.contains("if [ ! -f generated/talosconfig ]; then"))
@@ -399,6 +402,7 @@ final class TalosDeployCoreTests: XCTestCase {
         let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
         let output = try await DefaultTalosBuilder().buildArtifacts(for: spec, plan: plan, in: temp)
         let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+        let bootPatch = try String(contentsOf: output.appending(path: "boot-node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
 
         XCTAssertTrue(patch.contains("      - interface: eno3\n        vlans:\n          - vlanId: 901"))
         XCTAssertTrue(patch.contains("      - interface: eno50\n        vlans:\n          - vlanId: 1326"))
@@ -408,6 +412,11 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("          - eno49"))
         XCTAssertTrue(patch.contains("network: 192.168.100.0/24"))
         XCTAssertTrue(patch.contains("gateway: 198.51.101.36"))
+        XCTAssertTrue(bootPatch.contains("addresses:\n          - 198.51.100.10/22"))
+        XCTAssertTrue(bootPatch.contains("network: 0.0.0.0/0"))
+        XCTAssertFalse(bootPatch.contains("      - interface: eno3\n        vlans:"))
+        XCTAssertFalse(bootPatch.contains("      - interface: br-ipmi"))
+        XCTAssertFalse(bootPatch.contains("          - eno49"))
     }
 
     func testTalosBuilderRendersManagementDeviceSelectorWhenMACIsKnown() async throws {
