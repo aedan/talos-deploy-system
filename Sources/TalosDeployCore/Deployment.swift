@@ -742,6 +742,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         let staticConfig = StaticNetworkPlanner().config(for: node)
         let interfaceName = firstNonEmptyStatic(staticConfig.managementInterface, node.device.networkInterfaces.first?.name ?? "eth0")
         let managementHardwareAddress = staticConfig.managementHardwareAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let managementBridge = includeAdditionalNetworking ? finalManagementBridge(for: staticConfig, spec: spec, fallbackInterfaceName: interfaceName) : nil
         let installerImage = deployerRegistryInstallerImage(for: spec)
             ?? TalosFactoryClient().artifactURLs(settings: spec.talosFactory, talosVersion: spec.talosVersion).installerImage
         var lines = [
@@ -754,7 +755,9 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         lines.append("  network:")
         lines.append(contentsOf: renderNameservers(staticConfig))
         lines.append("    interfaces:")
-        if !managementHardwareAddress.isEmpty {
+        if let managementBridge {
+            lines.append("      - interface: \(managementBridge.name)")
+        } else if !managementHardwareAddress.isEmpty {
             lines.append("      - deviceSelector:")
             lines.append("          hardwareAddr: \(yamlScalar(managementHardwareAddress))")
         } else {
@@ -765,9 +768,15 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             lines.append("          - \(staticConfig.managementAddressCIDR)")
         }
         lines.append(contentsOf: renderRoutes(staticConfig.routes))
+        if let managementBridge {
+            lines.append(contentsOf: renderBridgeBody(managementBridge))
+        }
         if includeAdditionalNetworking {
             lines.append(contentsOf: renderVLANParentInterfaces(staticConfig.vlans, excluding: [interfaceName]))
-            lines.append(contentsOf: renderBridgeInterfaces(staticConfig.bridges))
+            lines.append(contentsOf: renderBridgeInterfaces(
+                staticConfig.bridges,
+                excluding: managementBridge.map { [$0.name] } ?? []
+            ))
         }
         if includeInstall {
             lines.append("  install:")
@@ -912,27 +921,63 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
     }
 
     private func renderBridgeInterfaces(_ bridges: [NetworkInterface]) -> [String] {
+        renderBridgeInterfaces(bridges, excluding: [])
+    }
+
+    private func renderBridgeInterfaces(_ bridges: [NetworkInterface], excluding excludedNames: [String]) -> [String] {
         guard !bridges.isEmpty else { return [] }
+        let excludedNames = Set(excludedNames)
         var lines: [String] = []
-        for bridge in bridges.sorted(by: { $0.name < $1.name }) where !bridge.name.isEmpty {
+        for bridge in bridges.sorted(by: { $0.name < $1.name }) where !bridge.name.isEmpty && !excludedNames.contains(bridge.name) {
             lines.append("      - interface: \(bridge.name)")
             if !bridge.addresses.isEmpty {
                 lines.append("        addresses:")
                 lines.append(contentsOf: bridge.addresses.map { "          - \($0)" })
             }
-            if let mtu = bridge.mtu {
-                lines.append("        mtu: \(mtu)")
-            }
-            lines.append(contentsOf: renderNestedRoutes(bridge.routes, indent: "        "))
-            if !bridge.bridgePorts.isEmpty {
-                lines.append("        bridge:")
-                lines.append("          interfaces:")
-                lines.append(contentsOf: bridge.bridgePorts.map { "            - \($0)" })
-                lines.append("          stp:")
-                lines.append("            enabled: false")
-            }
+            lines.append(contentsOf: renderBridgeBody(bridge))
         }
         return lines
+    }
+
+    private func renderBridgeBody(_ bridge: NetworkInterface) -> [String] {
+        var lines: [String] = []
+        if let mtu = bridge.mtu {
+            lines.append("        mtu: \(mtu)")
+        }
+        lines.append(contentsOf: renderNestedRoutes(bridge.routes, indent: "        "))
+        if !bridge.bridgePorts.isEmpty {
+            lines.append("        bridge:")
+            lines.append("          interfaces:")
+            lines.append(contentsOf: bridge.bridgePorts.map { "            - \($0)" })
+            lines.append("          stp:")
+            lines.append("            enabled: false")
+        }
+        return lines
+    }
+
+    private func finalManagementBridge(
+        for config: StaticNetworkConfig,
+        spec: DeploymentSpec,
+        fallbackInterfaceName: String
+    ) -> NetworkInterface? {
+        let nodeRouteInterface = spec.talosProvisioning.deployerNodeRouteInterface
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let managementInterface = config.managementInterface
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidates = config.bridges.filter { bridge in
+            guard !bridge.name.isEmpty, bridge.addresses.isEmpty else { return false }
+            if bridge.name == managementInterface || bridge.name == fallbackInterfaceName {
+                return true
+            }
+            if !nodeRouteInterface.isEmpty && bridge.name == nodeRouteInterface {
+                return true
+            }
+            if bridge.bridgePorts.contains(managementInterface) || bridge.bridgePorts.contains(fallbackInterfaceName) {
+                return true
+            }
+            return false
+        }
+        return candidates.first
     }
 
     private func parentInterfaceName(for vlanName: String) -> String {

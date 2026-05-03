@@ -471,6 +471,70 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("addresses:\n          - 198.51.100.10/22"))
     }
 
+    func testTalosBuilderMovesFinalManagementAddressOntoSelectedBridge() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
+        let cp = talosDevice(id: "cp1", name: "cp-1", primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
+        let worker = talosDevice(id: "worker1", name: "worker-1", primaryIP: "192.0.2.20", privateIP: "198.51.100.20")
+        let cpAssignment = DeviceAssignment(
+            deviceID: "cp1",
+            role: .controlplane,
+            shouldInstallOS: true,
+            staticNetwork: StaticNetworkConfig(
+                managementInterface: "eno1",
+                managementAddressCIDR: "198.51.100.10/22",
+                gateway: "198.51.100.1",
+                nameservers: ["203.0.113.53"],
+                routes: [StaticNetworkRoute(to: "default", via: "198.51.100.1")]
+            )
+        )
+        let workerAssignment = DeviceAssignment(
+            deviceID: "worker1",
+            role: .worker,
+            shouldInstallOS: true,
+            networkSource: .manual,
+            staticNetwork: StaticNetworkConfig(
+                managementInterface: "eno1",
+                managementHardwareAddress: "3c:a8:2a:23:eb:b8",
+                managementAddressCIDR: "198.51.100.20/22",
+                gateway: "198.51.100.1",
+                nameservers: ["203.0.113.53"],
+                routes: [StaticNetworkRoute(to: "default", via: "198.51.100.1")],
+                bridges: [
+                    NetworkInterface(name: "br-ctlplane", bridgePorts: ["eno49"]),
+                    NetworkInterface(name: "br-ipmi", bridgePorts: ["eno3.901"]),
+                ]
+            )
+        )
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            talosProvisioning: TalosProvisioningDefaults(deployerNodeRouteInterface: "br-ctlplane"),
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer)),
+                DeploymentNodeSpec(device: cp, assignment: cpAssignment),
+                DeploymentNodeSpec(device: worker, assignment: workerAssignment),
+            ]
+        )
+
+        let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
+        let output = try await DefaultTalosBuilder().buildArtifacts(for: spec, plan: plan, in: temp)
+        let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "worker-1.yaml"), encoding: .utf8)
+        let bootPatch = try String(contentsOf: output.appending(path: "boot-node-patches").appending(path: "worker-1.yaml"), encoding: .utf8)
+
+        XCTAssertTrue(patch.contains("      - interface: br-ctlplane\n        addresses:\n          - 198.51.100.20/22"))
+        XCTAssertTrue(patch.contains("        routes:\n          - network: 0.0.0.0/0\n            gateway: 198.51.100.1"))
+        XCTAssertTrue(patch.contains("        bridge:\n          interfaces:\n            - eno49"))
+        XCTAssertEqual(patch.components(separatedBy: "      - interface: br-ctlplane").count - 1, 1)
+        XCTAssertFalse(patch.contains("      - deviceSelector:\n          hardwareAddr: 3c:a8:2a:23:eb:b8"))
+        XCTAssertTrue(bootPatch.contains("      - deviceSelector:\n          hardwareAddr: 3c:a8:2a:23:eb:b8"))
+        XCTAssertFalse(bootPatch.contains("      - interface: br-ctlplane"))
+    }
+
     func testTalosBuilderUsesDeployerRegistryForInstallerImageWhenAvailable() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let deployer = DiscoveredDevice(
