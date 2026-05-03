@@ -318,6 +318,8 @@ final class TalosDeployCoreTests: XCTestCase {
         let prepareScript = try String(contentsOf: stateDirectory.appending(path: "maintenance/tds-prepare-talos-media.sh"))
         XCTAssertTrue(prepareScript.contains("talos.config=metal-iso"))
         XCTAssertTrue(prepareScript.contains("talos-v1.13.0-cp1.iso"))
+        XCTAssertTrue(prepareScript.contains("gen config 'cluster' 'https://cluster.example.com:6443'"))
+        XCTAssertFalse(prepareScript.contains("if [ ! -f generated/talosconfig ]; then"))
     }
 
     func testDryRunReportsAccessProvisioningAndBootstrapPlan() async throws {

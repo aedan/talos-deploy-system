@@ -149,13 +149,11 @@ public struct MaintenanceBundleBuilder {
         if [ ! -f generated/secrets.yaml ]; then
           "$TALOSCTL" gen secrets --output-file generated/secrets.yaml
         fi
-        if [ ! -f generated/talosconfig ]; then
-          "$TALOSCTL" gen config \(shellEscape(state.spec.clusterName)) \(shellEscape(state.spec.clusterEndpoint)) \\
-            --with-secrets generated/secrets.yaml \\
-            --install-image \(shellEscape(installerImage)) \\
-            --output-dir generated \\
-            --force
-        fi
+        "$TALOSCTL" gen config \(shellEscape(state.spec.clusterName)) \(shellEscape(state.spec.clusterEndpoint)) \\
+          --with-secrets generated/secrets.yaml \\
+          --install-image \(shellEscape(installerImage)) \\
+          --output-dir generated \\
+          --force
 
         cat > generated/nodes.tsv <<'EOF_NODES'
         \(nodeLines)
