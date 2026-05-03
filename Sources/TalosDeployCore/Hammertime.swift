@@ -318,16 +318,22 @@ public protocol OOBNodeBooting: Sendable {
 public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
     private let settings: HammertimeSettings
     private let runner: CommandRunning
-    private let powerCycleDelayNanoseconds: UInt64
+    private let clpResetDelayNanoseconds: UInt64
+    private let clpPowerOffDelayNanoseconds: UInt64
+    private let clpPowerOnDelayNanoseconds: UInt64
 
     public init(
         settings: HammertimeSettings = HammertimeSettings(),
         runner: CommandRunning = LocalCommandRunner(),
-        powerCycleDelayNanoseconds: UInt64 = 5_000_000_000
+        clpResetDelayNanoseconds: UInt64 = 8_000_000_000,
+        clpPowerOffDelayNanoseconds: UInt64 = 20_000_000_000,
+        clpPowerOnDelayNanoseconds: UInt64 = 15_000_000_000
     ) {
         self.settings = settings
         self.runner = runner
-        self.powerCycleDelayNanoseconds = powerCycleDelayNanoseconds
+        self.clpResetDelayNanoseconds = clpResetDelayNanoseconds
+        self.clpPowerOffDelayNanoseconds = clpPowerOffDelayNanoseconds
+        self.clpPowerOnDelayNanoseconds = clpPowerOnDelayNanoseconds
     }
 
     public func bootURL(_ request: OOBBootURLRequest) async throws -> OOBBootURLResult {
@@ -408,14 +414,21 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
 
     private func rebootSteps(for request: OOBBootURLRequest) async throws -> [OOBBootURLStep] {
         var steps: [OOBBootURLStep] = []
-        steps.append(try await runOOBCommand(name: "power-reset", command: "power reset", request: request))
         steps.append(await runBestEffortOOBCommand(name: "clp-system-reset", command: "reset /system1", request: request))
+        await sleepIfNeeded(clpResetDelayNanoseconds)
         steps.append(await runBestEffortOOBCommand(name: "clp-power-off", command: "stop /system1", request: request))
-        if powerCycleDelayNanoseconds > 0 {
-            try? await Task.sleep(nanoseconds: powerCycleDelayNanoseconds)
-        }
+        await sleepIfNeeded(clpPowerOffDelayNanoseconds)
         steps.append(await runBestEffortOOBCommand(name: "clp-power-on", command: "start /system1", request: request))
+        await sleepIfNeeded(clpPowerOnDelayNanoseconds)
+        if steps.allSatisfy({ $0.stdout.contains("Best-effort OOB command failed") }) {
+            steps.append(try await runOOBCommand(name: "power-reset", command: "power reset", request: request))
+        }
         return steps
+    }
+
+    private func sleepIfNeeded(_ nanoseconds: UInt64) async {
+        guard nanoseconds > 0 else { return }
+        try? await Task.sleep(nanoseconds: nanoseconds)
     }
 
     private func runBestEffortOOBCommand(name: String, command: String, request: OOBBootURLRequest) async -> OOBBootURLStep {

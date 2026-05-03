@@ -540,7 +540,6 @@ final class TalosDeployCoreTests: XCTestCase {
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "connected", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "boot once", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
-                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "power reset", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "clp reset", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "clp stop", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "clp start", stderr: "", exitCode: 0),
@@ -550,7 +549,9 @@ final class TalosDeployCoreTests: XCTestCase {
         let booter = HammertimeOOBBooter(
             settings: HammertimeSettings(binaryPath: "/tmp/ht", timeoutSeconds: 30),
             runner: runner,
-            powerCycleDelayNanoseconds: 0
+            clpResetDelayNanoseconds: 0,
+            clpPowerOffDelayNanoseconds: 0,
+            clpPowerOnDelayNanoseconds: 0
         )
 
         let result = try await booter.bootURL(
@@ -573,14 +574,13 @@ final class TalosDeployCoreTests: XCTestCase {
                 "vm cdrom set connect",
                 "vm cdrom set boot_once",
                 "vm cdrom get",
-                "power reset",
                 "reset /system1",
                 "stop /system1",
                 "start /system1",
                 "vm cdrom get",
             ]
         )
-        XCTAssertEqual(result.steps.map(\.name).suffix(5), ["power-reset", "clp-system-reset", "clp-power-off", "clp-power-on", "post-reset-media-status"])
+        XCTAssertEqual(result.steps.map(\.name).suffix(4), ["clp-system-reset", "clp-power-off", "clp-power-on", "post-reset-media-status"])
         XCTAssertTrue(result.connected)
         XCTAssertFalse(result.bootOnce)
     }
@@ -592,17 +592,19 @@ final class TalosDeployCoreTests: XCTestCase {
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "connected", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "boot once", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "power reset", stderr: "", exitCode: 0),
-                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
-                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
-                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
             ]
         )
         let booter = HammertimeOOBBooter(
             settings: HammertimeSettings(binaryPath: "/tmp/ht", timeoutSeconds: 30),
             runner: runner,
-            powerCycleDelayNanoseconds: 0
+            clpResetDelayNanoseconds: 0,
+            clpPowerOffDelayNanoseconds: 0,
+            clpPowerOnDelayNanoseconds: 0
         )
 
         let result = try await booter.bootURL(
