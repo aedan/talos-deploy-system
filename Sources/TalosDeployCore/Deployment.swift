@@ -109,7 +109,7 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
     }
 
     public func planDeployerServices(configuration: DeployerMediaServiceConfiguration) -> DeployerServicePlan {
-        let packages = ["ca-certificates", "curl", "dnsmasq", "python3", "openssh-client", "xorriso"]
+        let packages = ["ca-certificates", "curl", "dnsmasq", "python3", "openssh-client", "xorriso", "docker-registry", "skopeo"]
         let talosctlVersion = configuration.talosctlVersion.isEmpty ? "configured Talos version" : configuration.talosctlVersion
         return DeployerServicePlan(
             packages: packages,
@@ -148,10 +148,11 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
         let mediaRoot = configuration.mediaRoot
         let logRoot = "\(configuration.stateRoot)/logs"
         let cacheRoot = configuration.packageCacheRoot
+        let registryRoot = "\(configuration.stateRoot)/registry"
         let talosctlVersion = configuration.talosctlVersion.trimmingCharacters(in: .whitespacesAndNewlines)
         let remoteCommand = """
         set -e
-        sudo mkdir -p \(shellEscape(binRoot)) \(shellEscape(dnsmasqRoot)) \(shellEscape(mediaRoot)) \(shellEscape(logRoot)) \(shellEscape(cacheRoot))/apt \(shellEscape(cacheRoot))/talosctl
+        sudo mkdir -p \(shellEscape(binRoot)) \(shellEscape(dnsmasqRoot)) \(shellEscape(mediaRoot)) \(shellEscape(logRoot)) \(shellEscape(registryRoot)) \(shellEscape(cacheRoot))/apt \(shellEscape(cacheRoot))/talosctl
         sudo mkdir -p \(shellEscape("\(configuration.stateRoot)/maintenance")) \(shellEscape("\(configuration.stateRoot)/machine-configs")) \(shellEscape("\(configuration.stateRoot)/generated")) \(shellEscape("\(configuration.stateRoot)/run"))
         sudo chown -R "$(id -un):$(id -gn)" \(shellEscape(configuration.stateRoot)) \(shellEscape(cacheRoot)) || true
         if command -v apt-get >/dev/null 2>&1; then
@@ -208,6 +209,27 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
         EOF
         sudo mv /tmp/tds-media-http.service /etc/systemd/system/tds-media-http.service || true
         sudo mv /tmp/tds-dnsmasq.service /etc/systemd/system/tds-dnsmasq.service || true
+        if command -v docker-registry >/dev/null 2>&1 || command -v registry >/dev/null 2>&1; then
+          sudo mkdir -p /etc/docker/registry \(shellEscape(registryRoot))
+          cat > /tmp/tds-docker-registry.yml <<'EOF'
+        version: 0.1
+        log:
+          fields:
+            service: tds-registry
+        storage:
+          cache:
+            blobdescriptor: inmemory
+          filesystem:
+            rootdirectory: \(registryRoot)
+        http:
+          addr: :\(configuration.registryPort)
+          headers:
+            X-Content-Type-Options: [nosniff]
+        EOF
+          sudo mv /tmp/tds-docker-registry.yml /etc/docker/registry/config.yml || true
+          sudo chown -R docker-registry:docker-registry \(shellEscape(registryRoot)) 2>/dev/null || true
+          sudo systemctl enable --now docker-registry || sudo systemctl restart docker-registry || true
+        fi
         sudo systemctl daemon-reload || true
         """
         _ = try await transport.run(remoteCommand, timeout: 900)
@@ -689,13 +711,15 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         let staticConfig = StaticNetworkPlanner().config(for: node)
         let interfaceName = firstNonEmptyStatic(staticConfig.managementInterface, node.device.networkInterfaces.first?.name ?? "eth0")
         let managementHardwareAddress = staticConfig.managementHardwareAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-        let installerImage = TalosFactoryClient().artifactURLs(settings: spec.talosFactory, talosVersion: spec.talosVersion).installerImage
+        let installerImage = deployerRegistryInstallerImage(for: spec)
+            ?? TalosFactoryClient().artifactURLs(settings: spec.talosFactory, talosVersion: spec.talosVersion).installerImage
         var lines = [
             "machine:",
             "  type: \(node.assignment.role == .worker ? "worker" : "controlplane")",
         ]
         lines.append(contentsOf: renderKernelModules(spec.talosKernelModules))
         lines.append(contentsOf: renderLonghornExtraMounts(enabled: spec.enableLonghornExtraMounts))
+        lines.append(contentsOf: renderRegistryMirror(spec: spec))
         lines.append("  network:")
         lines.append(contentsOf: renderNameservers(staticConfig))
         lines.append("    interfaces:")
@@ -717,6 +741,22 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         lines.append("    image: \(installerImage)")
         lines.append(contentsOf: renderExtraKernelArgs(spec.talosFactory.extraKernelArgs))
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    private func renderRegistryMirror(spec: DeploymentSpec) -> [String] {
+        guard let endpoint = deployerRegistryEndpoint(for: spec),
+              let host = deployerRegistryHost(for: spec)
+        else {
+            return []
+        }
+        return [
+            "  registries:",
+            "    mirrors:",
+            "      \(yamlQuotedString(host)):",
+            "        endpoints:",
+            "          - \(yamlScalar(endpoint))",
+            "        skipFallback: true",
+        ]
     }
 
     private func renderKernelModules(_ modules: [TalosKernelModule]) -> [String] {
@@ -878,8 +918,32 @@ private func yamlScalar(_ value: String) -> String {
     return "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
 }
 
+private func yamlQuotedString(_ value: String) -> String {
+    "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+}
+
 private func firstNonEmptyStatic(_ values: String...) -> String {
     values.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
+}
+
+func deployerRegistryHost(for spec: DeploymentSpec) -> String? {
+    guard spec.talosProvisioning.allowDeployerRegistry else { return nil }
+    let host = firstNonEmptyStatic(
+        spec.talosProvisioning.deployerRegistryHost,
+        spec.deployerNode?.device.privateIP ?? "",
+        spec.deployerNode?.device.primaryIP ?? ""
+    )
+    return host.isEmpty ? nil : "\(host):\(spec.talosProvisioning.deployerRegistryPort)"
+}
+
+func deployerRegistryEndpoint(for spec: DeploymentSpec) -> String? {
+    guard let host = deployerRegistryHost(for: spec) else { return nil }
+    return "http://\(host)"
+}
+
+func deployerRegistryInstallerImage(for spec: DeploymentSpec) -> String? {
+    guard let host = deployerRegistryHost(for: spec) else { return nil }
+    return "\(host)/installer/\(spec.talosFactory.schematicID):\(spec.talosVersion)"
 }
 
 public protocol Provisioner: Sendable {
@@ -1265,6 +1329,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         if serviceConfiguration.talosctlVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             serviceConfiguration.talosctlVersion = state.spec.talosVersion
         }
+        serviceConfiguration.registryPort = state.spec.talosProvisioning.deployerRegistryPort
         var updated = state
         var servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
         let renameResult: CoreRenameResult?
@@ -1803,6 +1868,8 @@ public final class AppController: ObservableObject {
     }
 
     public func stageDeployment() async {
+        var talosProvisioning = settings.talos.provisioning
+        talosProvisioning.deployerRegistryPort = settings.deployer.registryPort
         let spec = DeploymentSpec(
             accountNumber: accountNumber,
             clusterName: settings.talos.clusterName,
@@ -1811,7 +1878,7 @@ public final class AppController: ObservableObject {
             kubernetesVersion: settings.talos.kubernetesVersion,
             deployerStateRoot: settings.deployer.stateRoot,
             talosFactory: settings.talos.factory,
-            talosProvisioning: settings.talos.provisioning,
+            talosProvisioning: talosProvisioning,
             talosKernelModules: settings.talos.kernelModules,
             enableLonghornExtraMounts: settings.talos.enableLonghornExtraMounts,
             nodes: clusterEligibleDevices.compactMap { device in

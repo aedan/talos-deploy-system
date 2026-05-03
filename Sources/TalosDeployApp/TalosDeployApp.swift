@@ -941,6 +941,10 @@ private struct SettingsRootView: View {
                     .fieldHelp("Lets tds configure deployer-managed dnsmasq/PXE for nodes that should boot over the data network.")
                 Toggle("Use OOB NIC MAC selectors", isOn: $controller.settings.talos.provisioning.useOOBHardwareAddressSelectors)
                     .fieldHelp("When Hammertime/iLO can read physical NIC MACs, tds renders Talos management networking with deviceSelector.hardwareAddr for safer interface matching.")
+                Toggle("Use deployer installer registry", isOn: $controller.settings.talos.provisioning.allowDeployerRegistry)
+                    .fieldHelp("Caches the Talos installer image in a registry on the Ubuntu deployer so Talos nodes do not need Internet access during install.")
+                TextField("Deployer registry host override", text: $controller.settings.talos.provisioning.deployerRegistryHost)
+                    .fieldHelp("Optional host/IP Talos nodes should use for the deployer registry; leave blank to use the deployer private IP from Core.")
                 Toggle("Allow external OOB URL", isOn: $controller.settings.talos.provisioning.allowExternalOOBURL)
                     .fieldHelp("Allows OOB controllers to boot media from an operator-configured external URL when that network path exists.")
                 TextField("External OOB media base URL", text: $controller.settings.talos.provisioning.externalOOBMediaBaseURL)
@@ -1006,6 +1010,8 @@ private struct SettingsRootView: View {
                     .fieldHelp("Keeps a workstation copy for UI resume/debug while treating the deployer copy as the maintenance source of truth.")
                 Stepper("HTTP Port: \(controller.settings.deployer.httpPort)", value: $controller.settings.deployer.httpPort, in: 1...65535)
                     .fieldHelp("TCP port used by the deployer-hosted media HTTP service.")
+                Stepper("Registry Port: \(controller.settings.deployer.registryPort)", value: $controller.settings.deployer.registryPort, in: 1...65535)
+                    .fieldHelp("TCP port used by the deployer-hosted OCI registry for Talos installer images.")
             }
             Section("Safety") {
                 Toggle("Require typed confirmation for deployer reinstall", isOn: $controller.settings.safety.requireTypedConfirmationForDeployerReinstall)

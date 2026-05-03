@@ -10,10 +10,12 @@ The deployer is a selected physical server that receives Ubuntu first and then m
 - Xcode or Xcode Command Line Tools for source builds.
 - Git for source checkout and updates.
 - Network access from the operator workstation to Core, Hammertime-backed Core auth, OOB/iLO/iDRAC access paths, and any configured proxy.
+- Deployer network access to Talos nodes on the final management network. If Talos nodes cannot reach the Internet, the deployer must be able to run the managed local installer registry.
 - `ht` when using Hammertime/Core bridge inventory or live facts.
 - `xorriso` for Ubuntu autoinstall ISO rebuild and validation.
 - Stock Ubuntu 24.04 server ISO for deployer bootstrap installs.
 - SSH access to the Ubuntu deployer after install for service preparation and Talos execution.
+- Ubuntu package access or a prepared package cache for deployer-managed packages such as `dnsmasq`, `xorriso`, `docker-registry`, and `skopeo`.
 - `TDS_RACK_PASSWORD_HASH` and `TDS_ROOT_PASSWORD_HASH`, or equivalent secure UI input, when building Ubuntu deployer media.
 - Optional access-profile credentials for HTTP/SOCKS proxies or bastions that reach OOB networks.
 
@@ -91,6 +93,7 @@ Talos Defaults:
 - Longhorn `machine.extraMounts` for `/var/lib/longhorn` are rendered by default.
 - Kernel modules, extra kernel args, architecture, platform, and schematic ID are configurable.
 - OOB NIC MAC selectors are enabled by default. If Hammertime/iLO can expose HPE integrated NIC MACs, `tds` maps names such as `eno1` to the matching physical port and writes `deviceSelector.hardwareAddr` into Talos node patches.
+- The deployer installer registry is enabled by default. `tds` installs `docker-registry` and `skopeo`, mirrors the selected Talos installer image into the deployer, and renders Talos configs to install from that in-environment registry when nodes do not have Internet access.
 
 Provisioning Priority:
 
@@ -108,6 +111,7 @@ Bootstrap Media:
 Deployer Defaults:
 
 - Access method, SSH user, optional SSH ProxyJump host, state root, hostname suffix, PXE address, HTTP bind/port, package cache, local mirror behavior, and pinned `talosctl` version are managed by `tds`.
+- Registry port controls the deployer-hosted OCI registry used for Talos installer images. The default is `5000`.
 - Generated deployer hostnames use `<deviceNumber>-deployer` plus an optional suffix, for example `100001-deployer-lab2`.
 
 Deployer Ownership:
@@ -239,7 +243,7 @@ Procedure:
 7. If live facts are unavailable on some nodes, use the proven Lab2 director topology as the network template and override each node’s static management IP from Core.
 8. Validate static management CIDR, management NIC MAC or interface selector, gateway, DNS, VLANs, bridges, bridge ports, routes, and install disk for every Talos node before destructive actions.
 9. Build and validate the Ubuntu deployer ISO, attach it through `tds.app` local media, and verify the deployer returns with Ubuntu, SSH, `rack`, `root`, and preserved networking.
-10. Prepare deployer services, stage Talos artifacts, provision nodes, apply machine configs, bootstrap etcd, fetch kubeconfig, and verify Talos/Kubernetes health.
+10. Prepare deployer services, cache the Talos installer image in the deployer registry, stage Talos artifacts, provision nodes, apply machine configs, bootstrap etcd, fetch kubeconfig, and verify Talos/Kubernetes health.
 
 Evidence to keep in ignored local storage:
 
@@ -247,6 +251,7 @@ Evidence to keep in ignored local storage:
 - Network topology summary and per-node static IP decisions.
 - ISO validation output.
 - Deployer service preparation logs.
+- Deployer registry cache logs and installer image tag used by generated machine configs.
 - Talos apply/bootstrap logs.
 - Kubeconfig fetch result and final health output.
 

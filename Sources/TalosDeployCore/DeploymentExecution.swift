@@ -346,6 +346,12 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         var executedActions: [String] = []
         var warnings: [String] = []
         let talosISOPath = "\(configuration.mediaRoot)/talos-\(state.spec.talosVersion).iso"
+        let registryInstallerImage = deployerRegistryInstallerImage(for: state.spec)
+        let registryCacheCommand = renderRegistryCacheCommand(
+            state: state,
+            configuration: configuration,
+            registryInstallerImage: registryInstallerImage
+        )
         let startMediaCommand = """
         set -e
         mkdir -p \(shellEscape(configuration.mediaRoot)) \(shellEscape("\(configuration.stateRoot)/logs"))
@@ -359,6 +365,10 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         """
         _ = try await transport.run(startMediaCommand, timeout: 900)
         executedActions.append("Prepared deployer-hosted Talos media at \(talosISOPath).")
+        if !registryCacheCommand.isEmpty {
+            _ = try await transport.run(registryCacheCommand, timeout: 1800)
+            executedActions.append("Cached Talos installer image in deployer registry at \(registryInstallerImage ?? "configured registry").")
+        }
         if mediaBaseURL.isEmpty {
             warnings.append("No deployer media address is configured; OOB boot URL actions must use PXE, direct virtual media, or operator local media.")
         }
@@ -417,6 +427,43 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         case .stagedOnly:
             return "Stage \(install.device.name) without booting."
         }
+    }
+
+    private func renderRegistryCacheCommand(
+        state: DeploymentState,
+        configuration: DeployerMediaServiceConfiguration,
+        registryInstallerImage: String?
+    ) -> String {
+        guard let registryInstallerImage,
+              let registryHost = deployerRegistryHost(for: state.spec)
+        else {
+            return ""
+        }
+        let localRegistry = "127.0.0.1:\(configuration.registryPort)"
+        let targetPath = registryInstallerImage.split(separator: "/", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
+        guard !targetPath.isEmpty else { return "" }
+        let localTarget = "\(localRegistry)/\(targetPath)"
+        return """
+        set -e
+        if ! command -v skopeo >/dev/null 2>&1; then
+          echo "skopeo is required to cache Talos installer image in the deployer registry" >&2
+          exit 1
+        fi
+        if command -v systemctl >/dev/null 2>&1; then
+          sudo systemctl restart docker-registry || sudo systemctl start docker-registry || true
+        fi
+        for attempt in $(seq 1 30); do
+          if curl -fsS \(shellEscape("http://\(localRegistry)/v2/")) >/dev/null 2>&1; then
+            break
+          fi
+          if [ "$attempt" -eq 30 ]; then
+            echo "Timed out waiting for deployer registry \(registryHost)" >&2
+            exit 1
+          fi
+          sleep 2
+        done
+        skopeo copy --retry-times 3 --dest-tls-verify=false \(shellEscape("docker://\(state.plan.talosArtifacts.installerImage)")) \(shellEscape("docker://\(localTarget)"))
+        """
     }
 
     private func provisionTalosNode(_ install: PlannedDeviceInstall, mediaBaseURL: String, state: DeploymentState) async throws -> TalosProvisioningExecution {

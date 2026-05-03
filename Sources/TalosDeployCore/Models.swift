@@ -684,6 +684,9 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
     public var allowExternalOOBURL: Bool
     public var externalOOBMediaBaseURL: String
     public var useOOBHardwareAddressSelectors: Bool
+    public var allowDeployerRegistry: Bool
+    public var deployerRegistryHost: String
+    public var deployerRegistryPort: Int
 
     public init(
         preferredStrategies: [TalosProvisioningStrategy] = [
@@ -697,7 +700,10 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
         allowDeployerPXE: Bool = true,
         allowExternalOOBURL: Bool = false,
         externalOOBMediaBaseURL: String = "",
-        useOOBHardwareAddressSelectors: Bool = true
+        useOOBHardwareAddressSelectors: Bool = true,
+        allowDeployerRegistry: Bool = true,
+        deployerRegistryHost: String = "",
+        deployerRegistryPort: Int = 5000
     ) {
         self.preferredStrategies = preferredStrategies
         self.allowDeployerHostedMedia = allowDeployerHostedMedia
@@ -705,6 +711,9 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
         self.allowExternalOOBURL = allowExternalOOBURL
         self.externalOOBMediaBaseURL = externalOOBMediaBaseURL
         self.useOOBHardwareAddressSelectors = useOOBHardwareAddressSelectors
+        self.allowDeployerRegistry = allowDeployerRegistry
+        self.deployerRegistryHost = deployerRegistryHost
+        self.deployerRegistryPort = deployerRegistryPort
     }
 }
 
@@ -716,6 +725,9 @@ extension TalosProvisioningDefaults {
         case allowExternalOOBURL
         case externalOOBMediaBaseURL
         case useOOBHardwareAddressSelectors
+        case allowDeployerRegistry
+        case deployerRegistryHost
+        case deployerRegistryPort
     }
 
     public init(from decoder: Decoder) throws {
@@ -727,7 +739,10 @@ extension TalosProvisioningDefaults {
             allowDeployerPXE: try container.decodeIfPresent(Bool.self, forKey: .allowDeployerPXE) ?? defaults.allowDeployerPXE,
             allowExternalOOBURL: try container.decodeIfPresent(Bool.self, forKey: .allowExternalOOBURL) ?? defaults.allowExternalOOBURL,
             externalOOBMediaBaseURL: try container.decodeIfPresent(String.self, forKey: .externalOOBMediaBaseURL) ?? defaults.externalOOBMediaBaseURL,
-            useOOBHardwareAddressSelectors: try container.decodeIfPresent(Bool.self, forKey: .useOOBHardwareAddressSelectors) ?? defaults.useOOBHardwareAddressSelectors
+            useOOBHardwareAddressSelectors: try container.decodeIfPresent(Bool.self, forKey: .useOOBHardwareAddressSelectors) ?? defaults.useOOBHardwareAddressSelectors,
+            allowDeployerRegistry: try container.decodeIfPresent(Bool.self, forKey: .allowDeployerRegistry) ?? defaults.allowDeployerRegistry,
+            deployerRegistryHost: try container.decodeIfPresent(String.self, forKey: .deployerRegistryHost) ?? defaults.deployerRegistryHost,
+            deployerRegistryPort: try container.decodeIfPresent(Int.self, forKey: .deployerRegistryPort) ?? defaults.deployerRegistryPort
         )
     }
 }
@@ -871,6 +886,7 @@ public struct DeployerDefaults: Codable, Equatable, Sendable {
     public var hostnameSuffix: String
     public var packageCacheRoot: String
     public var talosctlVersion: String
+    public var registryPort: Int
     public var keepLocalMirror: Bool
 
     public init(
@@ -886,6 +902,7 @@ public struct DeployerDefaults: Codable, Equatable, Sendable {
         hostnameSuffix: String = "",
         packageCacheRoot: String = "/var/cache/tds",
         talosctlVersion: String = "",
+        registryPort: Int = 5000,
         keepLocalMirror: Bool = true
     ) {
         self.accessMethod = accessMethod
@@ -900,6 +917,7 @@ public struct DeployerDefaults: Codable, Equatable, Sendable {
         self.hostnameSuffix = hostnameSuffix
         self.packageCacheRoot = packageCacheRoot
         self.talosctlVersion = talosctlVersion
+        self.registryPort = registryPort
         self.keepLocalMirror = keepLocalMirror
     }
 }
@@ -918,6 +936,7 @@ extension DeployerDefaults {
         case hostnameSuffix
         case packageCacheRoot
         case talosctlVersion
+        case registryPort
         case keepLocalMirror
     }
 
@@ -935,6 +954,7 @@ extension DeployerDefaults {
         self.hostnameSuffix = try container.decodeIfPresent(String.self, forKey: .hostnameSuffix) ?? ""
         self.packageCacheRoot = try container.decodeIfPresent(String.self, forKey: .packageCacheRoot) ?? "/var/cache/tds"
         self.talosctlVersion = try container.decodeIfPresent(String.self, forKey: .talosctlVersion) ?? ""
+        self.registryPort = try container.decodeIfPresent(Int.self, forKey: .registryPort) ?? 5000
         self.keepLocalMirror = try container.decodeIfPresent(Bool.self, forKey: .keepLocalMirror) ?? true
     }
 }
@@ -967,6 +987,7 @@ public struct DeployerMediaServiceConfiguration: Codable, Equatable, Sendable {
     public var pxeDirectoryName: String
     public var httpBindAddress: String
     public var httpPort: Int
+    public var registryPort: Int
     public var packageCacheRoot: String
     public var talosctlVersion: String
 
@@ -976,6 +997,7 @@ public struct DeployerMediaServiceConfiguration: Codable, Equatable, Sendable {
         pxeDirectoryName: String = "pxe",
         httpBindAddress: String = "0.0.0.0",
         httpPort: Int = 8080,
+        registryPort: Int = 5000,
         packageCacheRoot: String = "/var/cache/tds",
         talosctlVersion: String = ""
     ) {
@@ -984,6 +1006,7 @@ public struct DeployerMediaServiceConfiguration: Codable, Equatable, Sendable {
         self.pxeDirectoryName = pxeDirectoryName
         self.httpBindAddress = httpBindAddress
         self.httpPort = httpPort
+        self.registryPort = registryPort
         self.packageCacheRoot = packageCacheRoot
         self.talosctlVersion = talosctlVersion
     }
@@ -995,6 +1018,7 @@ public struct DeployerMediaServiceConfiguration: Codable, Equatable, Sendable {
             pxeDirectoryName: defaults.pxeDirectoryName,
             httpBindAddress: defaults.httpBindAddress,
             httpPort: defaults.httpPort,
+            registryPort: defaults.registryPort,
             packageCacheRoot: defaults.packageCacheRoot,
             talosctlVersion: defaults.talosctlVersion
         )
