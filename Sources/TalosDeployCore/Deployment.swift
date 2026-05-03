@@ -1583,6 +1583,86 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         )
     }
 
+    public func resumeDeployerExecution(
+        state: DeploymentState,
+        connection: SSHConnection? = nil,
+        access: DeployerAccessRequest? = nil,
+        dryRun: Bool = true
+    ) async throws -> TalosExecutionRun {
+        let deployer = state.plan.deployer
+        let hostname = DeployerNaming().hostname(for: deployer.device, suffix: settings.deployer.hostnameSuffix)
+        var serviceConfiguration = DeployerMediaServiceConfiguration(defaults: settings.deployer)
+        if serviceConfiguration.talosctlVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            serviceConfiguration.talosctlVersion = state.spec.talosVersion
+        }
+        serviceConfiguration.registryPort = state.spec.talosProvisioning.deployerRegistryPort
+        var updated = state
+        let servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
+        let localDirectory = URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)
+        let maintenanceBundle = try MaintenanceBundleBuilder(fileManager: fileManager).writeBundle(for: updated, in: localDirectory)
+
+        if dryRun {
+            return TalosExecutionRun(
+                state: updated,
+                deployerHostname: hostname,
+                deployerServices: servicePlan,
+                networkValidation: state.plan.networkValidation,
+                accessValidation: DeployerAccessValidation(
+                    method: access?.method ?? settings.deployer.accessMethod,
+                    target: deployer.device.id,
+                    succeeded: false,
+                    message: "Dry run: deployer resume was planned but not executed.",
+                    attempts: []
+                ),
+                provisioningExecution: TalosProvisioningExecution(
+                    plannedActions: ["Resume deployer-owned Talos apply/bootstrap/health without reissuing OOB boot requests."],
+                    warnings: ["Dry run only."]
+                ),
+                bootstrapResult: TalosBootstrapResult(
+                    bootstrapNode: state.spec.nodes.first(where: { $0.assignment.role == .controlplane })?.device.name ?? "",
+                    commands: ["Dry run: deployer maintenance/tds-run-talos-deploy.sh would be rerun."],
+                    succeeded: false,
+                    warnings: ["Dry run only."]
+                ),
+                maintenanceBundle: maintenanceBundle,
+                dryRun: true
+            )
+        }
+
+        let request = access ?? defaultAccessRequest(connection: connection, deployer: deployer.device)
+        tdsProgress("Resolving deployer access path for resume on \(deployer.device.id)")
+        let selection = try await DeployerTransportResolver(settings: settings).resolve(request: request, deployer: deployer.device)
+        let transport = selection.transport
+        let accessValidation = DeployerAccessValidation(
+            method: selection.validation.method,
+            target: selection.validation.target,
+            succeeded: true,
+            message: selection.validation.message,
+            attempts: selection.failedAttempts + selection.validation.attempts
+        )
+        tdsProgress("Syncing updated maintenance bundle before resume")
+        updated = try await synchronizeToDeployer(updated, transport: transport)
+        tdsProgress("Starting deployer-owned resume without OOB reprovisioning")
+        let execution = try await TalosDeploymentExecutor(settings: settings).resumeDeployerState(
+            state: updated,
+            transport: transport,
+            configuration: serviceConfiguration
+        )
+        updated.events.append(DeploymentEvent(message: "Talos deployer-owned resume completed."))
+        _ = try stateStore.save(updated, to: localDirectory)
+        return TalosExecutionRun(
+            state: updated,
+            deployerHostname: hostname,
+            deployerServices: servicePlan,
+            networkValidation: state.plan.networkValidation,
+            accessValidation: accessValidation,
+            provisioningExecution: execution.0,
+            bootstrapResult: execution.1,
+            maintenanceBundle: maintenanceBundle,
+            dryRun: false
+        )
+    }
+
     private func defaultAccessRequest(connection: SSHConnection?, deployer: DiscoveredDevice) -> DeployerAccessRequest {
         var resolvedConnection = connection
         if resolvedConnection?.proxyJump.isEmpty == true, !settings.deployer.proxyJumpHost.isEmpty {

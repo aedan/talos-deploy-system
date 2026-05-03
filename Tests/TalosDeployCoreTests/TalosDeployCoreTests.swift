@@ -325,6 +325,9 @@ final class TalosDeployCoreTests: XCTestCase {
         let deployScript = try String(contentsOf: stateDirectory.appending(path: "maintenance/tds-run-talos-deploy.sh"))
         XCTAssertTrue(deployScript.contains("TDS_DEPLOYER_STATE_ROOT='/var/lib/talos-deploy'"))
         XCTAssertTrue(deployScript.contains("${TDS_DEPLOYER_STATE_ROOT}/bin/talosctl"))
+        XCTAssertTrue(deployScript.contains("run_role_nodes controlplane strict"))
+        XCTAssertTrue(deployScript.contains("run_role_nodes worker continue"))
+        XCTAssertTrue(deployScript.contains("get links --nodes \"$ip\" --endpoints \"$ip\" --insecure -o yaml"))
         let prepareScript = try String(contentsOf: stateDirectory.appending(path: "maintenance/tds-prepare-talos-media.sh"))
         XCTAssertTrue(prepareScript.contains("INSTALLER_META_BASE64"))
         XCTAssertTrue(prepareScript.contains("talos-v1.13.0-cp1.iso"))
@@ -361,6 +364,32 @@ final class TalosDeployCoreTests: XCTestCase {
 
         XCTAssertEqual(run.accessValidation?.method, .auto)
         XCTAssertFalse(run.provisioningExecution?.plannedActions.isEmpty ?? true)
+        XCTAssertEqual(run.bootstrapResult?.bootstrapNode, cp.name)
+        XCTAssertTrue(run.maintenanceBundle?.scripts.contains("maintenance/tds-run-talos-deploy.sh") == true)
+    }
+
+    func testResumeDryRunPlansDeployerOwnedPhaseWithoutOOBBoots() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
+        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer, deployerMode: .existing)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
+            ]
+        )
+        let coordinator = DeploymentCoordinator(settings: AppSettings())
+        let state = try await coordinator.stage(spec: spec, at: temp)
+        let run = try await coordinator.resumeDeployerExecution(state: state, dryRun: true)
+
+        XCTAssertTrue(run.dryRun)
+        XCTAssertTrue(run.provisioningExecution?.plannedActions.first?.contains("without reissuing OOB boot requests") == true)
         XCTAssertEqual(run.bootstrapResult?.bootstrapNode, cp.name)
         XCTAssertTrue(run.maintenanceBundle?.scripts.contains("maintenance/tds-run-talos-deploy.sh") == true)
     }

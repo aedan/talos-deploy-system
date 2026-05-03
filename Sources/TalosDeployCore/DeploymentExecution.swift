@@ -72,11 +72,7 @@ public struct MaintenanceBundleBuilder {
 
     private func renderTalosDeployScript(state: DeploymentState) -> String {
         let controlPlanes = nodeRecords(state: state, role: .controlplane)
-        let workers = nodeRecords(state: state, role: .worker)
         let firstControlPlane = controlPlanes.first
-        let allNodes = controlPlanes + workers
-        let cpIPs = controlPlanes.map(\.ip).joined(separator: ",")
-        let allIPs = allNodes.map(\.ip).joined(separator: ",")
 
         return """
         #!/usr/bin/env bash
@@ -129,19 +125,20 @@ public struct MaintenanceBundleBuilder {
         wait_for_live_api() {
           local name="$1"
           local ip="$2"
+          local attempts="${3:-120}"
           log "waiting for Talos live maintenance API on $name ($ip)"
-          for attempt in $(seq 1 120); do
+          for attempt in $(seq 1 "$attempts"); do
             if "$TALOSCTL" --nodes "$ip" --endpoints "$ip" version --insecure >/dev/null 2>&1; then
               log "Talos live maintenance API is reachable on $name ($ip)"
               return 0
             fi
-            if [ "$attempt" -eq 120 ]; then
+            if [ "$attempt" -eq "$attempts" ]; then
               echo "Timed out waiting for Talos live boot on $name ($ip)" >&2
               diagnose_node "$name" "$ip"
               return 1
             fi
             if [ $((attempt % 6)) -eq 0 ]; then
-              log "still waiting for Talos live maintenance API on $name ($ip), attempt $attempt/120"
+              log "still waiting for Talos live maintenance API on $name ($ip), attempt $attempt/$attempts"
             fi
             sleep 10
           done
@@ -153,9 +150,9 @@ public struct MaintenanceBundleBuilder {
           local mode="${3:-configured}"
           mkdir -p inventory/talos-live
           if [ "$mode" = "insecure" ]; then
-            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" --insecure get links -o yaml > "inventory/talos-live/${name}-links.yaml" 2>"inventory/talos-live/${name}-links.stderr" || true
+            "$TALOSCTL" get links --nodes "$ip" --endpoints "$ip" --insecure -o yaml > "inventory/talos-live/${name}-links.yaml" 2>"inventory/talos-live/${name}-links.stderr" || true
           else
-            "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" get links -o yaml > "inventory/talos-live/${name}-links.yaml" 2>"inventory/talos-live/${name}-links.stderr" || true
+            "$TALOSCTL" get links --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" -o yaml > "inventory/talos-live/${name}-links.yaml" 2>"inventory/talos-live/${name}-links.stderr" || true
           fi
         }
 
@@ -172,27 +169,81 @@ public struct MaintenanceBundleBuilder {
         "$ROOT/maintenance/tds-prepare-talos-media.sh"
         cd "$ROOT"
 
-        while IFS='|' read -r name role ip patch boot_patch meta_path device_id media_file boot_mode; do
-          [ -n "$name" ] || continue
-          embedded_media="${TDS_MEDIA_ROOT}/${media_file}"
+        configured_api_ready() {
+          local ip="$1"
+          "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" version >/dev/null 2>&1
+        }
+
+        live_api_ready() {
+          local ip="$1"
+          "$TALOSCTL" --nodes "$ip" --endpoints "$ip" version --insecure >/dev/null 2>&1
+        }
+
+        configure_node() {
+          local name="$1"
+          local role="$2"
+          local ip="$3"
+          local media_file="$4"
+          local boot_mode="$5"
+          local live_attempts="$6"
+          local configured_attempts="$7"
+          local embedded_media="${TDS_MEDIA_ROOT}/${media_file}"
+
+          if configured_api_ready "$ip"; then
+            log "configured Talos API is already reachable on $name ($ip); skipping apply"
+            capture_live_links "$name" "$ip"
+            return 0
+          fi
+
           if [ -f "$embedded_media" ] && [ "$boot_mode" = "meta" ]; then
-            wait_for_live_api "$name" "$ip"
+            wait_for_live_api "$name" "$ip" "$live_attempts"
             capture_live_links "$name" "$ip" insecure
             log "applying static machine config to $name ($ip)"
             "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --file "machine-configs/${name}.yaml"
-            wait_for_configured_api "$name" "$ip" 90 "after static config apply"
+            wait_for_configured_api "$name" "$ip" "$configured_attempts" "after static config apply"
           elif [ -f "$embedded_media" ]; then
             wait_for_configured_api "$name" "$ip" 180 "from boot ISO static networking config"
             capture_live_links "$name" "$ip"
             apply_final_config "$name" "$ip"
-            wait_for_configured_api "$name" "$ip" 90 "after final config apply"
+            wait_for_configured_api "$name" "$ip" "$configured_attempts" "after final config apply"
           else
-            wait_for_live_api "$name" "$ip"
+            wait_for_live_api "$name" "$ip" "$live_attempts"
             log "applying static machine config to $name ($ip)"
             "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --file "machine-configs/${name}.yaml"
-            wait_for_configured_api "$name" "$ip" 60 "after static config apply"
+            wait_for_configured_api "$name" "$ip" "$configured_attempts" "after static config apply"
           fi
-        done < generated/nodes.tsv
+        }
+
+        SUCCESSFUL_NODE_IPS=()
+        SUCCESSFUL_CONTROL_PLANE_IPS=()
+        FAILED_NODES=()
+
+        run_role_nodes() {
+          local wanted_role="$1"
+          local strict="$2"
+          local live_attempts="$3"
+          local configured_attempts="$4"
+
+          while IFS='|' read -r name role ip patch boot_patch meta_path device_id media_file boot_mode; do
+            [ -n "$name" ] || continue
+            [ "$role" = "$wanted_role" ] || continue
+            if configure_node "$name" "$role" "$ip" "$media_file" "$boot_mode" "$live_attempts" "$configured_attempts"; then
+              SUCCESSFUL_NODE_IPS+=("$ip")
+              if [ "$role" = "controlplane" ]; then
+                SUCCESSFUL_CONTROL_PLANE_IPS+=("$ip")
+              fi
+            else
+              FAILED_NODES+=("${name}(${ip})")
+              log "node $name ($ip) failed Talos API/configuration validation"
+              if [ "$strict" = "strict" ]; then
+                return 1
+              fi
+            fi
+          done < generated/nodes.tsv
+        }
+
+        log "configuring control-plane nodes before cluster bootstrap"
+        run_role_nodes controlplane strict 120 90
 
         first_cp=\(shellEscape(firstControlPlane?.ip ?? ""))
         if [ -n "$first_cp" ]; then
@@ -200,9 +251,31 @@ public struct MaintenanceBundleBuilder {
           "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$first_cp" --endpoints "$first_cp" bootstrap || true
           "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$first_cp" --endpoints "$first_cp" kubeconfig . --force || true
         fi
-        if [ -n "\(allIPs)" ] && [ -n "\(cpIPs)" ]; then
+
+        log "configuring worker nodes after control-plane bootstrap"
+        run_role_nodes worker continue 60 60 || true
+
+        join_by_comma() {
+          local IFS=,
+          printf '%s' "$*"
+        }
+
+        successful_nodes="$(join_by_comma "${SUCCESSFUL_NODE_IPS[@]}")"
+        successful_controlplanes="$(join_by_comma "${SUCCESSFUL_CONTROL_PLANE_IPS[@]}")"
+
+        health_failed=0
+        if [ -n "$successful_nodes" ] && [ -n "$successful_controlplanes" ]; then
           log "running Talos health across all nodes"
-          "$TALOSCTL" --talosconfig generated/talosconfig --nodes \(shellEscape(allIPs)) --endpoints \(shellEscape(cpIPs)) health --wait-timeout 20m
+          "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$successful_nodes" --endpoints "$successful_controlplanes" health --wait-timeout 20m || health_failed=1
+        fi
+        if [ "${#FAILED_NODES[@]}" -gt 0 ]; then
+          printf 'Nodes failed Talos API/configuration validation:\\n' >&2
+          printf ' - %s\\n' "${FAILED_NODES[@]}" >&2
+          exit 1
+        fi
+        if [ "$health_failed" -ne 0 ]; then
+          echo "Talos health check failed" >&2
+          exit 1
         fi
         log "Talos deployer-owned run completed"
         """
@@ -583,6 +656,78 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         )
         return (
             TalosProvisioningExecution(plannedActions: plannedActions, executedActions: executedActions, warnings: warnings),
+            bootstrap
+        )
+    }
+
+    public func resumeDeployerState(state: DeploymentState, transport: any DeployerTransport, configuration: DeployerMediaServiceConfiguration) async throws -> (TalosProvisioningExecution, TalosBootstrapResult) {
+        var executedActions: [String] = []
+        let warnings: [String] = []
+        let talosISOPath = "\(configuration.mediaRoot)/talos-\(state.spec.talosVersion).iso"
+        let registryInstallerImage = deployerRegistryInstallerImage(for: state.spec)
+        let registryCacheCommand = renderRegistryCacheCommand(
+            state: state,
+            configuration: configuration,
+            registryInstallerImage: registryInstallerImage
+        )
+        let nodeRouteCommand = renderTalosNodeRouteCommand(state: state)
+        let startMediaCommand = """
+        set -e
+        mkdir -p \(shellEscape(configuration.mediaRoot)) \(shellEscape("\(configuration.stateRoot)/logs"))
+        if command -v curl >/dev/null 2>&1 && [ ! -f \(shellEscape(talosISOPath)) ]; then
+          curl -fL -o \(shellEscape(talosISOPath)) \(shellEscape(state.plan.talosArtifacts.isoURL)) || true
+        fi
+        if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files tds-media-http.service >/dev/null 2>&1; then
+          sudo systemctl restart tds-media-http.service || true
+        fi
+        if [ -f \(shellEscape("\(configuration.stateRoot)/media-service.env")) ]; then
+          . \(shellEscape("\(configuration.stateRoot)/media-service.env"))
+          http_check_host="$HTTP_BIND"
+          if [ "$http_check_host" = "0.0.0.0" ]; then
+            http_check_host="127.0.0.1"
+          fi
+          if ! python3 -c 'import socket,sys; s=socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=2); s.close()' "$http_check_host" "$HTTP_PORT" >/dev/null 2>&1; then
+            sh -c "$START_COMMAND" || true
+          fi
+        fi
+        """
+        tdsProgress("Restarting deployer-hosted media service for resume")
+        _ = try await transport.run(startMediaCommand, timeout: 900)
+        executedActions.append("Restarted deployer-hosted Talos media service for resume.")
+        if !registryCacheCommand.isEmpty {
+            tdsProgress("Revalidating deployer registry cache for resume")
+            _ = try await transport.run(registryCacheCommand, timeout: 1800)
+            executedActions.append("Revalidated Talos installer image in deployer registry.")
+        }
+        if !nodeRouteCommand.isEmpty {
+            tdsProgress("Reconciling deployer host routes for resume")
+            _ = try await transport.run(nodeRouteCommand, timeout: 120)
+            executedActions.append("Reconciled deployer host routes to Talos node management IPs.")
+        }
+
+        let bootstrapCommand = """
+        cd \(shellEscape(state.plan.durableStateDirectory)) && \\
+        TDS_MEDIA_ROOT=\(shellEscape(configuration.mediaRoot)) \\
+        ./maintenance/tds-run-talos-deploy.sh
+        """
+        tdsProgress("Resuming deployer-owned Talos apply/bootstrap/health script")
+        _ = try await transport.run(bootstrapCommand, timeout: 7200)
+        tdsProgress("Deployer-owned Talos resume script completed")
+        executedActions.append("Resumed deployer-owned Talos apply/bootstrap/health script.")
+
+        let firstControlPlane = state.spec.nodes.first { $0.assignment.role == .controlplane }
+        let bootstrap = TalosBootstrapResult(
+            bootstrapNode: firstControlPlane?.device.name ?? "",
+            commands: [startMediaCommand, bootstrapCommand],
+            succeeded: true,
+            warnings: warnings
+        )
+        return (
+            TalosProvisioningExecution(
+                plannedActions: ["Resume deployer-owned Talos apply/bootstrap/health without reissuing OOB boot requests."],
+                executedActions: executedActions,
+                warnings: warnings
+            ),
             bootstrap
         )
     }

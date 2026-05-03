@@ -39,7 +39,7 @@ struct TalosDeployCLI {
         case "deployer":
             try await handleStandaloneDeployer(arguments: Array(arguments.dropFirst()))
         case "resume":
-            try handleResume(arguments: Array(arguments.dropFirst()))
+            try await handleResume(arguments: Array(arguments.dropFirst()))
         default:
             printUsage()
         }
@@ -372,7 +372,7 @@ struct TalosDeployCLI {
         case "run":
             try await handleDeployRun(arguments: remaining)
         case "resume":
-            try handleResume(arguments: remaining)
+            try await handleResume(arguments: remaining)
         case "verify":
             try handleDeployVerify(arguments: remaining)
         case "maintenance-bundle":
@@ -494,10 +494,24 @@ struct TalosDeployCLI {
         try await handleDeployDeployer(arguments: arguments)
     }
 
-    private static func handleResume(arguments: [String]) throws {
+    private static func handleResume(arguments: [String]) async throws {
         let options = parseOptions(arguments)
-        let state = try loadState(path: options["path"])
-        let data = try JSONEncoder.pretty.encode(state)
+        let state = try loadState(path: options["path"] ?? options["state"])
+        let dryRun = parseBool(options["dry-run"]) ?? !(parseBool(options["execute"]) ?? false)
+        guard parseBool(options["execute"]) == true || parseBool(options["dry-run"]) == true else {
+            let data = try JSONEncoder.pretty.encode(state)
+            print(String(decoding: data, as: UTF8.self))
+            return
+        }
+        let settings = (try? SettingsController().load()) ?? AppSettings()
+        let coordinator = DeploymentCoordinator(settings: settings)
+        let run = try await coordinator.resumeDeployerExecution(
+            state: state,
+            connection: deployerConnection(options: options),
+            access: deployerAccessRequest(options: options, settings: settings, deployerID: state.spec.deployerNode?.device.id ?? ""),
+            dryRun: dryRun
+        )
+        let data = try JSONEncoder.pretty.encode(run)
         print(String(decoding: data, as: UTF8.self))
     }
 
@@ -676,6 +690,7 @@ struct TalosDeployCLI {
               plan --spec path/to/spec.json
               deploy plan --spec path/to/spec.json
               deploy run --spec path/to/spec.json [--execute true] [--deployer-host HOST --deployer-user USER]
+              deploy resume --path /path/to/deployment-state.json [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime]
               deploy verify --state /path/to/deployment-state.json
               deploy maintenance-bundle --state /path/to/deployment-state.json
               deployer access-test --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
@@ -683,7 +698,7 @@ struct TalosDeployCLI {
               deploy deployer plan
               deploy deployer access-test --account ACCOUNT --device DEVICE
               deploy deployer prepare --account ACCOUNT --device DEVICE
-              resume --path /path/to/deployment-state.json
+              resume --path /path/to/deployment-state.json [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime]
             """
         )
     }
@@ -734,7 +749,7 @@ struct TalosDeployCLI {
               deployer access-test --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
               deployer prepare --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
 
-            Non-dry-run execution requires --execute true plus a deployer access path. Auto mode tries SSH, ProxyJump, then Hammertime.
+            Non-dry-run run requires --execute true plus a deployer access path. Resume re-syncs maintenance state and reruns the deployer-owned phase without reissuing OOB boots.
             """
         )
     }
