@@ -689,13 +689,23 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         try fileManager.createDirectory(at: nodesDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: bootNodesDirectory, withIntermediateDirectories: true)
         for node in spec.nodes where node.assignment.role == .controlplane || node.assignment.role == .worker {
-            let yaml = renderNodePatch(node: node, spec: spec, includeAdditionalNetworking: true)
+            let yaml = renderNodePatch(
+                node: node,
+                spec: spec,
+                includeAdditionalNetworking: true,
+                includeInstall: true
+            )
             try yaml.write(
                 to: nodesDirectory.appending(path: "\(node.device.name).yaml"),
                 atomically: true,
                 encoding: .utf8
             )
-            let bootYAML = renderNodePatch(node: node, spec: spec, includeAdditionalNetworking: false)
+            let bootYAML = renderNodePatch(
+                node: node,
+                spec: spec,
+                includeAdditionalNetworking: false,
+                includeInstall: false
+            )
             try bootYAML.write(
                 to: bootNodesDirectory.appending(path: "\(node.device.name).yaml"),
                 atomically: true,
@@ -715,7 +725,12 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         return directory
     }
 
-    private func renderNodePatch(node: DeploymentNodeSpec, spec: DeploymentSpec, includeAdditionalNetworking: Bool) -> String {
+    private func renderNodePatch(
+        node: DeploymentNodeSpec,
+        spec: DeploymentSpec,
+        includeAdditionalNetworking: Bool,
+        includeInstall: Bool
+    ) -> String {
         let staticConfig = StaticNetworkPlanner().config(for: node)
         let interfaceName = firstNonEmptyStatic(staticConfig.managementInterface, node.device.networkInterfaces.first?.name ?? "eth0")
         let managementHardwareAddress = staticConfig.managementHardwareAddress.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -746,10 +761,12 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             lines.append(contentsOf: renderVLANParentInterfaces(staticConfig.vlans, excluding: [interfaceName]))
             lines.append(contentsOf: renderBridgeInterfaces(staticConfig.bridges))
         }
-        lines.append("  install:")
-        lines.append("    disk: \(node.device.installDisk.isEmpty ? "/dev/sda" : node.device.installDisk)")
-        lines.append("    image: \(installerImage)")
-        lines.append(contentsOf: renderExtraKernelArgs(spec.talosFactory.extraKernelArgs))
+        if includeInstall {
+            lines.append("  install:")
+            lines.append("    disk: \(node.device.installDisk.isEmpty ? "/dev/sda" : node.device.installDisk)")
+            lines.append("    image: \(installerImage)")
+            lines.append(contentsOf: renderExtraKernelArgs(spec.talosFactory.extraKernelArgs))
+        }
         return lines.joined(separator: "\n") + "\n"
     }
 

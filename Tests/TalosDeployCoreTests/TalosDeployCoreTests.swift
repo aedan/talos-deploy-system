@@ -272,6 +272,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "talos-artifacts.json").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "boot-node-patches").appending(path: "cp-1.yaml").path))
         let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+        let bootPatch = try String(contentsOf: output.appending(path: "boot-node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
         XCTAssertTrue(patch.contains("image: factory.talos.dev/installer/abc123:v1.11.3"))
         XCTAssertFalse(patch.contains("hostname: cp-1"))
         XCTAssertTrue(patch.contains("name: br_netfilter"))
@@ -282,6 +283,8 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("  kubelet:\n    extraMounts:"))
         XCTAssertFalse(patch.contains("  extraMounts:\n    - destination: /var/lib/longhorn"))
         XCTAssertTrue(patch.contains("destination: /var/lib/longhorn"))
+        XCTAssertFalse(bootPatch.contains("  install:\n"))
+        XCTAssertFalse(bootPatch.contains("image: factory.talos.dev/installer/abc123:v1.11.3"))
     }
 
     func testStageWritesMaintenanceBundleForDeployerOwnedOperations() async throws {
@@ -419,6 +422,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertFalse(bootPatch.contains("      - interface: eno3\n        vlans:"))
         XCTAssertFalse(bootPatch.contains("      - interface: br-ipmi"))
         XCTAssertFalse(bootPatch.contains("          - eno49"))
+        XCTAssertFalse(bootPatch.contains("  install:\n"))
     }
 
     func testTalosBuilderRendersManagementDeviceSelectorWhenMACIsKnown() async throws {

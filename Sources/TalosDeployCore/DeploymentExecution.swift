@@ -157,7 +157,7 @@ public struct MaintenanceBundleBuilder {
           [ -n "$name" ] || continue
           embedded_media="${TDS_MEDIA_ROOT}/${media_file}"
           if [ -f "$embedded_media" ]; then
-            wait_for_configured_api "$name" "$ip" 180 "from bootstrap ISO config"
+            wait_for_configured_api "$name" "$ip" 180 "from boot ISO static networking config"
             capture_live_links "$name" "$ip"
             apply_final_config "$name" "$ip"
             wait_for_configured_api "$name" "$ip" 90 "after final config apply"
