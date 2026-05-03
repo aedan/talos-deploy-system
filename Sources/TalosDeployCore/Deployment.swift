@@ -930,6 +930,7 @@ func deployerRegistryHost(for spec: DeploymentSpec) -> String? {
     guard spec.talosProvisioning.allowDeployerRegistry else { return nil }
     let host = firstNonEmptyStatic(
         spec.talosProvisioning.deployerRegistryHost,
+        spec.talosProvisioning.deployerRegistryAddressCIDR.split(separator: "/").first.map(String.init) ?? "",
         spec.deployerNode?.device.privateIP ?? "",
         spec.deployerNode?.device.primaryIP ?? ""
     )

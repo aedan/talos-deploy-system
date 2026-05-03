@@ -10,7 +10,7 @@ The deployer is a selected physical server that receives Ubuntu first and then m
 - Xcode or Xcode Command Line Tools for source builds.
 - Git for source checkout and updates.
 - Network access from the operator workstation to Core, Hammertime-backed Core auth, OOB/iLO/iDRAC access paths, and any configured proxy.
-- Deployer network access to Talos nodes on the final management network. If Talos nodes cannot reach the Internet, the deployer must be able to run the managed local installer registry.
+- Deployer network access to Talos nodes on the final management network. If Talos nodes cannot reach the Internet, the deployer must be able to run the managed local installer registry on an address reachable from Talos nodes.
 - `ht` when using Hammertime/Core bridge inventory or live facts.
 - `xorriso` for Ubuntu autoinstall ISO rebuild and validation.
 - Stock Ubuntu 24.04 server ISO for deployer bootstrap installs.
@@ -94,6 +94,7 @@ Talos Defaults:
 - Kernel modules, extra kernel args, architecture, platform, and schematic ID are configurable.
 - OOB NIC MAC selectors are enabled by default. If Hammertime/iLO can expose HPE integrated NIC MACs, `tds` maps names such as `eno1` to the matching physical port and writes `deviceSelector.hardwareAddr` into Talos node patches.
 - The deployer installer registry is enabled by default. `tds` installs `docker-registry` and `skopeo`, mirrors the selected Talos installer image into the deployer, and renders Talos configs to install from that in-environment registry when nodes do not have Internet access.
+- When the deployer has separate OOB/media and Talos data networks, configure a node-facing registry address CIDR plus interface. `tds` adds and persists that address on the deployer before caching the installer image, then points Talos machine configs at that reachable registry address.
 
 Provisioning Priority:
 
@@ -112,6 +113,7 @@ Deployer Defaults:
 
 - Access method, SSH user, optional SSH ProxyJump host, state root, hostname suffix, PXE address, HTTP bind/port, package cache, local mirror behavior, and pinned `talosctl` version are managed by `tds`.
 - Registry port controls the deployer-hosted OCI registry used for Talos installer images. The default is `5000`.
+- Registry host override, address CIDR, and interface let `tds` host the installer registry on a specific node-facing deployer address. A `/32` alias is useful when Talos nodes share an L2 with a deployer bridge but the deployer primary IP lives on a different interface.
 - Generated deployer hostnames use `<deviceNumber>-deployer` plus an optional suffix, for example `100001-deployer-lab2`.
 
 Deployer Ownership:

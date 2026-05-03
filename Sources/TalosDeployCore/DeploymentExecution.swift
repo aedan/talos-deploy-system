@@ -368,6 +368,9 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         if !registryCacheCommand.isEmpty {
             _ = try await transport.run(registryCacheCommand, timeout: 1800)
             executedActions.append("Cached Talos installer image in deployer registry at \(registryInstallerImage ?? "configured registry").")
+            if !state.spec.talosProvisioning.deployerRegistryAddressCIDR.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                executedActions.append("Ensured deployer node-facing registry address \(state.spec.talosProvisioning.deployerRegistryAddressCIDR).")
+            }
         }
         if mediaBaseURL.isEmpty {
             warnings.append("No deployer media address is configured; OOB boot URL actions must use PXE, direct virtual media, or operator local media.")
@@ -450,6 +453,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
           echo "skopeo is required to cache Talos installer image in the deployer registry" >&2
           exit 1
         fi
+        \(renderRegistryAddressCommand(state: state))
         \(dockerRegistryWritableCommand(registryRoot: registryRoot))
         if command -v systemctl >/dev/null 2>&1; then
           sudo systemctl restart docker-registry || sudo systemctl start docker-registry || true
@@ -465,6 +469,50 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
           sleep 2
         done
         skopeo copy --retry-times 3 --dest-tls-verify=false \(shellEscape("docker://\(state.plan.talosArtifacts.installerImage)")) \(shellEscape("docker://\(localTarget)"))
+        """
+    }
+
+    private func renderRegistryAddressCommand(state: DeploymentState) -> String {
+        let cidr = state.spec.talosProvisioning.deployerRegistryAddressCIDR.trimmingCharacters(in: .whitespacesAndNewlines)
+        let interface = state.spec.talosProvisioning.deployerRegistryInterface.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cidr.isEmpty || !interface.isEmpty else { return "" }
+        guard !cidr.isEmpty && !interface.isEmpty else {
+            return """
+            echo "Both deployer registry address CIDR and interface are required when configuring a node-facing registry alias" >&2
+            exit 1
+            """
+        }
+        return """
+        IP_BIN="$(command -v ip || true)"
+        if [ -z "$IP_BIN" ]; then
+          echo "iproute2 is required to configure the deployer registry address \(cidr)" >&2
+          exit 1
+        fi
+        if ! "$IP_BIN" link show dev \(shellEscape(interface)) >/dev/null 2>&1; then
+          echo "Deployer registry interface \(interface) does not exist" >&2
+          exit 1
+        fi
+        sudo "$IP_BIN" addr replace \(shellEscape(cidr)) dev \(shellEscape(interface))
+        if command -v systemctl >/dev/null 2>&1; then
+          cat > /tmp/tds-registry-address.service <<EOF
+        [Unit]
+        Description=TDS node-facing registry address
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=${IP_BIN} addr replace \(cidr) dev \(interface)
+        ExecStop=${IP_BIN} addr del \(cidr) dev \(interface)
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+          sudo mv /tmp/tds-registry-address.service /etc/systemd/system/tds-registry-address.service
+          sudo systemctl daemon-reload
+          sudo systemctl enable --now tds-registry-address.service
+        fi
         """
     }
 

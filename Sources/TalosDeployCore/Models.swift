@@ -686,6 +686,8 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
     public var useOOBHardwareAddressSelectors: Bool
     public var allowDeployerRegistry: Bool
     public var deployerRegistryHost: String
+    public var deployerRegistryAddressCIDR: String
+    public var deployerRegistryInterface: String
     public var deployerRegistryPort: Int
 
     public init(
@@ -703,6 +705,8 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
         useOOBHardwareAddressSelectors: Bool = true,
         allowDeployerRegistry: Bool = true,
         deployerRegistryHost: String = "",
+        deployerRegistryAddressCIDR: String = "",
+        deployerRegistryInterface: String = "",
         deployerRegistryPort: Int = 5000
     ) {
         self.preferredStrategies = preferredStrategies
@@ -713,6 +717,8 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
         self.useOOBHardwareAddressSelectors = useOOBHardwareAddressSelectors
         self.allowDeployerRegistry = allowDeployerRegistry
         self.deployerRegistryHost = deployerRegistryHost
+        self.deployerRegistryAddressCIDR = deployerRegistryAddressCIDR
+        self.deployerRegistryInterface = deployerRegistryInterface
         self.deployerRegistryPort = deployerRegistryPort
     }
 }
@@ -727,6 +733,8 @@ extension TalosProvisioningDefaults {
         case useOOBHardwareAddressSelectors
         case allowDeployerRegistry
         case deployerRegistryHost
+        case deployerRegistryAddressCIDR
+        case deployerRegistryInterface
         case deployerRegistryPort
     }
 
@@ -742,6 +750,8 @@ extension TalosProvisioningDefaults {
             useOOBHardwareAddressSelectors: try container.decodeIfPresent(Bool.self, forKey: .useOOBHardwareAddressSelectors) ?? defaults.useOOBHardwareAddressSelectors,
             allowDeployerRegistry: try container.decodeIfPresent(Bool.self, forKey: .allowDeployerRegistry) ?? defaults.allowDeployerRegistry,
             deployerRegistryHost: try container.decodeIfPresent(String.self, forKey: .deployerRegistryHost) ?? defaults.deployerRegistryHost,
+            deployerRegistryAddressCIDR: try container.decodeIfPresent(String.self, forKey: .deployerRegistryAddressCIDR) ?? defaults.deployerRegistryAddressCIDR,
+            deployerRegistryInterface: try container.decodeIfPresent(String.self, forKey: .deployerRegistryInterface) ?? defaults.deployerRegistryInterface,
             deployerRegistryPort: try container.decodeIfPresent(Int.self, forKey: .deployerRegistryPort) ?? defaults.deployerRegistryPort
         )
     }

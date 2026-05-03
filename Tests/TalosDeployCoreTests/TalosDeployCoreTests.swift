@@ -484,6 +484,44 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("skipFallback: true"))
     }
 
+    func testTalosBuilderPrefersNodeFacingRegistryAddressCIDR() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = DiscoveredDevice(
+            id: "deployer",
+            accountNumber: "0000000",
+            name: "deployer-1",
+            primaryIP: "203.0.113.196",
+            privateIP: "198.51.100.196"
+        )
+        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            talosFactory: TalosImageFactorySettings(schematicID: "abc123"),
+            talosProvisioning: TalosProvisioningDefaults(
+                deployerRegistryAddressCIDR: "198.51.100.55/32",
+                deployerRegistryInterface: "br-ctlplane"
+            ),
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
+            ]
+        )
+
+        let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
+        let output = try await DefaultTalosBuilder().buildArtifacts(for: spec, plan: plan, in: temp)
+        let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+
+        XCTAssertTrue(patch.contains("image: 198.51.100.55:5000/installer/abc123:v1.13.0"))
+        XCTAssertTrue(patch.contains("\"198.51.100.55:5000\":"))
+        XCTAssertTrue(patch.contains("http://198.51.100.55:5000"))
+        XCTAssertFalse(patch.contains("198.51.100.196:5000"))
+    }
+
     func testOOBIntegratedNICParserReadsHPEPortMACs() {
         let output = """
         status=0
@@ -916,6 +954,10 @@ final class TalosDeployCoreTests: XCTestCase {
             talosVersion: "v1.13.0",
             kubernetesVersion: "v1.34.1",
             deployerStateRoot: "/var/lib/talos-deploy",
+            talosProvisioning: TalosProvisioningDefaults(
+                deployerRegistryAddressCIDR: "198.51.100.55/32",
+                deployerRegistryInterface: "br-ctlplane"
+            ),
             nodes: [
                 DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer, deployerMode: .existing)),
                 DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
@@ -945,6 +987,8 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertEqual(oob.urlRequests.map(\.deviceID), ["cp1"])
         XCTAssertEqual(oob.urlRequests.first?.imageURL, "http://198.51.100.20:8080/talos-v1.13.0-cp1.iso")
         XCTAssertTrue(execution.0.executedActions.contains { $0.contains("OOB URL boot connected") })
+        XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("tds-registry-address.service") == true })
+        XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("addr replace '198.51.100.55/32' dev 'br-ctlplane'") == true })
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("chown -R docker-registry:docker-registry '/var/lib/talos-deploy/registry'") == true })
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("chmod -R 0777 '/var/lib/talos-deploy/registry'") == true })
         XCTAssertTrue(runner.invocations.last?.arguments.last?.contains("tds-run-talos-deploy.sh") == true)
