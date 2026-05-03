@@ -294,6 +294,7 @@ public struct StaticNetworkRoute: Codable, Equatable, Sendable {
 
 public struct StaticNetworkConfig: Codable, Equatable, Sendable {
     public var managementInterface: String
+    public var managementHardwareAddress: String
     public var managementAddressCIDR: String
     public var gateway: String
     public var nameservers: [String]
@@ -304,6 +305,7 @@ public struct StaticNetworkConfig: Codable, Equatable, Sendable {
 
     public init(
         managementInterface: String = "",
+        managementHardwareAddress: String = "",
         managementAddressCIDR: String = "",
         gateway: String = "",
         nameservers: [String] = [],
@@ -313,6 +315,7 @@ public struct StaticNetworkConfig: Codable, Equatable, Sendable {
         bridges: [NetworkInterface] = []
     ) {
         self.managementInterface = managementInterface
+        self.managementHardwareAddress = managementHardwareAddress
         self.managementAddressCIDR = managementAddressCIDR
         self.gateway = gateway
         self.nameservers = nameservers
@@ -324,6 +327,7 @@ public struct StaticNetworkConfig: Codable, Equatable, Sendable {
 
     public var isEmpty: Bool {
         managementInterface.isEmpty
+            && managementHardwareAddress.isEmpty
             && managementAddressCIDR.isEmpty
             && gateway.isEmpty
             && nameservers.isEmpty
@@ -331,6 +335,35 @@ public struct StaticNetworkConfig: Codable, Equatable, Sendable {
             && routes.isEmpty
             && vlans.isEmpty
             && bridges.isEmpty
+    }
+}
+
+extension StaticNetworkConfig {
+    enum CodingKeys: String, CodingKey {
+        case managementInterface
+        case managementHardwareAddress
+        case managementAddressCIDR
+        case gateway
+        case nameservers
+        case searchDomains
+        case routes
+        case vlans
+        case bridges
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            managementInterface: try container.decodeIfPresent(String.self, forKey: .managementInterface) ?? "",
+            managementHardwareAddress: try container.decodeIfPresent(String.self, forKey: .managementHardwareAddress) ?? "",
+            managementAddressCIDR: try container.decodeIfPresent(String.self, forKey: .managementAddressCIDR) ?? "",
+            gateway: try container.decodeIfPresent(String.self, forKey: .gateway) ?? "",
+            nameservers: try container.decodeIfPresent([String].self, forKey: .nameservers) ?? [],
+            searchDomains: try container.decodeIfPresent([String].self, forKey: .searchDomains) ?? [],
+            routes: try container.decodeIfPresent([StaticNetworkRoute].self, forKey: .routes) ?? [],
+            vlans: try container.decodeIfPresent([NetworkInterface].self, forKey: .vlans) ?? [],
+            bridges: try container.decodeIfPresent([NetworkInterface].self, forKey: .bridges) ?? []
+        )
     }
 }
 
@@ -650,6 +683,7 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
     public var allowDeployerPXE: Bool
     public var allowExternalOOBURL: Bool
     public var externalOOBMediaBaseURL: String
+    public var useOOBHardwareAddressSelectors: Bool
 
     public init(
         preferredStrategies: [TalosProvisioningStrategy] = [
@@ -662,13 +696,39 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
         allowDeployerHostedMedia: Bool = true,
         allowDeployerPXE: Bool = true,
         allowExternalOOBURL: Bool = false,
-        externalOOBMediaBaseURL: String = ""
+        externalOOBMediaBaseURL: String = "",
+        useOOBHardwareAddressSelectors: Bool = true
     ) {
         self.preferredStrategies = preferredStrategies
         self.allowDeployerHostedMedia = allowDeployerHostedMedia
         self.allowDeployerPXE = allowDeployerPXE
         self.allowExternalOOBURL = allowExternalOOBURL
         self.externalOOBMediaBaseURL = externalOOBMediaBaseURL
+        self.useOOBHardwareAddressSelectors = useOOBHardwareAddressSelectors
+    }
+}
+
+extension TalosProvisioningDefaults {
+    enum CodingKeys: String, CodingKey {
+        case preferredStrategies
+        case allowDeployerHostedMedia
+        case allowDeployerPXE
+        case allowExternalOOBURL
+        case externalOOBMediaBaseURL
+        case useOOBHardwareAddressSelectors
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = TalosProvisioningDefaults()
+        self.init(
+            preferredStrategies: try container.decodeIfPresent([TalosProvisioningStrategy].self, forKey: .preferredStrategies) ?? defaults.preferredStrategies,
+            allowDeployerHostedMedia: try container.decodeIfPresent(Bool.self, forKey: .allowDeployerHostedMedia) ?? defaults.allowDeployerHostedMedia,
+            allowDeployerPXE: try container.decodeIfPresent(Bool.self, forKey: .allowDeployerPXE) ?? defaults.allowDeployerPXE,
+            allowExternalOOBURL: try container.decodeIfPresent(Bool.self, forKey: .allowExternalOOBURL) ?? defaults.allowExternalOOBURL,
+            externalOOBMediaBaseURL: try container.decodeIfPresent(String.self, forKey: .externalOOBMediaBaseURL) ?? defaults.externalOOBMediaBaseURL,
+            useOOBHardwareAddressSelectors: try container.decodeIfPresent(Bool.self, forKey: .useOOBHardwareAddressSelectors) ?? defaults.useOOBHardwareAddressSelectors
+        )
     }
 }
 

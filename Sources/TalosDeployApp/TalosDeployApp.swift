@@ -554,26 +554,32 @@ private struct DeviceNetworkEditor: View {
                     TextField("eno1", text: networkStringBinding(\.managementInterface))
                         .textFieldStyle(.roundedBorder)
                         .fieldHelp("Final Talos management NIC name; use the captured/Core NIC or enter the expected post-boot interface.")
+                    Text("NIC MAC")
+                    TextField("3c:a8:2a:00:00:01", text: networkStringBinding(\.managementHardwareAddress))
+                        .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Optional management NIC hardware address. When present, Talos selects the NIC by MAC instead of relying on interface names.")
+                }
+                GridRow {
                     Text("Static CIDR")
                     TextField("198.51.100.20/24", text: networkStringBinding(\.managementAddressCIDR))
                         .textFieldStyle(.roundedBorder)
                         .fieldHelp("Static management IP with prefix length for the Talos machine config; DHCP is only for live boot.")
-                }
-                GridRow {
                     Text("Gateway")
                     TextField("198.51.100.1", text: networkStringBinding(\.gateway))
                         .textFieldStyle(.roundedBorder)
                         .fieldHelp("Default gateway for the final static Talos network.")
+                }
+                GridRow {
                     Text("DNS")
                     TextField("198.51.100.53,8.8.8.8", text: networkListBinding(\.nameservers))
                         .textFieldStyle(.roundedBorder)
                         .fieldHelp("Comma-separated DNS servers rendered into the machine config.")
-                }
-                GridRow {
                     Text("Search Domains")
                     TextField("lab.example,example.test", text: networkListBinding(\.searchDomains))
                         .textFieldStyle(.roundedBorder)
                         .fieldHelp("Comma-separated DNS search domains for the node.")
+                }
+                GridRow {
                     Text("Manual Plan")
                     TextField("/path/to/network-plan.yaml", text: Binding(
                         get: { controller.binding(for: device).manualNetworkPlanPath },
@@ -933,6 +939,8 @@ private struct SettingsRootView: View {
                     .fieldHelp("Lets tds serve Talos ISO media from the Ubuntu deployer when OOB controllers can reach it.")
                 Toggle("Allow deployer PXE", isOn: $controller.settings.talos.provisioning.allowDeployerPXE)
                     .fieldHelp("Lets tds configure deployer-managed dnsmasq/PXE for nodes that should boot over the data network.")
+                Toggle("Use OOB NIC MAC selectors", isOn: $controller.settings.talos.provisioning.useOOBHardwareAddressSelectors)
+                    .fieldHelp("When Hammertime/iLO can read physical NIC MACs, tds renders Talos management networking with deviceSelector.hardwareAddr for safer interface matching.")
                 Toggle("Allow external OOB URL", isOn: $controller.settings.talos.provisioning.allowExternalOOBURL)
                     .fieldHelp("Allows OOB controllers to boot media from an operator-configured external URL when that network path exists.")
                 TextField("External OOB media base URL", text: $controller.settings.talos.provisioning.externalOOBMediaBaseURL)

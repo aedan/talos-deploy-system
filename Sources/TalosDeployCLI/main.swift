@@ -394,7 +394,12 @@ struct TalosDeployCLI {
             coreSettings: settings.core,
             hammertimeSettings: settings.hammertime
         )
-        let coordinator = DeploymentCoordinator(settings: settings, coreClient: coreClient)
+        let oobHardwareClient = makeOOBHardwareInventoryClient(settings: settings)
+        let coordinator = DeploymentCoordinator(
+            settings: settings,
+            coreClient: coreClient,
+            oobHardwareInventoryClient: oobHardwareClient
+        )
         let state = try await coordinator.stage(spec: spec, at: paths.stateDirectory)
         let dryRun = parseBool(options["dry-run"]) ?? !(parseBool(options["execute"]) ?? false)
         let run = try await coordinator.run(
@@ -405,6 +410,15 @@ struct TalosDeployCLI {
         )
         let data = try JSONEncoder.pretty.encode(run)
         print(String(decoding: data, as: UTF8.self))
+    }
+
+    private static func makeOOBHardwareInventoryClient(settings: AppSettings) -> (any OOBHardwareInventoryClient)? {
+        guard settings.hammertime.enabled,
+              settings.talos.provisioning.useOOBHardwareAddressSelectors
+        else {
+            return nil
+        }
+        return HammertimeOOBHardwareInventoryClient(settings: settings.hammertime)
     }
 
     private static func handleDeployVerify(arguments: [String]) throws {

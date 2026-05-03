@@ -23,7 +23,7 @@ Release artifacts are unsigned and not notarized during alpha. macOS may require
 
 - `tds.app`: SwiftUI desktop UI for Core session discovery, account lookup, physical-server filtering/search, role assignment, deployer bootstrap, OOB local media, static networking, Talos version selection, deployment staging, resume, and settings.
 - `tds`: CLI for testing, automation, and repeatable runbooks.
-- `TalosDeployCore`: shared Swift core for Core inventory, Hammertime integration, OOB planning, Ubuntu autoinstall media, deployer service planning, Talos artifact rendering, and deployment orchestration.
+- `TalosDeployCore`: shared Swift core for Core inventory, Hammertime integration, OOB hardware enrichment, Ubuntu autoinstall media, deployer service planning, Talos artifact rendering, and deployment orchestration.
 - Core bridge: bundled Python bridge used to query Core through an active hammertime-authenticated environment.
 
 ## Build And Run
@@ -56,7 +56,7 @@ Use fake account numbers in examples and docs. Real account numbers belong in op
 4. Use the inventory search field to find physical servers by name, ID, IP, OOB IP, platform/model, or role.
 5. Select one physical device as `deployer`. If it needs Ubuntu reinstalled, leave install enabled and type the destructive confirmation.
 6. Assign Talos nodes as `controlplane` or `worker`.
-7. Review static networking for every Talos node. DHCP may be used for live boot only; final machine configs require static management IPs from Core, capture, or manual overrides.
+7. Review static networking for every Talos node. DHCP may be used for live boot only; final machine configs require static management IPs from Core, capture, or manual overrides. When enabled, `tds` reads iLO/HPE NIC MACs through Hammertime and renders Talos management networking with `deviceSelector.hardwareAddr` instead of trusting OS interface names.
 8. In Settings, refresh Talos versions from Image Factory and select the version to deploy. Manual override remains available if Factory is unreachable.
 9. Use `Bootstrap Deployer` to capture/build/validate Ubuntu media and attach it through the embedded iLO local-media WebView when the OOB network cannot fetch external media.
 10. Stage and run deployment. After Ubuntu is online, `tds` installs deployer services, stages Talos artifacts, boots nodes, applies configs, bootstraps etcd, fetches kubeconfig, and verifies health.
@@ -90,6 +90,7 @@ Talos Defaults:
 - Default extensions are `siderolabs/iscsi-tools`, `siderolabs/util-linux-tools`, and `siderolabs/bnx2-bnx2x`.
 - Longhorn `machine.extraMounts` for `/var/lib/longhorn` are rendered by default.
 - Kernel modules, extra kernel args, architecture, platform, and schematic ID are configurable.
+- OOB NIC MAC selectors are enabled by default. If Hammertime/iLO can expose HPE integrated NIC MACs, `tds` maps names such as `eno1` to the matching physical port and writes `deviceSelector.hardwareAddr` into Talos node patches.
 
 Provisioning Priority:
 
@@ -234,9 +235,9 @@ Procedure:
 3. Query Core inventory with `tds devices --account "$TDS_E2E_ACCOUNT" --source auto --output json`.
 4. Confirm exactly 13 physical-server-eligible devices whose names contain `lab2`; fail the preflight otherwise.
 5. Select the Lab2 director as `deployer`, 3 controller-named devices as `controlplane`, and every other Lab2 physical server as `worker`.
-6. Save Core inventory, OOB metadata, and any reachable `ht raxfacts`/live facts under `$TDS_E2E_OUTPUT`.
+6. Save Core inventory, OOB metadata, OOB NIC MAC enrichment events, and any reachable `ht raxfacts`/live facts under `$TDS_E2E_OUTPUT`.
 7. If live facts are unavailable on some nodes, use the proven Lab2 director topology as the network template and override each node’s static management IP from Core.
-8. Validate static management CIDR, gateway, DNS, VLANs, bridges, bridge ports, routes, and install disk for every Talos node before destructive actions.
+8. Validate static management CIDR, management NIC MAC or interface selector, gateway, DNS, VLANs, bridges, bridge ports, routes, and install disk for every Talos node before destructive actions.
 9. Build and validate the Ubuntu deployer ISO, attach it through `tds.app` local media, and verify the deployer returns with Ubuntu, SSH, `rack`, `root`, and preserved networking.
 10. Prepare deployer services, stage Talos artifacts, provision nodes, apply machine configs, bootstrap etcd, fetch kubeconfig, and verify Talos/Kubernetes health.
 

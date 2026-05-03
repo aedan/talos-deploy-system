@@ -410,6 +410,117 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("gateway: 198.51.101.36"))
     }
 
+    func testTalosBuilderRendersManagementDeviceSelectorWhenMACIsKnown() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
+        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
+        let cpAssignment = DeviceAssignment(
+            deviceID: "cp1",
+            role: .controlplane,
+            shouldInstallOS: true,
+            staticNetwork: StaticNetworkConfig(
+                managementInterface: "eno1",
+                managementHardwareAddress: "3c:a8:2a:1c:a0:28",
+                managementAddressCIDR: "198.51.100.10/22",
+                gateway: "198.51.100.1",
+                nameservers: ["203.0.113.53"],
+                routes: [StaticNetworkRoute(to: "default", via: "198.51.100.1")]
+            )
+        )
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer)),
+                DeploymentNodeSpec(device: cp, assignment: cpAssignment),
+            ]
+        )
+
+        let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
+        let output = try await DefaultTalosBuilder().buildArtifacts(for: spec, plan: plan, in: temp)
+        let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+
+        XCTAssertTrue(patch.contains("      - deviceSelector:\n          hardwareAddr: 3c:a8:2a:1c:a0:28"))
+        XCTAssertFalse(patch.contains("      - interface: eno1\n        addresses:"))
+        XCTAssertTrue(patch.contains("addresses:\n          - 198.51.100.10/22"))
+    }
+
+    func testOOBIntegratedNICParserReadsHPEPortMACs() {
+        let output = """
+        status=0
+        iLO4_MACAddress=38:63:bb:32:02:d6
+        Port1NIC_MACAddress=3c:a8:2a:1c:a0:28
+        Port2NIC_MACAddress=3c:a8:2a:1c:a0:29
+        """
+
+        let ports = HPEIntegratedNICParser().parse(output)
+
+        XCTAssertEqual(ports.count, 3)
+        XCTAssertEqual(ports.first(where: { $0.label == "Port1NIC" })?.portNumber, 1)
+        XCTAssertEqual(ports.first(where: { $0.label == "Port1NIC" })?.macAddress, "3c:a8:2a:1c:a0:28")
+        XCTAssertTrue(ports.first(where: { $0.label == "iLO4" })?.isManagementPort == true)
+    }
+
+    func testCoordinatorEnrichesManagementMACFromOOBBeforeStaging() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
+        let cp = DiscoveredDevice(
+            id: "716182",
+            accountNumber: "0000000",
+            name: "716182-lab2-controller01",
+            primaryIP: "207.97.193.227",
+            privateIP: "172.22.220.227",
+            networkInterfaces: [
+                NetworkInterface(name: "L2-DEPLOY-MGMT", addresses: ["172.22.220.227/22"]),
+            ]
+        )
+        let cpAssignment = DeviceAssignment(
+            deviceID: "716182",
+            role: .controlplane,
+            shouldInstallOS: true,
+            staticNetwork: StaticNetworkConfig(
+                managementInterface: "eno1",
+                managementAddressCIDR: "172.22.220.227/22",
+                gateway: "172.22.220.1",
+                nameservers: ["172.22.216.10"],
+                routes: [StaticNetworkRoute(to: "default", via: "172.22.220.1")]
+            )
+        )
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer)),
+                DeploymentNodeSpec(device: cp, assignment: cpAssignment),
+            ]
+        )
+        let inventory = MockOOBHardwareInventoryClient(
+            ports: [
+                OOBNetworkPort(label: "iLO4", macAddress: "38:63:bb:32:02:d6", isManagementPort: true),
+                OOBNetworkPort(label: "Port1NIC", macAddress: "3c:a8:2a:1c:a0:28", portNumber: 1),
+            ]
+        )
+
+        let state = try await DeploymentCoordinator(
+            settings: AppSettings(),
+            oobHardwareInventoryClient: inventory
+        ).stage(spec: spec, at: temp)
+        let stateDirectory = URL(fileURLWithPath: state.localStateDirectory, isDirectory: true)
+        let patch = try String(contentsOf: stateDirectory.appending(path: "node-patches/716182-lab2-controller01.yaml"), encoding: .utf8)
+
+        XCTAssertEqual(inventory.requests, ["716182"])
+        XCTAssertTrue(state.events.contains { $0.message.contains("Selected OOB NIC MAC 3c:a8:2a:1c:a0:28") })
+        XCTAssertTrue(patch.contains("hardwareAddr: 3c:a8:2a:1c:a0:28"))
+    }
+
     func testBridgeSessionDetectionParsesHammertimeCachePayload() async throws {
         let runner = MockCommandRunner(
             responses: [
@@ -1329,6 +1440,20 @@ private final class MockOOBBooter: OOBNodeBooting, @unchecked Sendable {
             rebooted: request.reboot,
             steps: [OOBBootURLStep(name: "mock", stdout: "pxe")]
         )
+    }
+}
+
+private final class MockOOBHardwareInventoryClient: OOBHardwareInventoryClient, @unchecked Sendable {
+    private let ports: [OOBNetworkPort]
+    private(set) var requests: [String] = []
+
+    init(ports: [OOBNetworkPort]) {
+        self.ports = ports
+    }
+
+    func fetchNetworkPorts(deviceID: String, proxyVia: String?) async throws -> [OOBNetworkPort] {
+        requests.append(deviceID)
+        return ports
     }
 }
 

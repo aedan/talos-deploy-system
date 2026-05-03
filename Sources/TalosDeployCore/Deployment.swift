@@ -426,8 +426,8 @@ public struct StaticNetworkPlanner: Sendable {
             errors.append("No network source is available. Provide manual static networking before deployment.")
         }
 
-        if config.managementInterface.isEmpty {
-            errors.append("Missing management interface.")
+        if config.managementInterface.isEmpty && config.managementHardwareAddress.isEmpty {
+            errors.append("Missing management interface or management NIC hardware address.")
         }
         if config.managementAddressCIDR.isEmpty {
             errors.append("Missing static management address with CIDR from Core, capture, or manual input.")
@@ -688,6 +688,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
     private func renderNodePatch(node: DeploymentNodeSpec, spec: DeploymentSpec) -> String {
         let staticConfig = StaticNetworkPlanner().config(for: node)
         let interfaceName = firstNonEmptyStatic(staticConfig.managementInterface, node.device.networkInterfaces.first?.name ?? "eth0")
+        let managementHardwareAddress = staticConfig.managementHardwareAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         let installerImage = TalosFactoryClient().artifactURLs(settings: spec.talosFactory, talosVersion: spec.talosVersion).installerImage
         var lines = [
             "machine:",
@@ -698,7 +699,12 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         lines.append("  network:")
         lines.append(contentsOf: renderNameservers(staticConfig))
         lines.append("    interfaces:")
-        lines.append("      - interface: \(interfaceName)")
+        if !managementHardwareAddress.isEmpty {
+            lines.append("      - deviceSelector:")
+            lines.append("          hardwareAddr: \(yamlScalar(managementHardwareAddress))")
+        } else {
+            lines.append("      - interface: \(interfaceName)")
+        }
         if !staticConfig.managementAddressCIDR.isEmpty {
             lines.append("        addresses:")
             lines.append("          - \(staticConfig.managementAddressCIDR)")
@@ -1165,6 +1171,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
     private let builder: TalosBuilder
     private let deployerHostClient: DeployerHostClient
     private let coreClient: CoreClient?
+    private let oobHardwareInventoryClient: (any OOBHardwareInventoryClient)?
     private let stateStore: DeploymentStateStore
     private let fileManager: FileManager
 
@@ -1173,6 +1180,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         builder: TalosBuilder = DefaultTalosBuilder(),
         deployerHostClient: DeployerHostClient = DefaultDeployerHostClient(),
         coreClient: CoreClient? = nil,
+        oobHardwareInventoryClient: (any OOBHardwareInventoryClient)? = nil,
         stateStore: DeploymentStateStore = DeploymentStateStore(),
         fileManager: FileManager = .default
     ) {
@@ -1180,11 +1188,14 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         self.builder = builder
         self.deployerHostClient = deployerHostClient
         self.coreClient = coreClient
+        self.oobHardwareInventoryClient = oobHardwareInventoryClient
         self.stateStore = stateStore
         self.fileManager = fileManager
     }
 
     public func stage(spec: DeploymentSpec, at baseDirectory: URL) async throws -> DeploymentState {
+        let enrichment = await enrichSpecForOOBHardwareSelectors(spec)
+        let spec = enrichment.spec
         let planner = DeploymentPlanner(settings: settings)
         let plan = try planner.makePlan(spec: spec)
         let localStateDirectory = baseDirectory.appending(path: spec.accountNumber).appending(path: spec.clusterName)
@@ -1193,7 +1204,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         var state = DeploymentState(
             spec: spec,
             plan: plan,
-            events: [DeploymentEvent(message: "Deployment staged locally.")],
+            events: [DeploymentEvent(message: "Deployment staged locally.")] + enrichment.events.map { DeploymentEvent(message: $0) },
             localStateDirectory: localStateDirectory.path,
             deployerSynchronized: false
         )
@@ -1201,6 +1212,18 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         state.events.append(DeploymentEvent(message: "Maintenance bundle generated for deployer-owned operations."))
         _ = try stateStore.save(state, to: localStateDirectory)
         return state
+    }
+
+    private func enrichSpecForOOBHardwareSelectors(_ spec: DeploymentSpec) async -> OOBNetworkSelectorEnrichment {
+        guard let oobHardwareInventoryClient,
+              spec.talosProvisioning.useOOBHardwareAddressSelectors
+        else {
+            return OOBNetworkSelectorEnrichment(spec: spec)
+        }
+        return await OOBNetworkSelectorEnricher(client: oobHardwareInventoryClient).enrich(
+            spec: spec,
+            proxyVia: settings.hammertime.deployerVia
+        )
     }
 
     public func synchronizeToDeployer(_ state: DeploymentState, connection: SSHConnection) async throws -> DeploymentState {
@@ -1798,7 +1821,10 @@ public final class AppController: ObservableObject {
                 return DeploymentNodeSpec(device: device, assignment: assignment)
             }
         )
-        let coordinator = DeploymentCoordinator(settings: settings)
+        let coordinator = DeploymentCoordinator(
+            settings: settings,
+            oobHardwareInventoryClient: makeOOBHardwareInventoryClient()
+        )
         do {
             try? paths.ensureExists()
             let state = try await coordinator.stage(spec: spec, at: paths.stateDirectory)
@@ -1822,7 +1848,10 @@ public final class AppController: ObservableObject {
     }
 
     private func runDeployment(state: DeploymentState, dryRun: Bool) async {
-        let coordinator = DeploymentCoordinator(settings: settings)
+        let coordinator = DeploymentCoordinator(
+            settings: settings,
+            oobHardwareInventoryClient: makeOOBHardwareInventoryClient()
+        )
         do {
             let run = try await coordinator.run(state: state, dryRun: dryRun)
             lastRun = run
@@ -1832,6 +1861,15 @@ public final class AppController: ObservableObject {
         } catch {
             statusMessage = error.localizedDescription
         }
+    }
+
+    private func makeOOBHardwareInventoryClient() -> (any OOBHardwareInventoryClient)? {
+        guard settings.hammertime.enabled,
+              settings.talos.provisioning.useOOBHardwareAddressSelectors
+        else {
+            return nil
+        }
+        return HammertimeOOBHardwareInventoryClient(settings: settings.hammertime)
     }
 
     public func refreshUbuntuNetworkPlan() {
