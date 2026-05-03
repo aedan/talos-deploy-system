@@ -150,10 +150,16 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
 
     public func copy(localPath: URL, remotePath: String, delete: Bool) async throws {
         _ = try await run("mkdir -p \(shellEscape(remotePath))", timeout: TimeInterval(settings.commandTimeoutSeconds))
+        let source = try hammertimeSafeSource(for: localPath)
+        defer {
+            if let cleanupURL = source.cleanupURL {
+                try? FileManager.default.removeItem(at: cleanupURL)
+            }
+        }
         var arguments = commonArguments() + [
             "copy",
         ] + commandOptions() + [
-            "--src", localPath.path + (localPath.hasDirectoryPath ? "/" : ""),
+            "--src", source.path + (source.isDirectory ? "/" : ""),
             "--dest", "\(deviceID):\(remotePath)/",
             "--method", copyMethod,
         ]
@@ -220,6 +226,25 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
 
     private func copyMethodOptions() -> [String] {
         copyMethod.isEmpty ? [] : ["--method", copyMethod]
+    }
+
+    private func hammertimeSafeSource(for localPath: URL) throws -> HammertimeCopySource {
+        guard localPath.path.contains(" ") else {
+            return HammertimeCopySource(path: localPath.path, isDirectory: localPath.hasDirectoryPath, cleanupURL: nil)
+        }
+
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appending(path: "tds-ht-copy-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        let linkURL = temporaryDirectory.appending(path: localPath.lastPathComponent, directoryHint: localPath.hasDirectoryPath ? .isDirectory : .notDirectory)
+        try FileManager.default.createSymbolicLink(at: linkURL, withDestinationURL: localPath)
+        return HammertimeCopySource(path: linkURL.path, isDirectory: localPath.hasDirectoryPath, cleanupURL: temporaryDirectory)
+    }
+
+    private struct HammertimeCopySource {
+        var path: String
+        var isDirectory: Bool
+        var cleanupURL: URL?
     }
 }
 

@@ -576,6 +576,31 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(runner.invocations[3].arguments.contains("--root"))
     }
 
+    func testHammertimeCopyUsesNoSpaceTemporarySourceForApplicationSupportPaths() async throws {
+        let runner = MockCommandRunner(
+            responses: [
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "", exitCode: 0),
+            ]
+        )
+        let transport = HammertimeDeployerTransport(
+            settings: HammertimeSettings(binaryPath: "/tmp/ht", copyMethod: "rsync"),
+            deviceID: "716181",
+            runner: runner
+        )
+        let temp = FileManager.default.temporaryDirectory
+            .appending(path: "Application Support", directoryHint: .isDirectory)
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+
+        try await transport.copy(localPath: temp, remotePath: "/var/lib/talos-deploy/test", delete: false)
+
+        let sourceIndex = try XCTUnwrap(runner.invocations[1].arguments.firstIndex(of: "--src"))
+        let source = runner.invocations[1].arguments[sourceIndex + 1]
+        XCTAssertFalse(source.contains("Application Support"))
+        XCTAssertTrue(source.contains("tds-ht-copy-"))
+    }
+
     func testTransportResolverFallsBackFromSSHToHammertime() async throws {
         let runner = MockCommandRunner(
             responses: [
