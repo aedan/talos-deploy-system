@@ -395,6 +395,7 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
     }
 
     private func runOOBCommand(name: String, command: String, request: OOBBootURLRequest) async throws -> OOBBootURLStep {
+        tdsProgress("OOB \(request.deviceID) \(name): \(command)")
         var arguments = ["--batch", "--no-colors"]
         if settings.skipDeviceChecks {
             arguments.append("--no-checks")
@@ -411,16 +412,20 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
             currentDirectory: nil,
             timeout: TimeInterval(max(settings.timeoutSeconds, 120))
         )
+        tdsProgress("OOB \(request.deviceID) \(name) completed")
         return OOBBootURLStep(name: name, stdout: result.stdout)
     }
 
     private func rebootSteps(for request: OOBBootURLRequest) async throws -> [OOBBootURLStep] {
         var steps: [OOBBootURLStep] = []
         steps.append(await runBestEffortOOBCommand(name: "clp-system-reset", command: "reset /system1", request: request))
+        tdsProgress("OOB \(request.deviceID) waiting after system reset")
         await sleepIfNeeded(clpResetDelayNanoseconds)
         steps.append(await runBestEffortOOBCommand(name: "clp-power-off", command: "stop /system1", request: request))
+        tdsProgress("OOB \(request.deviceID) waiting after power off")
         await sleepIfNeeded(clpPowerOffDelayNanoseconds)
         steps.append(await runBestEffortOOBCommand(name: "clp-power-on", command: "start /system1", request: request))
+        tdsProgress("OOB \(request.deviceID) waiting after power on")
         await sleepIfNeeded(clpPowerOnDelayNanoseconds)
         if steps.allSatisfy({ $0.stdout.contains("Best-effort OOB command failed") }) {
             steps.append(try await runOOBCommand(name: "power-reset", command: "power reset", request: request))

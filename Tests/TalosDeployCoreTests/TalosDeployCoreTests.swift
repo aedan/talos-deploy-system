@@ -987,6 +987,8 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertEqual(oob.urlRequests.map(\.deviceID), ["cp1"])
         XCTAssertEqual(oob.urlRequests.first?.imageURL, "http://198.51.100.20:8080/talos-v1.13.0-cp1.iso")
         XCTAssertTrue(execution.0.executedActions.contains { $0.contains("OOB URL boot connected") })
+        XCTAssertTrue(runner.invocations.first?.arguments.last?.contains("systemctl restart tds-media-http.service") == true)
+        XCTAssertTrue(runner.invocations.first?.arguments.last?.contains("socket.create_connection") == true)
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("tds-registry-address.service") == true })
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("addr replace '198.51.100.55/32' dev 'br-ctlplane'") == true })
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("chown -R docker-registry:docker-registry '/var/lib/talos-deploy/registry'") == true })

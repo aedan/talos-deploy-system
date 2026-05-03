@@ -358,15 +358,28 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         if command -v curl >/dev/null 2>&1 && [ ! -f \(shellEscape(talosISOPath)) ]; then
           curl -fL -o \(shellEscape(talosISOPath)) \(shellEscape(state.plan.talosArtifacts.isoURL)) || true
         fi
+        if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files tds-media-http.service >/dev/null 2>&1; then
+          sudo systemctl restart tds-media-http.service || true
+        fi
         if [ -f \(shellEscape("\(configuration.stateRoot)/media-service.env")) ]; then
           . \(shellEscape("\(configuration.stateRoot)/media-service.env"))
-          sh -c "$START_COMMAND" || true
+          http_check_host="$HTTP_BIND"
+          if [ "$http_check_host" = "0.0.0.0" ]; then
+            http_check_host="127.0.0.1"
+          fi
+          if ! python3 -c 'import socket,sys; s=socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=2); s.close()' "$http_check_host" "$HTTP_PORT" >/dev/null 2>&1; then
+            sh -c "$START_COMMAND" || true
+          fi
         fi
         """
+        tdsProgress("Preparing deployer-hosted Talos ISO and media service")
         _ = try await transport.run(startMediaCommand, timeout: 900)
+        tdsProgress("Deployer-hosted Talos media service is ready")
         executedActions.append("Prepared deployer-hosted Talos media at \(talosISOPath).")
         if !registryCacheCommand.isEmpty {
+            tdsProgress("Caching Talos installer image in deployer registry")
             _ = try await transport.run(registryCacheCommand, timeout: 1800)
+            tdsProgress("Talos installer image is cached in deployer registry")
             executedActions.append("Cached Talos installer image in deployer registry at \(registryInstallerImage ?? "configured registry").")
             if !state.spec.talosProvisioning.deployerRegistryAddressCIDR.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 executedActions.append("Ensured deployer node-facing registry address \(state.spec.talosProvisioning.deployerRegistryAddressCIDR).")
@@ -382,11 +395,15 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         TDS_TALOS_VERSION=\(shellEscape(state.spec.talosVersion)) \\
         ./maintenance/tds-prepare-talos-media.sh
         """
+        tdsProgress("Generating node-specific Talos machine configs and boot media")
         _ = try await transport.run(prepareMediaCommand, timeout: 1800)
+        tdsProgress("Node-specific Talos boot media generated")
         executedActions.append("Generated node-specific Talos boot media with embedded machine configs.")
 
         for install in talosInstalls {
+            tdsProgress("Provisioning \(install.device.name) (\(install.device.id)) as \(install.assignment.role.displayName) using \(install.method.rawValue)")
             let result = try await provisionTalosNode(install, mediaBaseURL: mediaBaseURL, state: state)
+            tdsProgress("Provisioning request completed for \(install.device.name) (\(install.device.id))")
             executedActions.append(contentsOf: result.executedActions)
             warnings.append(contentsOf: result.warnings)
         }
@@ -396,7 +413,9 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         TDS_MEDIA_ROOT=\(shellEscape(configuration.mediaRoot)) \\
         ./maintenance/tds-run-talos-deploy.sh
         """
+        tdsProgress("Running deployer-owned Talos apply/bootstrap/health script")
         _ = try await transport.run(bootstrapCommand, timeout: 3600)
+        tdsProgress("Deployer-owned Talos apply/bootstrap/health script completed")
         executedActions.append("Ran deployer-owned Talos apply/bootstrap/health script.")
 
         let firstControlPlane = state.spec.nodes.first { $0.assignment.role == .controlplane }
