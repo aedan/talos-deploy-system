@@ -1628,6 +1628,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         var updated = state
         var servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
         let localDirectory = URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)
+        _ = try await builder.buildArtifacts(for: updated.spec, plan: updated.plan, in: localDirectory)
         let maintenanceBundle = try MaintenanceBundleBuilder(fileManager: fileManager).writeBundle(for: updated, in: localDirectory)
 
         if dryRun {
