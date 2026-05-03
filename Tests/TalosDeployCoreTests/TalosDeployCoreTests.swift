@@ -565,11 +565,14 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(runner.invocations[0].arguments.contains("--via"))
         XCTAssertTrue(runner.invocations[0].arguments.contains("ORD"))
         XCTAssertTrue(runner.invocations[0].arguments.contains("--private"))
+        XCTAssertTrue(runner.invocations[0].arguments.contains("--method"))
+        XCTAssertTrue(runner.invocations[0].arguments.contains("rsync"))
         XCTAssertTrue(runner.invocations[0].arguments.contains("716181"))
         XCTAssertTrue(runner.invocations[2].arguments.contains("copy"))
         XCTAssertTrue(runner.invocations[2].arguments.contains("--dest"))
         XCTAssertTrue(runner.invocations[2].arguments.contains("716181:/var/lib/talos-deploy/test/"))
         XCTAssertTrue(runner.invocations[3].arguments.contains("script"))
+        XCTAssertTrue(runner.invocations[3].arguments.contains("--method"))
         XCTAssertTrue(runner.invocations[3].arguments.contains("--root"))
     }
 

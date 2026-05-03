@@ -141,7 +141,7 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
     public func run(_ remoteCommand: String, timeout: TimeInterval? = nil) async throws -> CommandResult {
         try await runner.run(
             settings.binaryPath.expandingTildeInPath(),
-            arguments: commonArguments() + ["command"] + commandOptions() + ["--command", remoteCommand, deviceID],
+            arguments: commonArguments() + ["command"] + commandOptions() + copyMethodOptions() + ["--command", remoteCommand, deviceID],
             environment: [:],
             currentDirectory: nil,
             timeout: timeout ?? TimeInterval(settings.commandTimeoutSeconds)
@@ -179,7 +179,7 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
         ] + commandOptions() + [
             "--file", scriptURL.path,
             "--format", "raw",
-        ]
+        ] + copyMethodOptions()
         if asRoot {
             htArguments.append("--root")
         }
@@ -216,6 +216,10 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
             arguments.append(contentsOf: ["--passport-reason", passportReason])
         }
         return arguments
+    }
+
+    private func copyMethodOptions() -> [String] {
+        copyMethod.isEmpty ? [] : ["--method", copyMethod]
     }
 }
 
