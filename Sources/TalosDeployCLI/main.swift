@@ -433,7 +433,10 @@ struct TalosDeployCLI {
         let options = parseOptions(Array(arguments.dropFirst()))
         let settings = (try? SettingsController().load()) ?? AppSettings()
         let client = DefaultDeployerHostClient()
-        let configuration = DeployerMediaServiceConfiguration(defaults: settings.deployer)
+        var configuration = DeployerMediaServiceConfiguration(defaults: settings.deployer)
+        if configuration.talosctlVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            configuration.talosctlVersion = options["talos-version"] ?? settings.talos.talosVersion
+        }
         switch subcommand {
         case "plan":
             let plan = client.planDeployerServices(configuration: configuration)

@@ -1238,7 +1238,10 @@ public final class DeploymentCoordinator: @unchecked Sendable {
     ) async throws -> TalosExecutionRun {
         let deployer = state.plan.deployer
         let hostname = DeployerNaming().hostname(for: deployer.device, suffix: settings.deployer.hostnameSuffix)
-        let serviceConfiguration = DeployerMediaServiceConfiguration(defaults: settings.deployer)
+        var serviceConfiguration = DeployerMediaServiceConfiguration(defaults: settings.deployer)
+        if serviceConfiguration.talosctlVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            serviceConfiguration.talosctlVersion = state.spec.talosVersion
+        }
         var updated = state
         var servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
         let renameResult: CoreRenameResult?
