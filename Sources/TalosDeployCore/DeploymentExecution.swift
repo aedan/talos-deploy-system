@@ -269,7 +269,7 @@ public struct MaintenanceBundleBuilder {
             xorriso -osirrox on -indev "$TDS_BASE_TALOS_ISO" \\
               -extract /boot/grub/grub.cfg "$work/grub.cfg" >/dev/null 2>&1
             meta_payload="$( { printf '0xa='; cat "${meta_path}"; } | gzip -9 | base64 | tr -d '\\n' )"
-            sed -i "s/talos.platform=metal /talos.platform=metal talos.environment=INSTALLER_META_BASE64=${meta_payload} ${TDS_TALOS_BOOT_ARGS_EXTRA} /g" "$work/grub.cfg"
+            sed -i "s|talos.platform=metal |talos.platform=metal talos.environment=INSTALLER_META_BASE64=${meta_payload} ${TDS_TALOS_BOOT_ARGS_EXTRA} |g" "$work/grub.cfg"
             xorriso -indev "$TDS_BASE_TALOS_ISO" -outdev "$out.tmp" \\
               -volid metal-iso \\
               -map "$work/grub.cfg" /boot/grub/grub.cfg \\
