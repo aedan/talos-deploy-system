@@ -224,6 +224,7 @@ public struct OOBBootURLRequest: Codable, Equatable, Sendable {
     public var oneTimeBoot: String?
     public var reboot: Bool
     public var proxyVia: String?
+    public var oobVendor: OOBVendor
 
     public init(
         deviceID: String,
@@ -232,7 +233,8 @@ public struct OOBBootURLRequest: Codable, Equatable, Sendable {
         bootOnce: Bool = true,
         oneTimeBoot: String? = nil,
         reboot: Bool = false,
-        proxyVia: String? = nil
+        proxyVia: String? = nil,
+        oobVendor: OOBVendor = .unknown
     ) {
         self.deviceID = deviceID
         self.imageURL = imageURL
@@ -241,6 +243,7 @@ public struct OOBBootURLRequest: Codable, Equatable, Sendable {
         self.oneTimeBoot = oneTimeBoot
         self.reboot = reboot
         self.proxyVia = proxyVia
+        self.oobVendor = oobVendor
     }
 }
 
@@ -343,9 +346,13 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
         steps.append(try await runOOBCommand(name: "media-status", command: "vm cdrom get", request: request))
         if request.reboot {
             steps.append(try await runOOBCommand(name: "power-reset", command: "power reset", request: request))
+            steps.append(await runBestEffortOOBCommand(name: "clp-system-reset", command: "reset /system1", request: request))
+            steps.append(await runBestEffortOOBCommand(name: "post-reset-media-status", command: "vm cdrom get", request: request))
         }
 
-        let status = steps.last(where: { $0.name == "media-status" })?.stdout ?? ""
+        let status = steps.last(where: { $0.name == "post-reset-media-status" })?.stdout
+            ?? steps.last(where: { $0.name == "media-status" })?.stdout
+            ?? ""
         return OOBBootURLResult(
             deviceID: request.deviceID,
             imageURL: request.imageURL,
@@ -365,6 +372,7 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
         steps.append(try await runOOBCommand(name: "one-time-pxe", command: "onetimeboot \(request.oneTimeBoot)", request: request.asURLRequest()))
         if request.reboot {
             steps.append(try await runOOBCommand(name: "power-reset", command: "power reset", request: request.asURLRequest()))
+            steps.append(await runBestEffortOOBCommand(name: "clp-system-reset", command: "reset /system1", request: request.asURLRequest()))
         }
         return OOBPXEBootResult(
             deviceID: request.deviceID,
@@ -393,6 +401,14 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
         )
         return OOBBootURLStep(name: name, stdout: result.stdout)
     }
+
+    private func runBestEffortOOBCommand(name: String, command: String, request: OOBBootURLRequest) async -> OOBBootURLStep {
+        do {
+            return try await runOOBCommand(name: name, command: command, request: request)
+        } catch {
+            return OOBBootURLStep(name: name, stdout: "Best-effort OOB command failed: \(error.localizedDescription)")
+        }
+    }
 }
 
 private extension OOBPXEBootRequest {
@@ -404,7 +420,8 @@ private extension OOBPXEBootRequest {
             bootOnce: false,
             oneTimeBoot: oneTimeBoot,
             reboot: reboot,
-            proxyVia: proxyVia
+            proxyVia: proxyVia,
+            oobVendor: .unknown
         )
     }
 }

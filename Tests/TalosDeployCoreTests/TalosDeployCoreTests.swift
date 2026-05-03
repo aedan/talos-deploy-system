@@ -531,6 +531,79 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(HammertimeSettings().skipDeviceChecks)
     }
 
+    func testHammertimeOOBBooterAddsCLPResetFallbackAfterPowerReset() async throws {
+        let runner = MockCommandRunner(
+            responses: [
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "inserted", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "connected", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "boot once", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "power reset", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "clp reset", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = NO_BOOT", stderr: "", exitCode: 0),
+            ]
+        )
+        let booter = HammertimeOOBBooter(
+            settings: HammertimeSettings(binaryPath: "/tmp/ht", timeoutSeconds: 30),
+            runner: runner
+        )
+
+        let result = try await booter.bootURL(
+            OOBBootURLRequest(
+                deviceID: "716182",
+                imageURL: "http://10.0.0.1:8080/talos.iso",
+                reboot: true,
+                oobVendor: .ilo
+            )
+        )
+
+        let commands = runner.invocations.compactMap { invocation -> String? in
+            guard let index = invocation.arguments.firstIndex(of: "--command") else { return nil }
+            return invocation.arguments[index + 1]
+        }
+        XCTAssertEqual(
+            commands,
+            [
+                "vm cdrom insert http://10.0.0.1:8080/talos.iso",
+                "vm cdrom set connect",
+                "vm cdrom set boot_once",
+                "vm cdrom get",
+                "power reset",
+                "reset /system1",
+                "vm cdrom get",
+            ]
+        )
+        XCTAssertEqual(result.steps.map(\.name).suffix(3), ["power-reset", "clp-system-reset", "post-reset-media-status"])
+        XCTAssertTrue(result.connected)
+        XCTAssertFalse(result.bootOnce)
+    }
+
+    func testHammertimeOOBBooterRecordsUnsupportedCLPResetWithoutFailing() async throws {
+        let runner = MockCommandRunner(
+            responses: [
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "inserted", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "connected", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "boot once", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "power reset", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
+            ]
+        )
+        let booter = HammertimeOOBBooter(
+            settings: HammertimeSettings(binaryPath: "/tmp/ht", timeoutSeconds: 30),
+            runner: runner
+        )
+
+        let result = try await booter.bootURL(
+            OOBBootURLRequest(deviceID: "716182", imageURL: "http://10.0.0.1:8080/talos.iso", reboot: true)
+        )
+
+        let fallback = try XCTUnwrap(result.steps.first(where: { $0.name == "clp-system-reset" }))
+        XCTAssertTrue(fallback.stdout.contains("Best-effort OOB command failed"))
+        XCTAssertTrue(result.bootOnce)
+    }
+
     func testHammertimeInventoryUsesLongEnoughTimeoutForLargeAccounts() async throws {
         let runner = MockCommandRunner(
             responses: [

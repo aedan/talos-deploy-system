@@ -432,7 +432,8 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
                     connectMedia: true,
                     bootOnce: true,
                     reboot: true,
-                    proxyVia: settings.hammertime.deployerVia
+                    proxyVia: settings.hammertime.deployerVia,
+                    oobVendor: install.device.oob?.vendor ?? .unknown
                 )
             )
             let status = result.connected ? "connected" : "requested"
@@ -445,7 +446,8 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
                     connectMedia: true,
                     bootOnce: true,
                     reboot: true,
-                    proxyVia: settings.hammertime.deployerVia
+                    proxyVia: settings.hammertime.deployerVia,
+                    oobVendor: install.device.oob?.vendor ?? .unknown
                 )
             )
             let status = result.connected ? "connected" : "requested"
