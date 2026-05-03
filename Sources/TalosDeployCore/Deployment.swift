@@ -1626,7 +1626,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         }
         serviceConfiguration.registryPort = state.spec.talosProvisioning.deployerRegistryPort
         var updated = state
-        let servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
+        var servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
         let localDirectory = URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)
         let maintenanceBundle = try MaintenanceBundleBuilder(fileManager: fileManager).writeBundle(for: updated, in: localDirectory)
 
@@ -1668,6 +1668,11 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             succeeded: true,
             message: selection.validation.message,
             attempts: selection.failedAttempts + selection.validation.attempts
+        )
+        tdsProgress("Preparing deployer services before resume")
+        servicePlan = try await deployerHostClient.prepareDeployerServices(
+            configuration: serviceConfiguration,
+            transport: transport
         )
         tdsProgress("Syncing updated maintenance bundle before resume")
         updated = try await synchronizeToDeployer(updated, transport: transport)
