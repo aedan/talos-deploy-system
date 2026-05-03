@@ -583,6 +583,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertEqual(result.steps.map(\.name).suffix(4), ["clp-system-reset", "clp-power-off", "clp-power-on", "post-reset-media-status"])
         XCTAssertTrue(result.connected)
         XCTAssertFalse(result.bootOnce)
+        XCTAssertTrue(runner.invocations.allSatisfy { $0.timeout == 120 })
     }
 
     func testHammertimeOOBBooterRecordsUnsupportedCLPResetWithoutFailing() async throws {

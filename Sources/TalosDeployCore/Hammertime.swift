@@ -407,7 +407,7 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
             arguments: arguments,
             environment: [:],
             currentDirectory: nil,
-            timeout: TimeInterval(settings.timeoutSeconds)
+            timeout: TimeInterval(max(settings.timeoutSeconds, 120))
         )
         return OOBBootURLStep(name: name, stdout: result.stdout)
     }
