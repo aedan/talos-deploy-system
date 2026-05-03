@@ -306,13 +306,18 @@ final class TalosDeployCoreTests: XCTestCase {
         decoder.dateDecodingStrategy = .iso8601
         let manifest = try decoder.decode(MaintenanceBundleManifest.self, from: manifestData)
 
+        XCTAssertTrue(manifest.scripts.contains("maintenance/tds-prepare-talos-media.sh"))
         XCTAssertTrue(manifest.scripts.contains("maintenance/tds-run-talos-deploy.sh"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stateDirectory.appending(path: "maintenance/tds-prepare-talos-media.sh").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: stateDirectory.appending(path: "maintenance/health-check.sh").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: stateDirectory.appending(path: "inventory/selected-devices.json").path))
 
         let deployScript = try String(contentsOf: stateDirectory.appending(path: "maintenance/tds-run-talos-deploy.sh"))
         XCTAssertTrue(deployScript.contains("TDS_DEPLOYER_STATE_ROOT='/var/lib/talos-deploy'"))
         XCTAssertTrue(deployScript.contains("${TDS_DEPLOYER_STATE_ROOT}/bin/talosctl"))
+        let prepareScript = try String(contentsOf: stateDirectory.appending(path: "maintenance/tds-prepare-talos-media.sh"))
+        XCTAssertTrue(prepareScript.contains("talos.config=metal-iso"))
+        XCTAssertTrue(prepareScript.contains("talos-v1.13.0-cp1.iso"))
     }
 
     func testDryRunReportsAccessProvisioningAndBootstrapPlan() async throws {
@@ -681,6 +686,7 @@ final class TalosDeployCoreTests: XCTestCase {
             responses: [
                 CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0),
                 CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0),
+                CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0),
             ]
         )
         let transport = DirectSSHDeployerTransport(
@@ -696,7 +702,7 @@ final class TalosDeployCoreTests: XCTestCase {
         )
 
         XCTAssertEqual(oob.urlRequests.map(\.deviceID), ["cp1"])
-        XCTAssertEqual(oob.urlRequests.first?.imageURL, "http://198.51.100.20:8080/talos-v1.13.0.iso")
+        XCTAssertEqual(oob.urlRequests.first?.imageURL, "http://198.51.100.20:8080/talos-v1.13.0-cp1.iso")
         XCTAssertTrue(execution.0.executedActions.contains { $0.contains("OOB URL boot connected") })
         XCTAssertTrue(runner.invocations.last?.arguments.last?.contains("tds-run-talos-deploy.sh") == true)
     }
@@ -871,6 +877,7 @@ final class TalosDeployCoreTests: XCTestCase {
         let plan = DefaultDeployerHostClient().planDeployerServices(configuration: DeployerMediaServiceConfiguration())
 
         XCTAssertTrue(plan.packages.contains("dnsmasq"))
+        XCTAssertTrue(plan.packages.contains("xorriso"))
         XCTAssertTrue(plan.systemdUnits.contains("tds-media-http.service"))
         XCTAssertTrue(plan.systemdUnits.contains("tds-dnsmasq.service"))
         XCTAssertTrue(plan.cacheFallbackCommands.contains { $0.contains("/var/cache/tds") })

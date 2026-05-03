@@ -14,6 +14,7 @@ public struct MaintenanceBundleBuilder {
         try fileManager.createDirectory(at: inventoryDirectory, withIntermediateDirectories: true)
 
         let scripts: [(String, String)] = [
+            ("tds-prepare-talos-media.sh", renderPrepareTalosMediaScript(state: state)),
             ("tds-run-talos-deploy.sh", renderTalosDeployScript(state: state)),
             ("health-check.sh", renderHealthCheckScript(state: state)),
             ("apply-node.sh", renderApplyNodeScript(state: state)),
@@ -58,8 +59,6 @@ public struct MaintenanceBundleBuilder {
         let workers = nodeRecords(state: state, role: .worker)
         let firstControlPlane = controlPlanes.first
         let allNodes = controlPlanes + workers
-        let installerImage = state.plan.talosArtifacts.installerImage
-        let nodeLines = allNodes.map { "\($0.name)|\($0.role.rawValue)|\($0.ip)|\($0.patchPath)" }.joined(separator: "\n")
         let cpIPs = controlPlanes.map(\.ip).joined(separator: ",")
         let allIPs = allNodes.map(\.ip).joined(separator: ",")
 
@@ -69,8 +68,82 @@ public struct MaintenanceBundleBuilder {
 
         ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
         \(talosctlResolver(state: state))
+        TDS_MEDIA_ROOT="${TDS_MEDIA_ROOT:-\(state.spec.deployerStateRoot)/media}"
 
-        mkdir -p "$ROOT/generated" "$ROOT/machine-configs" "$ROOT/logs"
+        "$ROOT/maintenance/tds-prepare-talos-media.sh"
+        cd "$ROOT"
+
+        while IFS='|' read -r name role ip patch device_id media_file; do
+          [ -n "$name" ] || continue
+          embedded_media="${TDS_MEDIA_ROOT}/${media_file}"
+          if [ -f "$embedded_media" ]; then
+            for attempt in $(seq 1 180); do
+              if "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" version >/dev/null 2>&1; then
+                break
+              fi
+              if [ "$attempt" -eq 180 ]; then
+                echo "Timed out waiting for configured Talos boot on $name ($ip)" >&2
+                exit 1
+              fi
+              sleep 10
+            done
+          else
+            for attempt in $(seq 1 120); do
+              if "$TALOSCTL" --nodes "$ip" version --insecure >/dev/null 2>&1; then
+                break
+              fi
+              if [ "$attempt" -eq 120 ]; then
+                echo "Timed out waiting for Talos live boot on $name ($ip)" >&2
+                exit 1
+              fi
+              sleep 10
+            done
+            "$TALOSCTL" --nodes "$ip" apply-config --insecure --file "machine-configs/${name}.yaml"
+            for attempt in $(seq 1 60); do
+              if "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" version >/dev/null 2>&1; then
+                break
+              fi
+              if [ "$attempt" -eq 60 ]; then
+                echo "Timed out waiting for configured Talos API on $name ($ip)" >&2
+                exit 1
+              fi
+              sleep 10
+            done
+          fi
+        done < generated/nodes.tsv
+
+        first_cp=\(shellEscape(firstControlPlane?.ip ?? ""))
+        if [ -n "$first_cp" ]; then
+          "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$first_cp" --endpoints "$first_cp" bootstrap || true
+          "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$first_cp" --endpoints "$first_cp" kubeconfig . --force || true
+        fi
+        if [ -n "\(allIPs)" ] && [ -n "\(cpIPs)" ]; then
+          "$TALOSCTL" --talosconfig generated/talosconfig --nodes \(shellEscape(allIPs)) --endpoints \(shellEscape(cpIPs)) health --wait-timeout 20m
+        fi
+        """
+    }
+
+    private func renderPrepareTalosMediaScript(state: DeploymentState) -> String {
+        let controlPlanes = nodeRecords(state: state, role: .controlplane)
+        let workers = nodeRecords(state: state, role: .worker)
+        let allNodes = controlPlanes + workers
+        let installerImage = state.plan.talosArtifacts.installerImage
+        let nodeLines = allNodes.map {
+            "\($0.name)|\($0.role.rawValue)|\($0.ip)|\($0.patchPath)|\($0.deviceID)|\($0.mediaFileName)"
+        }.joined(separator: "\n")
+
+        return """
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+        \(talosctlResolver(state: state))
+        TDS_MEDIA_ROOT="${TDS_MEDIA_ROOT:-\(state.spec.deployerStateRoot)/media}"
+        TDS_TALOS_VERSION=\(shellEscape(state.spec.talosVersion))
+        TDS_BASE_TALOS_ISO="${TDS_BASE_TALOS_ISO:-${TDS_MEDIA_ROOT}/talos-${TDS_TALOS_VERSION}.iso}"
+        TDS_TALOS_BOOT_ARGS_EXTRA="${TDS_TALOS_BOOT_ARGS_EXTRA:-console=ttyS1,115200n8}"
+
+        mkdir -p "$ROOT/generated" "$ROOT/machine-configs" "$ROOT/logs" "$TDS_MEDIA_ROOT"
         cd "$ROOT"
 
         if [ ! -f generated/secrets.yaml ]; then
@@ -88,7 +161,7 @@ public struct MaintenanceBundleBuilder {
         \(nodeLines)
         EOF_NODES
 
-        while IFS='|' read -r name role ip patch; do
+        while IFS='|' read -r name role ip patch device_id media_file; do
           [ -n "$name" ] || continue
           base="generated/controlplane.yaml"
           if [ "$role" = "worker" ]; then
@@ -100,30 +173,31 @@ public struct MaintenanceBundleBuilder {
             --patch "@${patch}" \\
             --output "$patched"
           mv "$patched" "machine-configs/${name}.yaml"
-          for attempt in $(seq 1 120); do
-            if "$TALOSCTL" --nodes "$ip" version --insecure >/dev/null 2>&1; then
-              break
-            fi
-            if [ "$attempt" -eq 120 ]; then
-              echo "Timed out waiting for Talos live boot on $name ($ip)" >&2
+          if [ -f "$TDS_BASE_TALOS_ISO" ]; then
+            if ! command -v xorriso >/dev/null 2>&1; then
+              echo "xorriso is required to build node-specific Talos ISO media" >&2
               exit 1
             fi
-            sleep 10
-          done
-          "$TALOSCTL" --nodes "$ip" apply-config --insecure --file "machine-configs/${name}.yaml"
+            work="$(mktemp -d)"
+            out="${TDS_MEDIA_ROOT}/${media_file}"
+            rm -f "$out" "$out.tmp"
+            xorriso -osirrox on -indev "$TDS_BASE_TALOS_ISO" \\
+              -extract /boot/grub/grub.cfg "$work/grub.cfg" >/dev/null 2>&1
+            if ! grep -q "talos.config=metal-iso" "$work/grub.cfg"; then
+              sed -i "s/talos.platform=metal /talos.platform=metal talos.config=metal-iso ${TDS_TALOS_BOOT_ARGS_EXTRA} /g" "$work/grub.cfg"
+            fi
+            cp "machine-configs/${name}.yaml" "$work/config.yaml"
+            xorriso -indev "$TDS_BASE_TALOS_ISO" -outdev "$out.tmp" \\
+              -volid metal-iso \\
+              -map "$work/grub.cfg" /boot/grub/grub.cfg \\
+              -map "$work/config.yaml" /config.yaml \\
+              -boot_image any replay >/dev/null 2>&1
+            mv "$out.tmp" "$out"
+            rm -rf "$work"
+          fi
         done < generated/nodes.tsv
-
-        first_cp=\(shellEscape(firstControlPlane?.ip ?? ""))
-        if [ -n "$first_cp" ]; then
-          "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$first_cp" --endpoints "$first_cp" bootstrap || true
-          "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$first_cp" --endpoints "$first_cp" kubeconfig . --force || true
-        fi
-        if [ -n "\(allIPs)" ] && [ -n "\(cpIPs)" ]; then
-          "$TALOSCTL" --talosconfig generated/talosconfig --nodes \(shellEscape(allIPs)) --endpoints \(shellEscape(cpIPs)) health --wait-timeout 20m
-        fi
         """
     }
-
     private func talosctlResolver(state: DeploymentState) -> String {
         """
         TDS_DEPLOYER_STATE_ROOT=\(shellEscape(state.spec.deployerStateRoot))
@@ -239,7 +313,9 @@ public struct MaintenanceBundleBuilder {
                     name: node.device.name,
                     role: node.assignment.role,
                     ip: config.managementAddressCIDR.split(separator: "/").first.map(String.init) ?? node.device.privateIP,
-                    patchPath: "node-patches/\(node.device.name).yaml"
+                    patchPath: "node-patches/\(node.device.name).yaml",
+                    deviceID: node.device.id,
+                    mediaFileName: talosNodeMediaFileName(deviceID: node.device.id, talosVersion: state.spec.talosVersion)
                 )
             }
     }
@@ -249,6 +325,8 @@ public struct MaintenanceBundleBuilder {
         var role: DeviceRole
         var ip: String
         var patchPath: String
+        var deviceID: String
+        var mediaFileName: String
     }
 }
 
@@ -262,9 +340,9 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
     }
 
     public func execute(state: DeploymentState, transport: any DeployerTransport, configuration: DeployerMediaServiceConfiguration) async throws -> (TalosProvisioningExecution, TalosBootstrapResult) {
-        let mediaURL = deployerMediaURL(state: state, configuration: configuration)
+        let mediaBaseURL = deployerMediaBaseURL(state: state, configuration: configuration)
         let talosInstalls = state.plan.installs.filter { $0.assignment.role == .controlplane || $0.assignment.role == .worker }
-        let plannedActions = talosInstalls.map { plannedAction(for: $0, mediaURL: mediaURL, state: state) }
+        let plannedActions = talosInstalls.map { plannedAction(for: $0, mediaBaseURL: mediaBaseURL, state: state) }
 
         var executedActions: [String] = []
         var warnings: [String] = []
@@ -282,17 +360,30 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         """
         _ = try await transport.run(startMediaCommand, timeout: 900)
         executedActions.append("Prepared deployer-hosted Talos media at \(talosISOPath).")
-        if mediaURL.isEmpty {
+        if mediaBaseURL.isEmpty {
             warnings.append("No deployer media address is configured; OOB boot URL actions must use PXE, direct virtual media, or operator local media.")
         }
 
+        let prepareMediaCommand = """
+        cd \(shellEscape(state.plan.durableStateDirectory)) && \\
+        TDS_MEDIA_ROOT=\(shellEscape(configuration.mediaRoot)) \\
+        TDS_TALOS_VERSION=\(shellEscape(state.spec.talosVersion)) \\
+        ./maintenance/tds-prepare-talos-media.sh
+        """
+        _ = try await transport.run(prepareMediaCommand, timeout: 1800)
+        executedActions.append("Generated node-specific Talos boot media with embedded machine configs.")
+
         for install in talosInstalls {
-            let result = try await provisionTalosNode(install, mediaURL: mediaURL, state: state)
+            let result = try await provisionTalosNode(install, mediaBaseURL: mediaBaseURL, state: state)
             executedActions.append(contentsOf: result.executedActions)
             warnings.append(contentsOf: result.warnings)
         }
 
-        let bootstrapCommand = "cd \(shellEscape(state.plan.durableStateDirectory)) && ./maintenance/tds-run-talos-deploy.sh"
+        let bootstrapCommand = """
+        cd \(shellEscape(state.plan.durableStateDirectory)) && \\
+        TDS_MEDIA_ROOT=\(shellEscape(configuration.mediaRoot)) \\
+        ./maintenance/tds-run-talos-deploy.sh
+        """
         _ = try await transport.run(bootstrapCommand, timeout: 3600)
         executedActions.append("Ran deployer-owned Talos apply/bootstrap/health script.")
 
@@ -301,6 +392,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             bootstrapNode: firstControlPlane?.device.name ?? "",
             commands: [
                 startMediaCommand,
+                prepareMediaCommand,
                 bootstrapCommand,
             ],
             succeeded: true,
@@ -312,10 +404,11 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         )
     }
 
-    private func plannedAction(for install: PlannedDeviceInstall, mediaURL: String, state: DeploymentState) -> String {
+    private func plannedAction(for install: PlannedDeviceInstall, mediaBaseURL: String, state: DeploymentState) -> String {
         switch install.method {
         case .bootURL:
-            return "Boot \(install.device.name) from OOB URL media \(firstNonEmpty(mediaURL, externalOOBMediaURL(state: state)))."
+            let imageURL = firstNonEmpty(deployerNodeMediaURL(for: install, mediaBaseURL: mediaBaseURL, state: state), externalOOBMediaURL(state: state))
+            return "Boot \(install.device.name) from OOB URL media \(imageURL)."
         case .pxe:
             return "Boot \(install.device.name) through deployer PXE services."
         case .virtualMedia:
@@ -327,10 +420,10 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         }
     }
 
-    private func provisionTalosNode(_ install: PlannedDeviceInstall, mediaURL: String, state: DeploymentState) async throws -> TalosProvisioningExecution {
+    private func provisionTalosNode(_ install: PlannedDeviceInstall, mediaBaseURL: String, state: DeploymentState) async throws -> TalosProvisioningExecution {
         switch install.method {
         case .bootURL:
-            let imageURL = firstNonEmpty(mediaURL, externalOOBMediaURL(state: state))
+            let imageURL = firstNonEmpty(deployerNodeMediaURL(for: install, mediaBaseURL: mediaBaseURL, state: state), externalOOBMediaURL(state: state))
             guard !imageURL.isEmpty else {
                 return TalosProvisioningExecution(warnings: ["Skipped OOB URL boot for \(install.device.name): no deployer or external media URL was available."])
             }
@@ -376,10 +469,16 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         }
     }
 
-    private func deployerMediaURL(state: DeploymentState, configuration: DeployerMediaServiceConfiguration) -> String {
+    private func deployerMediaBaseURL(state: DeploymentState, configuration: DeployerMediaServiceConfiguration) -> String {
         let host = firstNonEmpty(configurationHost(from: state), state.plan.deployer.device.privateIP, state.plan.deployer.device.primaryIP)
         guard !host.isEmpty else { return "" }
-        return "http://\(host):\(configuration.httpPort)/talos-\(state.spec.talosVersion).iso"
+        return "http://\(host):\(configuration.httpPort)"
+    }
+
+    private func deployerNodeMediaURL(for install: PlannedDeviceInstall, mediaBaseURL: String, state: DeploymentState) -> String {
+        guard !mediaBaseURL.isEmpty else { return "" }
+        let fileName = talosNodeMediaFileName(deviceID: install.device.id, talosVersion: state.spec.talosVersion)
+        return "\(mediaBaseURL)/\(fileName)"
     }
 
     private func externalOOBMediaURL(state: DeploymentState) -> String {
@@ -398,6 +497,17 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
     private func firstNonEmpty(_ values: String...) -> String {
         values.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
     }
+}
+
+private func talosNodeMediaFileName(deviceID: String, talosVersion: String) -> String {
+    "talos-\(sanitizeFileComponent(talosVersion))-\(sanitizeFileComponent(deviceID)).iso"
+}
+
+private func sanitizeFileComponent(_ value: String) -> String {
+    let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "._-"))
+    let sanitized = value.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }
+    let result = String(sanitized).trimmingCharacters(in: CharacterSet(charactersIn: ".-"))
+    return result.isEmpty ? "node" : result
 }
 
 private extension JSONEncoder {

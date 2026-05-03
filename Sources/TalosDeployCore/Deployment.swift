@@ -109,7 +109,7 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
     }
 
     public func planDeployerServices(configuration: DeployerMediaServiceConfiguration) -> DeployerServicePlan {
-        let packages = ["ca-certificates", "curl", "dnsmasq", "python3", "openssh-client"]
+        let packages = ["ca-certificates", "curl", "dnsmasq", "python3", "openssh-client", "xorriso"]
         let talosctlVersion = configuration.talosctlVersion.isEmpty ? "configured Talos version" : configuration.talosctlVersion
         return DeployerServicePlan(
             packages: packages,
