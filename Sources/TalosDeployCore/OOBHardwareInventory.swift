@@ -117,29 +117,19 @@ public struct OOBNetworkSelectorEnricher: Sendable {
             return OOBNetworkSelectorEnrichment(spec: spec)
         }
 
+        var updated = spec
         var events: [String] = []
-        let nodes = await withTaskGroup(of: (DeploymentNodeSpec, [String]).self) { group in
-            for node in spec.nodes {
-                group.addTask {
-                    await enrichNodeForOOBHardwareSelector(node: node, client: client, proxyVia: proxyVia)
-                }
-            }
-
-            var enriched: [(DeploymentNodeSpec, [String])] = []
-            for await result in group {
-                enriched.append(result)
-            }
-            return enriched.sorted { $0.0.device.name < $1.0.device.name }
-        }
-
-        var orderedNodesByID: [String: DeploymentNodeSpec] = [:]
-        for (node, nodeEvents) in nodes {
-            orderedNodesByID[node.device.id] = node
+        var nodes: [DeploymentNodeSpec] = []
+        for node in spec.nodes {
+            let (enrichedNode, nodeEvents) = await enrichNodeForOOBHardwareSelector(
+                node: node,
+                client: client,
+                proxyVia: proxyVia
+            )
+            nodes.append(enrichedNode)
             events.append(contentsOf: nodeEvents)
         }
-
-        var updated = spec
-        updated.nodes = spec.nodes.map { orderedNodesByID[$0.device.id] ?? $0 }
+        updated.nodes = nodes
         return OOBNetworkSelectorEnrichment(spec: updated, events: events)
     }
 }
