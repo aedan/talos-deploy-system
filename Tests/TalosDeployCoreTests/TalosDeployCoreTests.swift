@@ -272,6 +272,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: output.appending(path: "talos-artifacts.json").path))
         let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
         XCTAssertTrue(patch.contains("image: factory.talos.dev/installer/abc123:v1.11.3"))
+        XCTAssertFalse(patch.contains("hostname: cp-1"))
         XCTAssertTrue(patch.contains("name: br_netfilter"))
         XCTAssertTrue(patch.contains("zfs_arc_max=123"))
         XCTAssertTrue(patch.contains("addresses:\n          - 198.51.100.10/22"))
@@ -319,6 +320,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(prepareScript.contains("talos.config=metal-iso"))
         XCTAssertTrue(prepareScript.contains("talos-v1.13.0-cp1.iso"))
         XCTAssertTrue(prepareScript.contains("gen config 'cluster' 'https://cluster.example.com:6443'"))
+        XCTAssertTrue(prepareScript.contains("validate --mode metal --config \"machine-configs/${name}.yaml\" --strict"))
         XCTAssertFalse(prepareScript.contains("if [ ! -f generated/talosconfig ]; then"))
     }
 

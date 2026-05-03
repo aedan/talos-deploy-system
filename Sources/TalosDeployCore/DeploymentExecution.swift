@@ -171,6 +171,7 @@ public struct MaintenanceBundleBuilder {
             --patch "@${patch}" \\
             --output "$patched"
           mv "$patched" "machine-configs/${name}.yaml"
+          "$TALOSCTL" validate --mode metal --config "machine-configs/${name}.yaml" --strict
           if [ -f "$TDS_BASE_TALOS_ISO" ]; then
             if ! command -v xorriso >/dev/null 2>&1; then
               echo "xorriso is required to build node-specific Talos ISO media" >&2

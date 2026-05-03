@@ -696,7 +696,6 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         lines.append(contentsOf: renderKernelModules(spec.talosKernelModules))
         lines.append(contentsOf: renderLonghornExtraMounts(enabled: spec.enableLonghornExtraMounts))
         lines.append("  network:")
-        lines.append("    hostname: \(node.device.name)")
         lines.append(contentsOf: renderNameservers(staticConfig))
         lines.append("    interfaces:")
         lines.append("      - interface: \(interfaceName)")
