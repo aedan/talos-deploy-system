@@ -68,14 +68,7 @@ public struct MaintenanceBundleBuilder {
         set -euo pipefail
 
         ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-        TALOSCTL="${ROOT}/bin/talosctl"
-        if [ ! -x "$TALOSCTL" ]; then
-          TALOSCTL="$(command -v talosctl || true)"
-        fi
-        if [ -z "$TALOSCTL" ] || [ ! -x "$TALOSCTL" ]; then
-          echo "talosctl is not installed on the deployer" >&2
-          exit 1
-        fi
+        \(talosctlResolver(state: state))
 
         mkdir -p "$ROOT/generated" "$ROOT/machine-configs" "$ROOT/logs"
         cd "$ROOT"
@@ -131,6 +124,23 @@ public struct MaintenanceBundleBuilder {
         """
     }
 
+    private func talosctlResolver(state: DeploymentState) -> String {
+        """
+        TDS_DEPLOYER_STATE_ROOT=\(shellEscape(state.spec.deployerStateRoot))
+        TALOSCTL="${ROOT}/bin/talosctl"
+        if [ ! -x "$TALOSCTL" ] && [ -x "${TDS_DEPLOYER_STATE_ROOT}/bin/talosctl" ]; then
+          TALOSCTL="${TDS_DEPLOYER_STATE_ROOT}/bin/talosctl"
+        fi
+        if [ ! -x "$TALOSCTL" ]; then
+          TALOSCTL="$(command -v talosctl || true)"
+        fi
+        if [ -z "${TALOSCTL:-}" ] || [ ! -x "$TALOSCTL" ]; then
+          echo "talosctl is not installed on the deployer" >&2
+          exit 1
+        fi
+        """
+    }
+
     private func renderHealthCheckScript(state: DeploymentState) -> String {
         let controlPlanes = nodeRecords(state: state, role: .controlplane)
         let allNodes = controlPlanes + nodeRecords(state: state, role: .worker)
@@ -138,8 +148,7 @@ public struct MaintenanceBundleBuilder {
         #!/usr/bin/env bash
         set -euo pipefail
         ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-        TALOSCTL="${ROOT}/bin/talosctl"
-        [ -x "$TALOSCTL" ] || TALOSCTL="$(command -v talosctl)"
+        \(talosctlResolver(state: state))
         "$TALOSCTL" --talosconfig "$ROOT/generated/talosconfig" --nodes \(shellEscape(allNodes.map(\.ip).joined(separator: ","))) --endpoints \(shellEscape(controlPlanes.map(\.ip).joined(separator: ","))) health --wait-timeout 10m
         if [ -f "$ROOT/kubeconfig" ] && command -v kubectl >/dev/null 2>&1; then
           kubectl --kubeconfig "$ROOT/kubeconfig" get nodes -o wide
@@ -159,8 +168,7 @@ public struct MaintenanceBundleBuilder {
           exit 2
         fi
         ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-        TALOSCTL="${ROOT}/bin/talosctl"
-        [ -x "$TALOSCTL" ] || TALOSCTL="$(command -v talosctl)"
+        \(talosctlResolver(state: state))
         "$TALOSCTL" --nodes "$1" apply-config --insecure --file "$2"
         """
     }
@@ -174,8 +182,7 @@ public struct MaintenanceBundleBuilder {
           exit 2
         fi
         ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-        TALOSCTL="${ROOT}/bin/talosctl"
-        [ -x "$TALOSCTL" ] || TALOSCTL="$(command -v talosctl)"
+        \(talosctlResolver(state: state))
         "$TALOSCTL" --talosconfig "$ROOT/generated/talosconfig" upgrade --image "$1" --preserve
         """
     }
@@ -189,8 +196,7 @@ public struct MaintenanceBundleBuilder {
           exit 2
         fi
         ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-        TALOSCTL="${ROOT}/bin/talosctl"
-        [ -x "$TALOSCTL" ] || TALOSCTL="$(command -v talosctl)"
+        \(talosctlResolver(state: state))
         "$TALOSCTL" --talosconfig "$ROOT/generated/talosconfig" upgrade-k8s --to "$1"
         """
     }
@@ -214,8 +220,7 @@ public struct MaintenanceBundleBuilder {
         #!/usr/bin/env bash
         set -euo pipefail
         ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-        TALOSCTL="${ROOT}/bin/talosctl"
-        [ -x "$TALOSCTL" ] || TALOSCTL="$(command -v talosctl)"
+        \(talosctlResolver(state: state))
         out="$ROOT/logs/collect-$(date -u +%Y%m%dT%H%M%SZ)"
         mkdir -p "$out"
         for node in \(nodeList); do

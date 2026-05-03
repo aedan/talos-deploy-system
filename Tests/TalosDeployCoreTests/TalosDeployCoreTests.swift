@@ -307,6 +307,10 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(manifest.scripts.contains("maintenance/tds-run-talos-deploy.sh"))
         XCTAssertTrue(FileManager.default.fileExists(atPath: stateDirectory.appending(path: "maintenance/health-check.sh").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: stateDirectory.appending(path: "inventory/selected-devices.json").path))
+
+        let deployScript = try String(contentsOf: stateDirectory.appending(path: "maintenance/tds-run-talos-deploy.sh"))
+        XCTAssertTrue(deployScript.contains("TDS_DEPLOYER_STATE_ROOT='/var/lib/talos-deploy'"))
+        XCTAssertTrue(deployScript.contains("${TDS_DEPLOYER_STATE_ROOT}/bin/talosctl"))
     }
 
     func testDryRunReportsAccessProvisioningAndBootstrapPlan() async throws {
