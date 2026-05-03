@@ -1,5 +1,18 @@
 import Foundation
 
+public enum TalosDeploymentExecutionError: Error, LocalizedError, Equatable {
+    case oobURLMediaDisconnected(deviceName: String, imageURL: String, status: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .oobURLMediaDisconnected(let deviceName, let imageURL, let status):
+            let trimmed = status.trimmingCharacters(in: .whitespacesAndNewlines)
+            let suffix = trimmed.isEmpty ? "" : " Last media status: \(trimmed)"
+            return "OOB URL media did not remain connected for \(deviceName) after retrying \(imageURL).\(suffix)"
+        }
+    }
+}
+
 public struct MaintenanceBundleBuilder {
     private let fileManager: FileManager
 
@@ -437,11 +450,18 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
     private let settings: AppSettings
     private let oobBooter: any OOBNodeBooting
     private let wipeDelayNanoseconds: UInt64
+    private let mediaRetryDelayNanoseconds: UInt64
 
-    public init(settings: AppSettings = AppSettings(), oobBooter: (any OOBNodeBooting)? = nil, wipeDelayNanoseconds: UInt64 = 300_000_000_000) {
+    public init(
+        settings: AppSettings = AppSettings(),
+        oobBooter: (any OOBNodeBooting)? = nil,
+        wipeDelayNanoseconds: UInt64 = 300_000_000_000,
+        mediaRetryDelayNanoseconds: UInt64 = 15_000_000_000
+    ) {
         self.settings = settings
         self.oobBooter = oobBooter ?? HammertimeOOBBooter(settings: settings.hammertime)
         self.wipeDelayNanoseconds = wipeDelayNanoseconds
+        self.mediaRetryDelayNanoseconds = mediaRetryDelayNanoseconds
     }
 
     public func execute(state: DeploymentState, transport: any DeployerTransport, configuration: DeployerMediaServiceConfiguration) async throws -> (TalosProvisioningExecution, TalosBootstrapResult) {
@@ -791,8 +811,9 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             guard !imageURL.isEmpty else {
                 return TalosProvisioningExecution(warnings: ["Skipped OOB URL boot for \(install.device.name): no deployer or external media URL was available."])
             }
-            let result = try await oobBooter.bootURL(
-                OOBBootURLRequest(
+            let result = try await bootURLWithConnectedMediaRetry(
+                deviceName: install.device.name,
+                request: OOBBootURLRequest(
                     deviceID: install.device.id,
                     imageURL: imageURL,
                     connectMedia: true,
@@ -805,8 +826,9 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             let status = result.connected ? "connected" : "requested"
             return TalosProvisioningExecution(executedActions: ["OOB URL boot \(status) for \(install.device.name) using \(imageURL)."])
         case .virtualMedia:
-            let result = try await oobBooter.bootURL(
-                OOBBootURLRequest(
+            let result = try await bootURLWithConnectedMediaRetry(
+                deviceName: install.device.name,
+                request: OOBBootURLRequest(
                     deviceID: install.device.id,
                     imageURL: state.plan.talosArtifacts.isoURL,
                     connectMedia: true,
@@ -833,6 +855,30 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         case .stagedOnly:
             return TalosProvisioningExecution(executedActions: ["Staged \(install.device.name) without a boot request."])
         }
+    }
+
+    private func bootURLWithConnectedMediaRetry(deviceName: String, request: OOBBootURLRequest) async throws -> OOBBootURLResult {
+        let maximumAttempts = 3
+        var lastResult: OOBBootURLResult?
+        for attempt in 1...maximumAttempts {
+            let result = try await oobBooter.bootURL(request)
+            if result.connected {
+                return result
+            }
+            lastResult = result
+            if attempt < maximumAttempts {
+                tdsProgress("OOB URL boot for \(deviceName) did not report connected media after boot request; retrying attempt \(attempt + 1)/\(maximumAttempts)")
+                if mediaRetryDelayNanoseconds > 0 {
+                    try await Task.sleep(nanoseconds: mediaRetryDelayNanoseconds)
+                }
+            }
+        }
+
+        throw TalosDeploymentExecutionError.oobURLMediaDisconnected(
+            deviceName: deviceName,
+            imageURL: request.imageURL,
+            status: lastResult?.steps.last?.stdout ?? ""
+        )
     }
 
     private func deployerMediaBaseURL(state: DeploymentState, configuration: DeployerMediaServiceConfiguration) -> String {

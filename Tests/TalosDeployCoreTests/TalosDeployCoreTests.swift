@@ -1042,6 +1042,49 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(runner.invocations.last?.arguments.last?.contains("tds-run-talos-deploy.sh") == true)
     }
 
+    func testTalosExecutorRetriesDisconnectedOOBURLMedia() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = talosDevice(id: "deployer", name: "deployer-1", primaryIP: "198.51.100.20", privateIP: "198.51.100.20")
+        let cp = talosDevice(id: "cp1", name: "cp-1", primaryIP: "198.51.100.10", privateIP: "198.51.100.10")
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            talosProvisioning: TalosProvisioningDefaults(wipeSystemDiskBeforeInstall: false),
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer, deployerMode: .existing)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
+            ]
+        )
+        let state = try await DeploymentCoordinator(settings: AppSettings()).stage(spec: spec, at: temp)
+        let runner = MockCommandRunner(responses: Array(repeating: CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0), count: 5))
+        let transport = DirectSSHDeployerTransport(
+            connection: SSHConnection(host: "198.51.100.20", user: "rack"),
+            router: SSHCommandRouter(runner: runner)
+        )
+        let oob = MockOOBBooter(connectedResponses: [false, true])
+
+        let execution = try await TalosDeploymentExecutor(
+            oobBooter: oob,
+            wipeDelayNanoseconds: 0,
+            mediaRetryDelayNanoseconds: 0
+        ).execute(
+            state: state,
+            transport: transport,
+            configuration: DeployerMediaServiceConfiguration()
+        )
+
+        XCTAssertEqual(oob.urlRequests.map(\.deviceID), ["cp1", "cp1"])
+        XCTAssertEqual(oob.urlRequests.map(\.imageURL), [
+            "http://198.51.100.20:8080/talos-v1.13.0-cp1.iso",
+            "http://198.51.100.20:8080/talos-v1.13.0-cp1.iso",
+        ])
+        XCTAssertTrue(execution.0.executedActions.contains { $0.contains("OOB URL boot connected") })
+    }
+
     func testTalosExecutorDoesNotForceNodeRoutesFromRegistryInterfaceAlone() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let deployer = talosDevice(id: "deployer", name: "deployer-1", primaryIP: "198.51.100.20", privateIP: "198.51.100.20")
@@ -1589,16 +1632,22 @@ private struct CommandInvocation {
 private final class MockOOBBooter: OOBNodeBooting, @unchecked Sendable {
     private(set) var urlRequests: [OOBBootURLRequest] = []
     private(set) var pxeRequests: [OOBPXEBootRequest] = []
+    private var connectedResponses: [Bool]
+
+    init(connectedResponses: [Bool] = []) {
+        self.connectedResponses = connectedResponses
+    }
 
     func bootURL(_ request: OOBBootURLRequest) async throws -> OOBBootURLResult {
         urlRequests.append(request)
+        let connected = connectedResponses.isEmpty ? true : connectedResponses.removeFirst()
         return OOBBootURLResult(
             deviceID: request.deviceID,
             imageURL: request.imageURL,
-            connected: true,
+            connected: connected,
             bootOnce: request.bootOnce,
             rebooted: request.reboot,
-            steps: [OOBBootURLStep(name: "mock", stdout: "Image Connected = Yes")]
+            steps: [OOBBootURLStep(name: "mock", stdout: connected ? "Image Connected = Yes" : "Image Connected = No")]
         )
     }
 
