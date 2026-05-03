@@ -318,10 +318,16 @@ public protocol OOBNodeBooting: Sendable {
 public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
     private let settings: HammertimeSettings
     private let runner: CommandRunning
+    private let powerCycleDelayNanoseconds: UInt64
 
-    public init(settings: HammertimeSettings = HammertimeSettings(), runner: CommandRunning = LocalCommandRunner()) {
+    public init(
+        settings: HammertimeSettings = HammertimeSettings(),
+        runner: CommandRunning = LocalCommandRunner(),
+        powerCycleDelayNanoseconds: UInt64 = 5_000_000_000
+    ) {
         self.settings = settings
         self.runner = runner
+        self.powerCycleDelayNanoseconds = powerCycleDelayNanoseconds
     }
 
     public func bootURL(_ request: OOBBootURLRequest) async throws -> OOBBootURLResult {
@@ -345,8 +351,7 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
         }
         steps.append(try await runOOBCommand(name: "media-status", command: "vm cdrom get", request: request))
         if request.reboot {
-            steps.append(try await runOOBCommand(name: "power-reset", command: "power reset", request: request))
-            steps.append(await runBestEffortOOBCommand(name: "clp-system-reset", command: "reset /system1", request: request))
+            steps.append(contentsOf: try await rebootSteps(for: request))
             steps.append(await runBestEffortOOBCommand(name: "post-reset-media-status", command: "vm cdrom get", request: request))
         }
 
@@ -371,8 +376,7 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
         var steps: [OOBBootURLStep] = []
         steps.append(try await runOOBCommand(name: "one-time-pxe", command: "onetimeboot \(request.oneTimeBoot)", request: request.asURLRequest()))
         if request.reboot {
-            steps.append(try await runOOBCommand(name: "power-reset", command: "power reset", request: request.asURLRequest()))
-            steps.append(await runBestEffortOOBCommand(name: "clp-system-reset", command: "reset /system1", request: request.asURLRequest()))
+            steps.append(contentsOf: try await rebootSteps(for: request.asURLRequest()))
         }
         return OOBPXEBootResult(
             deviceID: request.deviceID,
@@ -400,6 +404,18 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
             timeout: TimeInterval(settings.timeoutSeconds)
         )
         return OOBBootURLStep(name: name, stdout: result.stdout)
+    }
+
+    private func rebootSteps(for request: OOBBootURLRequest) async throws -> [OOBBootURLStep] {
+        var steps: [OOBBootURLStep] = []
+        steps.append(try await runOOBCommand(name: "power-reset", command: "power reset", request: request))
+        steps.append(await runBestEffortOOBCommand(name: "clp-system-reset", command: "reset /system1", request: request))
+        steps.append(await runBestEffortOOBCommand(name: "clp-power-off", command: "stop /system1", request: request))
+        if powerCycleDelayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: powerCycleDelayNanoseconds)
+        }
+        steps.append(await runBestEffortOOBCommand(name: "clp-power-on", command: "start /system1", request: request))
+        return steps
     }
 
     private func runBestEffortOOBCommand(name: String, command: String, request: OOBBootURLRequest) async -> OOBBootURLStep {
