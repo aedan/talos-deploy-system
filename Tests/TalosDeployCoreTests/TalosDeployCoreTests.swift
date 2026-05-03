@@ -538,6 +538,8 @@ final class TalosDeployCoreTests: XCTestCase {
             responses: [
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "inserted", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "connected", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "cd preferred", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "cd first", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "boot once", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "clp reset", stderr: "", exitCode: 0),
@@ -572,6 +574,8 @@ final class TalosDeployCoreTests: XCTestCase {
             [
                 "vm cdrom insert http://10.0.0.1:8080/talos.iso",
                 "vm cdrom set connect",
+                "set /system1/bootconfig1/bootsource4 bootorder=4",
+                "set /system1/bootconfig1/bootsource1 bootorder=1",
                 "vm cdrom set boot_once",
                 "vm cdrom get",
                 "reset /system1",
@@ -591,6 +595,8 @@ final class TalosDeployCoreTests: XCTestCase {
             responses: [
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "inserted", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "connected", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "boot once", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
