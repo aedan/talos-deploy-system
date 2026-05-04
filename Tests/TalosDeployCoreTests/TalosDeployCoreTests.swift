@@ -328,7 +328,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(deployScript.contains("TDS_DEPLOYER_STATE_ROOT='/var/lib/talos-deploy'"))
         XCTAssertTrue(deployScript.contains("${TDS_DEPLOYER_STATE_ROOT}/bin/talosctl"))
         XCTAssertTrue(deployScript.contains("run_role_nodes controlplane continue"))
-        XCTAssertTrue(deployScript.contains("run_role_nodes worker continue"))
+        XCTAssertTrue(deployScript.contains("run_role_nodes worker strict"))
         XCTAssertTrue(deployScript.contains("bootstrap_cp=\"${SUCCESSFUL_CONTROL_PLANE_IPS[0]:-}\""))
         XCTAssertTrue(deployScript.contains("selected reachable control plane"))
         XCTAssertTrue(deployScript.contains("get links --nodes \"$ip\" --endpoints \"$ip\" --insecure -o yaml"))
@@ -511,7 +511,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("addresses:\n          - 198.51.100.10/22"))
     }
 
-    func testTalosBuilderMovesFinalManagementAddressOntoSelectedBridge() async throws {
+    func testTalosBuilderKeepsKnownManagementMACWhenDeployerRouteBridgeIsConfigured() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
         let cp = talosDevice(id: "cp1", name: "cp-1", primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
@@ -566,11 +566,11 @@ final class TalosDeployCoreTests: XCTestCase {
         let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "worker-1.yaml"), encoding: .utf8)
         let bootPatch = try String(contentsOf: output.appending(path: "boot-node-patches").appending(path: "worker-1.yaml"), encoding: .utf8)
 
-        XCTAssertTrue(patch.contains("      - interface: br-ctlplane\n        addresses:\n          - 198.51.100.20/22"))
+        XCTAssertTrue(patch.contains("      - deviceSelector:\n          hardwareAddr: 3c:a8:2a:23:eb:b8\n        addresses:\n          - 198.51.100.20/22"))
         XCTAssertTrue(patch.contains("        routes:\n          - network: 0.0.0.0/0\n            gateway: 198.51.100.1"))
+        XCTAssertTrue(patch.contains("      - interface: br-ctlplane"))
         XCTAssertTrue(patch.contains("        bridge:\n          interfaces:\n            - eno49"))
         XCTAssertEqual(patch.components(separatedBy: "      - interface: br-ctlplane").count - 1, 1)
-        XCTAssertFalse(patch.contains("      - deviceSelector:\n          hardwareAddr: 3c:a8:2a:23:eb:b8"))
         XCTAssertTrue(bootPatch.contains("      - deviceSelector:\n          hardwareAddr: 3c:a8:2a:23:eb:b8"))
         XCTAssertFalse(bootPatch.contains("      - interface: br-ctlplane"))
     }

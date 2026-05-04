@@ -775,7 +775,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         let staticConfig = StaticNetworkPlanner().config(for: node)
         let interfaceName = firstNonEmptyStatic(staticConfig.managementInterface, node.device.networkInterfaces.first?.name ?? "eth0")
         let managementHardwareAddress = staticConfig.managementHardwareAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-        let managementBridge = includeAdditionalNetworking ? finalManagementBridge(for: staticConfig, spec: spec, fallbackInterfaceName: interfaceName) : nil
+        let managementBridge = includeAdditionalNetworking ? finalManagementBridge(for: staticConfig, fallbackInterfaceName: interfaceName) : nil
         let installerImage = deployerRegistryInstallerImage(for: spec)
             ?? TalosFactoryClient().artifactURLs(settings: spec.talosFactory, talosVersion: spec.talosVersion).installerImage
         var lines = [
@@ -1003,19 +1003,13 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
 
     private func finalManagementBridge(
         for config: StaticNetworkConfig,
-        spec: DeploymentSpec,
         fallbackInterfaceName: String
     ) -> NetworkInterface? {
-        let nodeRouteInterface = spec.talosProvisioning.deployerNodeRouteInterface
-            .trimmingCharacters(in: .whitespacesAndNewlines)
         let managementInterface = config.managementInterface
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let candidates = config.bridges.filter { bridge in
             guard !bridge.name.isEmpty, bridge.addresses.isEmpty else { return false }
             if bridge.name == managementInterface || bridge.name == fallbackInterfaceName {
-                return true
-            }
-            if !nodeRouteInterface.isEmpty && bridge.name == nodeRouteInterface {
                 return true
             }
             if bridge.bridgePorts.contains(managementInterface) || bridge.bridgePorts.contains(fallbackInterfaceName) {

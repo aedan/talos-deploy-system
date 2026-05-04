@@ -311,7 +311,7 @@ public struct MaintenanceBundleBuilder {
         fi
 
         log "configuring worker nodes after control-plane bootstrap"
-        run_role_nodes worker continue 60 120 || true
+        run_role_nodes worker strict 60 120
 
         join_by_comma() {
           local IFS=,
