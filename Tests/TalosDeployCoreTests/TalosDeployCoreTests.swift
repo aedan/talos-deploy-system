@@ -344,6 +344,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(prepareScript.contains("boot-machine-configs/${name}.yaml"))
         XCTAssertTrue(prepareScript.contains("-map \"boot-machine-configs/${name}.yaml\" /config.yaml"))
         XCTAssertTrue(prepareScript.contains("|config"))
+        XCTAssertTrue(prepareScript.contains("talos.config=metal-iso talos.environment=INSTALLER_META_BASE64"))
         XCTAssertTrue(prepareScript.contains("boot-network-meta/cp-1.yaml"))
         XCTAssertTrue(prepareScript.contains("/^    install:[[:space:]]*$/"))
         XCTAssertTrue(prepareScript.contains("boot-node-patches/cp-1.yaml"))
