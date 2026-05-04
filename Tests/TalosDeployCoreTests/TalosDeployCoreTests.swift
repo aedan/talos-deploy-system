@@ -599,13 +599,25 @@ final class TalosDeployCoreTests: XCTestCase {
         let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
         let output = try await DefaultTalosBuilder().buildArtifacts(for: spec, plan: plan, in: temp)
         let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+        let bootNetworkMeta = try String(
+            contentsOf: output.appending(path: "boot-network-meta").appending(path: "cp-1.yaml"),
+            encoding: .utf8
+        )
 
         XCTAssertTrue(patch.contains("image: 198.51.100.196:5000/installer/abc123:v1.13.0"))
         XCTAssertTrue(patch.contains("    wipe: true"))
+        XCTAssertTrue(patch.contains("    nameservers:\n      - 198.51.100.196\n      - 198.51.101.10"))
         XCTAssertTrue(patch.contains("registries:"))
         XCTAssertTrue(patch.contains("\"198.51.100.196:5000\":"))
         XCTAssertTrue(patch.contains("http://198.51.100.196:5000"))
         XCTAssertTrue(patch.contains("skipFallback: true"))
+        XCTAssertTrue(bootNetworkMeta.contains("""
+        resolvers:
+          - dnsServers:
+              - 198.51.100.196
+              - 198.51.101.10
+            layer: platform
+        """))
     }
 
     func testTalosBuilderCanDisableInstallWipeWhenRequested() async throws {

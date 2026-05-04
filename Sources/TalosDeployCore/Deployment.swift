@@ -746,7 +746,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
                 atomically: true,
                 encoding: .utf8
             )
-            let bootNetworkMeta = renderInitialNetworkMeta(node: node)
+            let bootNetworkMeta = renderInitialNetworkMeta(node: node, spec: spec)
             try bootNetworkMeta.write(
                 to: bootNetworkMetaDirectory.appending(path: "\(node.device.name).yaml"),
                 atomically: true,
@@ -787,7 +787,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         lines.append(contentsOf: renderRegistryMirror(spec: spec))
         lines.append(contentsOf: renderTimeServers(spec: spec))
         lines.append("  network:")
-        lines.append(contentsOf: renderNameservers(staticConfig))
+        lines.append(contentsOf: renderNameservers(staticConfig, spec: spec))
         lines.append("    interfaces:")
         if let managementBridge {
             lines.append("      - interface: \(managementBridge.name)")
@@ -822,7 +822,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    private func renderInitialNetworkMeta(node: DeploymentNodeSpec) -> String {
+    private func renderInitialNetworkMeta(node: DeploymentNodeSpec, spec: DeploymentSpec) -> String {
         let staticConfig = StaticNetworkPlanner().config(for: node)
         let interfaceName = firstNonEmptyStatic(staticConfig.managementInterface, node.device.networkInterfaces.first?.name ?? "eth0")
         var lines = [
@@ -851,10 +851,11 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
                 "    layer: platform",
             ])
         }
-        if !staticConfig.nameservers.isEmpty {
+        let nameservers = renderNameserverValues(staticConfig, spec: spec)
+        if !nameservers.isEmpty {
             lines.append("resolvers:")
             lines.append("  - dnsServers:")
-            lines.append(contentsOf: staticConfig.nameservers.map { "      - \(yamlScalar($0))" })
+            lines.append(contentsOf: nameservers.map { "      - \(yamlScalar($0))" })
             lines.append("    layer: platform")
         }
         return lines.joined(separator: "\n") + "\n"
@@ -1034,11 +1035,16 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         destination == "default" ? "0.0.0.0/0" : destination
     }
 
-    private func renderNameservers(_ config: StaticNetworkConfig) -> [String] {
-        guard !config.nameservers.isEmpty || !config.searchDomains.isEmpty else { return [] }
+    private func renderNameserverValues(_ config: StaticNetworkConfig, spec: DeploymentSpec) -> [String] {
+        uniqueNonEmpty([deployerNodeAddress(for: spec)] + config.nameservers)
+    }
+
+    private func renderNameservers(_ config: StaticNetworkConfig, spec: DeploymentSpec) -> [String] {
+        let nameservers = renderNameserverValues(config, spec: spec)
+        guard !nameservers.isEmpty || !config.searchDomains.isEmpty else { return [] }
         var lines = ["    nameservers:"]
-        if !config.nameservers.isEmpty {
-            lines.append(contentsOf: config.nameservers.map { "      - \($0)" })
+        if !nameservers.isEmpty {
+            lines.append(contentsOf: nameservers.map { "      - \($0)" })
         }
         if !config.searchDomains.isEmpty {
             lines.append("    searchDomains:")
