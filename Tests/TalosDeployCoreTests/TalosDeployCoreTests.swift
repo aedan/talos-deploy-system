@@ -841,7 +841,19 @@ final class TalosDeployCoreTests: XCTestCase {
             responses: [
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "inserted", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "connected", stderr: "", exitCode: 0),
-                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "disk first", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: """
+                /system1/bootconfig1
+                  Targets
+                    bootsource1
+                    bootsource2
+                """, stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: """
+                /system1/bootconfig1/bootsource1
+                  Properties
+                    bootorder=2
+                    bootdevice=BootFmCd
+                """, stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "cd first", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "boot once", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "clp stop", stderr: "", exitCode: 0),
@@ -875,7 +887,9 @@ final class TalosDeployCoreTests: XCTestCase {
             [
                 "vm cdrom insert http://10.0.0.1:8080/talos.iso",
                 "vm cdrom set connect",
-                "set /system1/bootconfig1/bootsource2 bootorder=1",
+                "show /system1/bootconfig1",
+                "show /system1/bootconfig1/bootsource1",
+                "set /system1/bootconfig1/bootsource1 bootorder=1",
                 "vm cdrom set boot_once",
                 "vm cdrom get",
                 "stop /system1",
@@ -895,6 +909,7 @@ final class TalosDeployCoreTests: XCTestCase {
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "inserted", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "connected", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "fallback cd order", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "boot once", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported command", exitCode: 1),
@@ -917,6 +932,7 @@ final class TalosDeployCoreTests: XCTestCase {
 
         let fallback = try XCTUnwrap(result.steps.first(where: { $0.name == "clp-power-off" }))
         XCTAssertTrue(fallback.stdout.contains("Best-effort OOB command failed"))
+        XCTAssertTrue(result.steps.contains { $0.name == "cd-boot-order" })
         XCTAssertNotNil(result.steps.first(where: { $0.name == "power-reset" }))
         XCTAssertTrue(result.bootOnce)
     }

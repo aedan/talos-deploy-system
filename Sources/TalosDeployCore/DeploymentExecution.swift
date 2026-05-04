@@ -240,28 +240,28 @@ public struct MaintenanceBundleBuilder {
 
           if configured_api_ready "$ip"; then
             log "configured Talos API is already reachable on $name ($ip); converging final config"
-            apply_final_config "$name" "$ip"
-            wait_for_configured_api "$name" "$ip" "$configured_attempts" "after final config convergence"
+            apply_final_config "$name" "$ip" || return 1
+            wait_for_configured_api "$name" "$ip" "$configured_attempts" "after final config convergence" || return 1
             capture_live_links "$name" "$ip"
             return 0
           fi
 
           if [ -f "$embedded_media" ] && [ "$boot_mode" = "meta" ]; then
-            wait_for_live_api "$name" "$ip" "$live_attempts"
+            wait_for_live_api "$name" "$ip" "$live_attempts" || return 1
             capture_live_links "$name" "$ip" insecure
             log "applying static machine config to $name ($ip)"
-            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --file "machine-configs/${name}.yaml"
-            wait_for_configured_api "$name" "$ip" "$configured_attempts" "after static config apply"
+            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --file "machine-configs/${name}.yaml" || return 1
+            wait_for_configured_api "$name" "$ip" "$configured_attempts" "after static config apply" || return 1
           elif [ -f "$embedded_media" ]; then
-            wait_for_configured_api "$name" "$ip" 180 "from boot ISO static networking config"
+            wait_for_configured_api "$name" "$ip" 180 "from boot ISO static networking config" || return 1
             capture_live_links "$name" "$ip"
-            apply_final_config "$name" "$ip"
-            wait_for_configured_api "$name" "$ip" "$configured_attempts" "after final config apply"
+            apply_final_config "$name" "$ip" || return 1
+            wait_for_configured_api "$name" "$ip" "$configured_attempts" "after final config apply" || return 1
           else
-            wait_for_live_api "$name" "$ip" "$live_attempts"
+            wait_for_live_api "$name" "$ip" "$live_attempts" || return 1
             log "applying static machine config to $name ($ip)"
-            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --file "machine-configs/${name}.yaml"
-            wait_for_configured_api "$name" "$ip" "$configured_attempts" "after static config apply"
+            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --file "machine-configs/${name}.yaml" || return 1
+            wait_for_configured_api "$name" "$ip" "$configured_attempts" "after static config apply" || return 1
           fi
         }
 

@@ -352,7 +352,8 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
         if request.connectMedia {
             steps.append(try await runOOBCommand(name: "connect-media", command: "vm cdrom set connect", request: request))
         }
-        steps.append(await runBestEffortOOBCommand(name: "disk-boot-order", command: "set /system1/bootconfig1/bootsource2 bootorder=1", request: request))
+        let bootSource = await discoverCDBootSource(request: request, steps: &steps)
+        steps.append(await runBestEffortOOBCommand(name: "cd-boot-order", command: "set \(bootSource) bootorder=1", request: request))
         if request.bootOnce {
             steps.append(try await runOOBCommand(name: "boot-once", command: "vm cdrom set boot_once", request: request))
         }
@@ -377,6 +378,45 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
             rebooted: request.reboot,
             steps: steps
         )
+    }
+
+    private func discoverCDBootSource(request: OOBBootURLRequest, steps: inout [OOBBootURLStep]) async -> String {
+        let fallback = "/system1/bootconfig1/bootsource2"
+        let bootSources = await runBestEffortOOBCommand(name: "boot-sources", command: "show /system1/bootconfig1", request: request)
+        steps.append(bootSources)
+
+        for target in parseBootSourceTargets(from: bootSources.stdout) {
+            let detail = await runBestEffortOOBCommand(
+                name: "boot-source-\(target)",
+                command: "show /system1/bootconfig1/\(target)",
+                request: request
+            )
+            steps.append(detail)
+            if isCDBootSource(detail.stdout) {
+                return "/system1/bootconfig1/\(target)"
+            }
+        }
+
+        return fallback
+    }
+
+    private func parseBootSourceTargets(from output: String) -> [String] {
+        let targets = output
+            .split(whereSeparator: \.isNewline)
+            .compactMap { line -> String? in
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.hasPrefix("bootsource") else { return nil }
+                return trimmed.split(separator: " ").first.map(String.init)
+            }
+        return targets
+    }
+
+    private func isCDBootSource(_ output: String) -> Bool {
+        let normalized = output.lowercased()
+        return normalized.contains("bootdevice=bootfmcd")
+            || normalized.contains("bootdevice=cd")
+            || normalized.contains("cdrom")
+            || normalized.contains("virtual cd")
     }
 
     public func bootPXE(_ request: OOBPXEBootRequest) async throws -> OOBPXEBootResult {
