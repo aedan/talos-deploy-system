@@ -420,11 +420,18 @@ public struct MaintenanceBundleBuilder {
             meta_payload="$( { printf '0xa='; cat "${meta_path}"; } | gzip -9 | base64 | tr -d '\\n' )"
             sed -i "s/talos.config=metal-iso //g" "$work/grub.cfg"
             sed -i "s|talos.platform=metal |talos.platform=metal talos.environment=INSTALLER_META_BASE64=${meta_payload} ${TDS_TALOS_BOOT_ARGS_EXTRA} |g" "$work/grub.cfg"
-            xorriso -indev "$TDS_BASE_TALOS_ISO" -outdev "$out.tmp" \\
-              -volid metal-iso \\
-              -map "$work/grub.cfg" /boot/grub/grub.cfg \\
-              -map "boot-machine-configs/${name}.yaml" /config.yaml \\
-              -boot_image any replay >/dev/null 2>&1
+            if [ "$boot_mode" = "meta" ]; then
+              xorriso -indev "$TDS_BASE_TALOS_ISO" -outdev "$out.tmp" \\
+                -volid metal-iso \\
+                -map "$work/grub.cfg" /boot/grub/grub.cfg \\
+                -boot_image any replay >/dev/null 2>&1
+            else
+              xorriso -indev "$TDS_BASE_TALOS_ISO" -outdev "$out.tmp" \\
+                -volid metal-iso \\
+                -map "$work/grub.cfg" /boot/grub/grub.cfg \\
+                -map "boot-machine-configs/${name}.yaml" /config.yaml \\
+                -boot_image any replay >/dev/null 2>&1
+            fi
             mv "$out.tmp" "$out"
 
             wipe_out="${out%.iso}-wipe.iso"
