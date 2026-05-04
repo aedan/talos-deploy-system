@@ -405,7 +405,7 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
             .split(whereSeparator: \.isNewline)
             .compactMap { line -> String? in
                 let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard trimmed.hasPrefix("bootsource") else { return nil }
+                guard trimmed.hasPrefix("bootsource") || trimmed.hasPrefix("oemhp_uefibootsource") else { return nil }
                 return trimmed.split(separator: " ").first.map(String.init)
             }
         return targets
@@ -415,7 +415,10 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
         let normalized = output.lowercased()
         return normalized.contains("bootdevice=bootfmcd")
             || normalized.contains("bootdevice=cd")
+            || normalized.contains("cd/dvd")
+            || normalized.contains("dvd")
             || normalized.contains("cdrom")
+            || normalized.contains("virtual usb")
             || normalized.contains("virtual cd")
     }
 

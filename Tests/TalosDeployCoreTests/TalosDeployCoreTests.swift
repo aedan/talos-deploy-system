@@ -942,6 +942,54 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(result.bootOnce)
     }
 
+    func testHammertimeOOBBooterDiscoversUEFIVirtualCDSource() async throws {
+        let uefiSources = (1...8).map { "    oemhp_uefibootsource\($0)" }.joined(separator: "\n")
+        let runner = MockCommandRunner(
+            responses: [
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "inserted", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "connected", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: """
+                /system1/bootconfig1
+                  Targets
+                \(uefiSources)
+                  Properties
+                    oemhp_bootmode=UEFI
+                """, stderr: "", exitCode: 0),
+            ] + (1...7).map { index in
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: """
+                /system1/bootconfig1/oemhp_uefibootsource\(index)
+                  Properties
+                    bootorder=\(index)
+                    oemhp_description=Disk or network source
+                """, stderr: "", exitCode: 0)
+            } + [
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: """
+                /system1/bootconfig1/oemhp_uefibootsource8
+                  Properties
+                    bootorder=8
+                    oemhp_description=iLO Virtual USB 2 : HPE iLO Virtual USB CD/DVD ROM
+                """, stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "uefi cd first", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "boot once", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = Yes\nBoot Option = BOOT_ONCE", stderr: "", exitCode: 0),
+            ]
+        )
+        let booter = HammertimeOOBBooter(
+            settings: HammertimeSettings(binaryPath: "/tmp/ht", timeoutSeconds: 30),
+            runner: runner
+        )
+
+        _ = try await booter.bootURL(
+            OOBBootURLRequest(deviceID: "716185", imageURL: "http://10.0.0.1:8080/talos.iso", reboot: false)
+        )
+
+        let commands = runner.invocations.compactMap { invocation -> String? in
+            guard let index = invocation.arguments.firstIndex(of: "--command") else { return nil }
+            return invocation.arguments[index + 1]
+        }
+        XCTAssertTrue(commands.contains("set /system1/bootconfig1/oemhp_uefibootsource8 bootorder=1"))
+    }
+
     func testHammertimeInventoryUsesLongEnoughTimeoutForLargeAccounts() async throws {
         let runner = MockCommandRunner(
             responses: [
