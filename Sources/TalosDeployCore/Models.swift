@@ -1012,6 +1012,7 @@ public struct DeployerMediaServiceConfiguration: Codable, Equatable, Sendable {
     public var pxeDirectoryName: String
     public var httpBindAddress: String
     public var httpPort: Int
+    public var dnsListenAddresses: [String]
     public var registryPort: Int
     public var packageCacheRoot: String
     public var talosctlVersion: String
@@ -1022,6 +1023,7 @@ public struct DeployerMediaServiceConfiguration: Codable, Equatable, Sendable {
         pxeDirectoryName: String = "pxe",
         httpBindAddress: String = "0.0.0.0",
         httpPort: Int = 8080,
+        dnsListenAddresses: [String] = [],
         registryPort: Int = 5000,
         packageCacheRoot: String = "/var/cache/tds",
         talosctlVersion: String = ""
@@ -1031,6 +1033,7 @@ public struct DeployerMediaServiceConfiguration: Codable, Equatable, Sendable {
         self.pxeDirectoryName = pxeDirectoryName
         self.httpBindAddress = httpBindAddress
         self.httpPort = httpPort
+        self.dnsListenAddresses = dnsListenAddresses
         self.registryPort = registryPort
         self.packageCacheRoot = packageCacheRoot
         self.talosctlVersion = talosctlVersion

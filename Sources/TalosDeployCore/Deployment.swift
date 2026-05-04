@@ -134,6 +134,25 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
         )
     }
 
+    private func renderDnsmasqConfig(configuration: DeployerMediaServiceConfiguration) -> String {
+        let listenAddresses = uniqueNonEmpty(configuration.dnsListenAddresses)
+        var lines = [
+            "# Managed by tds. Final DHCP/PXE ranges are rendered per deployment run.",
+            "log-dhcp",
+            "enable-tftp",
+        ]
+        guard !listenAddresses.isEmpty else {
+            lines.insert("port=0", at: 1)
+            return lines.joined(separator: "\n")
+        }
+
+        lines.insert("port=53", at: 1)
+        lines.append("bind-interfaces")
+        lines.append("no-dhcp-interface=lo")
+        lines.append(contentsOf: listenAddresses.map { "listen-address=\($0)" })
+        return lines.joined(separator: "\n")
+    }
+
     public func prepareDeployerServices(configuration: DeployerMediaServiceConfiguration, connection: SSHConnection) async throws -> DeployerServicePlan {
         try await prepareDeployerServices(
             configuration: configuration,
@@ -151,6 +170,7 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
         let cacheRoot = configuration.packageCacheRoot
         let registryRoot = "\(configuration.stateRoot)/registry"
         let talosctlVersion = configuration.talosctlVersion.trimmingCharacters(in: .whitespacesAndNewlines)
+        let dnsmasqConfig = renderDnsmasqConfig(configuration: configuration)
         let remoteCommand = """
         set -e
         sudo mkdir -p \(shellEscape(binRoot)) \(shellEscape(dnsmasqRoot)) \(shellEscape(mediaRoot)) \(shellEscape(logRoot)) \(shellEscape(registryRoot)) \(shellEscape(cacheRoot))/apt \(shellEscape(cacheRoot))/talosctl
@@ -175,10 +195,7 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
           chmod 0755 \(shellEscape("\(binRoot)/talosctl"))
         fi
         cat > \(shellEscape("\(dnsmasqRoot)/tds-dnsmasq.conf")) <<'EOF'
-        # Managed by tds. Final DHCP/PXE ranges are rendered per deployment run.
-        port=0
-        log-dhcp
-        enable-tftp
+        \(dnsmasqConfig)
         EOF
         cat > /tmp/tds-media-http.service <<'EOF'
         [Unit]
@@ -1072,6 +1089,16 @@ private func firstNonEmptyStatic(_ values: String...) -> String {
     values.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
 }
 
+private func uniqueNonEmpty(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    var result: [String] = []
+    for value in values.map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }) where !value.isEmpty {
+        guard seen.insert(value).inserted else { continue }
+        result.append(value)
+    }
+    return result
+}
+
 func deployerRegistryHost(for spec: DeploymentSpec) -> String? {
     guard spec.talosProvisioning.allowDeployerRegistry else { return nil }
     let host = firstNonEmptyStatic(spec.talosProvisioning.deployerRegistryHost, deployerNodeAddress(for: spec))
@@ -1084,6 +1111,15 @@ func deployerNodeAddress(for spec: DeploymentSpec) -> String {
         spec.deployerNode?.device.privateIP ?? "",
         spec.deployerNode?.device.primaryIP ?? ""
     )
+}
+
+func deployerDNSListenAddresses(for spec: DeploymentSpec) -> [String] {
+    uniqueNonEmpty([
+        spec.talosProvisioning.deployerRegistryAddressCIDR.split(separator: "/").first.map(String.init) ?? "",
+        spec.talosProvisioning.deployerNodeRouteSourceCIDR.split(separator: "/").first.map(String.init) ?? "",
+        spec.deployerNode?.device.privateIP ?? "",
+        spec.deployerNode?.device.primaryIP ?? "",
+    ])
 }
 
 func deployerRegistryEndpoint(for spec: DeploymentSpec) -> String? {
@@ -1466,8 +1502,10 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         tdsProgress("Validating deployer transport before state sync via \(transport.targetDescription)")
         _ = try await deployerHostClient.validate(transport: transport)
         tdsProgress("Preparing deployer media services via \(transport.targetDescription)")
+        var serviceConfiguration = DeployerMediaServiceConfiguration(defaults: settings.deployer)
+        serviceConfiguration.dnsListenAddresses = deployerDNSListenAddresses(for: state.spec)
         let mediaPlan = try await deployerHostClient.prepareMediaServices(
-            configuration: DeployerMediaServiceConfiguration(defaults: settings.deployer),
+            configuration: serviceConfiguration,
             transport: transport
         )
         tdsProgress("Syncing deployment state to \(state.plan.durableStateDirectory) via \(transport.targetDescription)")
@@ -1498,6 +1536,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             serviceConfiguration.talosctlVersion = state.spec.talosVersion
         }
         serviceConfiguration.registryPort = state.spec.talosProvisioning.deployerRegistryPort
+        serviceConfiguration.dnsListenAddresses = deployerDNSListenAddresses(for: state.spec)
         var updated = state
         var servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
         let renameResult: CoreRenameResult?
@@ -1627,6 +1666,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             serviceConfiguration.talosctlVersion = state.spec.talosVersion
         }
         serviceConfiguration.registryPort = state.spec.talosProvisioning.deployerRegistryPort
+        serviceConfiguration.dnsListenAddresses = deployerDNSListenAddresses(for: state.spec)
         var updated = state
         var servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
         let localDirectory = URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)
@@ -1715,6 +1755,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             serviceConfiguration.talosctlVersion = state.spec.talosVersion
         }
         serviceConfiguration.registryPort = state.spec.talosProvisioning.deployerRegistryPort
+        serviceConfiguration.dnsListenAddresses = deployerDNSListenAddresses(for: state.spec)
         var updated = state
         var servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
         let localDirectory = URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)

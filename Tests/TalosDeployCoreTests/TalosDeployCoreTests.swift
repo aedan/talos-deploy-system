@@ -1571,6 +1571,22 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(command.contains("systemctl enable --now chrony"))
     }
 
+    func testPrepareDeployerServicesScopesDnsmasqToDeployerAddresses() async throws {
+        let transport = RecordingDeployerTransport()
+
+        _ = try await DefaultDeployerHostClient().prepareDeployerServices(
+            configuration: DeployerMediaServiceConfiguration(dnsListenAddresses: ["198.51.100.20", "198.51.100.20", "172.22.220.236"]),
+            transport: transport
+        )
+
+        let command = try XCTUnwrap(transport.commands.first)
+        XCTAssertTrue(command.contains("port=53"))
+        XCTAssertTrue(command.contains("bind-interfaces"))
+        XCTAssertTrue(command.contains("listen-address=198.51.100.20"))
+        XCTAssertTrue(command.contains("listen-address=172.22.220.236"))
+        XCTAssertEqual(command.components(separatedBy: "listen-address=198.51.100.20").count - 1, 1)
+    }
+
     func testPreinstallSnapshotCapturePersistsArtifacts() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let device = DiscoveredDevice(

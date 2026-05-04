@@ -1022,6 +1022,10 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         fi
         if [ -f \(shellEscape("\(configuration.stateRoot)/media-service.env")) ]; then
           . \(shellEscape("\(configuration.stateRoot)/media-service.env"))
+          if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files tds-dnsmasq.service >/dev/null 2>&1; then
+            sudo systemctl reset-failed tds-dnsmasq.service >/dev/null 2>&1 || true
+            sudo systemctl restart tds-dnsmasq.service || true
+          fi
           http_check_host="$HTTP_BIND"
           if [ "$http_check_host" = "0.0.0.0" ]; then
             http_check_host="127.0.0.1"
