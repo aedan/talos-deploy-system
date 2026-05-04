@@ -1208,6 +1208,12 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         }
         while IFS= read -r image; do
           [ -n "$image" ] || continue
+          case "$image" in
+            "$registry_host"/*|"$local_registry"/*)
+              echo "Image already references deployer registry, skipping upstream cache copy: $image"
+              continue
+              ;;
+          esac
           dest="$(destination_for_image "$image" || true)"
           if [ -z "$dest" ]; then
             echo "Skipping image outside configured deployer registry mirrors: $image"

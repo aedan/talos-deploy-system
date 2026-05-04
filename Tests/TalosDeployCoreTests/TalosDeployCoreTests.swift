@@ -1334,6 +1334,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("addr replace '198.51.100.55/32' dev 'br-ctlplane'") == true })
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("chown -R docker-registry:docker-registry '/var/lib/talos-deploy/registry'") == true })
         XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("chmod -R 0777 '/var/lib/talos-deploy/registry'") == true })
+        XCTAssertTrue(runner.invocations.contains { $0.arguments.last?.contains("Image already references deployer registry, skipping upstream cache copy") == true })
         XCTAssertTrue(runner.invocations.last?.arguments.last?.contains("tds-run-talos-deploy.sh") == true)
     }
 
