@@ -283,6 +283,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("addresses:\n          - 198.51.100.10/22"))
         XCTAssertTrue(patch.contains("network: 0.0.0.0/0"))
         XCTAssertTrue(patch.contains("gateway: 198.51.100.1"))
+        XCTAssertTrue(patch.contains("    legacyBIOSSupport: true"))
         XCTAssertTrue(patch.contains("  kubelet:\n    extraMounts:"))
         XCTAssertTrue(patch.contains("  time:\n    servers:"))
         XCTAssertFalse(patch.contains("  extraMounts:\n    - destination: /var/lib/longhorn"))
@@ -652,6 +653,37 @@ final class TalosDeployCoreTests: XCTestCase {
         let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
 
         XCTAssertTrue(patch.contains("    wipe: false"))
+    }
+
+    func testTalosBuilderCanDisableLegacyBIOSSupportWhenRequested() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = DiscoveredDevice(
+            id: "deployer",
+            accountNumber: "0000000",
+            name: "deployer-1",
+            primaryIP: "203.0.113.196",
+            privateIP: "198.51.100.196"
+        )
+        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            talosProvisioning: TalosProvisioningDefaults(legacyBIOSSupport: false),
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
+            ]
+        )
+
+        let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
+        let output = try await DefaultTalosBuilder().buildArtifacts(for: spec, plan: plan, in: temp)
+        let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+
+        XCTAssertTrue(patch.contains("    legacyBIOSSupport: false"))
     }
 
     func testTalosBuilderPrefersNodeFacingRegistryAddressCIDR() async throws {

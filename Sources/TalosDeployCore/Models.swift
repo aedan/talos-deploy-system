@@ -684,6 +684,7 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
     public var allowExternalOOBURL: Bool
     public var externalOOBMediaBaseURL: String
     public var wipeSystemDiskBeforeInstall: Bool
+    public var legacyBIOSSupport: Bool
     public var useOOBHardwareAddressSelectors: Bool
     public var allowDeployerRegistry: Bool
     public var deployerRegistryHost: String
@@ -707,6 +708,7 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
         allowExternalOOBURL: Bool = false,
         externalOOBMediaBaseURL: String = "",
         wipeSystemDiskBeforeInstall: Bool = true,
+        legacyBIOSSupport: Bool = true,
         useOOBHardwareAddressSelectors: Bool = true,
         allowDeployerRegistry: Bool = true,
         deployerRegistryHost: String = "",
@@ -723,6 +725,7 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
         self.allowExternalOOBURL = allowExternalOOBURL
         self.externalOOBMediaBaseURL = externalOOBMediaBaseURL
         self.wipeSystemDiskBeforeInstall = wipeSystemDiskBeforeInstall
+        self.legacyBIOSSupport = legacyBIOSSupport
         self.useOOBHardwareAddressSelectors = useOOBHardwareAddressSelectors
         self.allowDeployerRegistry = allowDeployerRegistry
         self.deployerRegistryHost = deployerRegistryHost
@@ -743,6 +746,7 @@ extension TalosProvisioningDefaults {
         case allowExternalOOBURL
         case externalOOBMediaBaseURL
         case wipeSystemDiskBeforeInstall
+        case legacyBIOSSupport
         case useOOBHardwareAddressSelectors
         case allowDeployerRegistry
         case deployerRegistryHost
@@ -764,6 +768,7 @@ extension TalosProvisioningDefaults {
             allowExternalOOBURL: try container.decodeIfPresent(Bool.self, forKey: .allowExternalOOBURL) ?? defaults.allowExternalOOBURL,
             externalOOBMediaBaseURL: try container.decodeIfPresent(String.self, forKey: .externalOOBMediaBaseURL) ?? defaults.externalOOBMediaBaseURL,
             wipeSystemDiskBeforeInstall: try container.decodeIfPresent(Bool.self, forKey: .wipeSystemDiskBeforeInstall) ?? defaults.wipeSystemDiskBeforeInstall,
+            legacyBIOSSupport: try container.decodeIfPresent(Bool.self, forKey: .legacyBIOSSupport) ?? defaults.legacyBIOSSupport,
             useOOBHardwareAddressSelectors: try container.decodeIfPresent(Bool.self, forKey: .useOOBHardwareAddressSelectors) ?? defaults.useOOBHardwareAddressSelectors,
             allowDeployerRegistry: try container.decodeIfPresent(Bool.self, forKey: .allowDeployerRegistry) ?? defaults.allowDeployerRegistry,
             deployerRegistryHost: try container.decodeIfPresent(String.self, forKey: .deployerRegistryHost) ?? defaults.deployerRegistryHost,

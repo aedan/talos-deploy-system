@@ -947,6 +947,8 @@ private struct SettingsRootView: View {
                     .fieldHelp("When Hammertime/iLO can read physical NIC MACs, tds renders Talos management networking with deviceSelector.hardwareAddr for safer interface matching.")
                 Toggle("Wipe Talos system disk before install", isOn: $controller.settings.talos.provisioning.wipeSystemDiskBeforeInstall)
                     .fieldHelp("Boots a tds-generated Talos reset ISO before normal install media so repeat deployments clear any previous or partial Talos install.")
+                Toggle("Enable legacy BIOS disk boot support", isOn: $controller.settings.talos.provisioning.legacyBIOSSupport)
+                    .fieldHelp("Marks the Talos install disk bootable for legacy BIOS systems. Keep enabled for older HPE/Dell bare metal that reports Legacy boot mode; disable only for environments known to be UEFI-only.")
                 Toggle("Use deployer installer registry", isOn: $controller.settings.talos.provisioning.allowDeployerRegistry)
                     .fieldHelp("Caches the Talos installer and selected cluster images in a registry on the Ubuntu deployer so Talos nodes do not need Internet access during install/bootstrap.")
                 TextField("Deployer registry host override", text: $controller.settings.talos.provisioning.deployerRegistryHost)
