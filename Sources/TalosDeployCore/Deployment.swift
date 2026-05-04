@@ -1686,7 +1686,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         serviceConfiguration.registryPort = state.spec.talosProvisioning.deployerRegistryPort
         serviceConfiguration.dnsListenAddresses = deployerDNSListenAddresses(for: state.spec)
         var updated = state
-        var servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
+        let servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
         let localDirectory = URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)
         _ = try await builder.buildArtifacts(for: updated.spec, plan: updated.plan, in: localDirectory)
         let maintenanceBundle = try MaintenanceBundleBuilder(fileManager: fileManager).writeBundle(for: updated, in: localDirectory)
@@ -1730,8 +1730,8 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             message: selection.validation.message,
             attempts: selection.failedAttempts + selection.validation.attempts
         )
-        tdsProgress("Preparing deployer services before resume")
-        servicePlan = try await deployerHostClient.prepareDeployerServices(
+        tdsProgress("Refreshing deployer media service files before resume")
+        _ = try await deployerHostClient.prepareMediaServices(
             configuration: serviceConfiguration,
             transport: transport
         )
@@ -1775,7 +1775,7 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         serviceConfiguration.registryPort = state.spec.talosProvisioning.deployerRegistryPort
         serviceConfiguration.dnsListenAddresses = deployerDNSListenAddresses(for: state.spec)
         var updated = state
-        var servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
+        let servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
         let localDirectory = URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)
         _ = try await builder.buildArtifacts(for: updated.spec, plan: updated.plan, in: localDirectory)
         let maintenanceBundle = try MaintenanceBundleBuilder(fileManager: fileManager).writeBundle(for: updated, in: localDirectory)
@@ -1820,8 +1820,8 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             message: selection.validation.message,
             attempts: selection.failedAttempts + selection.validation.attempts
         )
-        tdsProgress("Preparing deployer services before Talos reprovision")
-        servicePlan = try await deployerHostClient.prepareDeployerServices(
+        tdsProgress("Refreshing deployer media service files before Talos reprovision")
+        _ = try await deployerHostClient.prepareMediaServices(
             configuration: serviceConfiguration,
             transport: transport
         )
