@@ -277,14 +277,20 @@ final class TalosDeployCoreTests: XCTestCase {
         let bootPatch = try String(contentsOf: output.appending(path: "boot-node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
         let bootMeta = try String(contentsOf: output.appending(path: "boot-network-meta").appending(path: "cp-1.yaml"), encoding: .utf8)
         XCTAssertTrue(patch.contains("image: factory.talos.dev/installer/abc123:v1.11.3"))
-        XCTAssertFalse(patch.contains("hostname: cp-1"))
+        XCTAssertTrue(patch.contains("hostname: cp-1"))
         XCTAssertTrue(patch.contains("name: br_netfilter"))
         XCTAssertTrue(patch.contains("zfs_arc_max=123"))
         XCTAssertTrue(patch.contains("addresses:\n          - 198.51.100.10/22"))
+        XCTAssertTrue(patch.contains("mtu: 1500"))
         XCTAssertTrue(patch.contains("network: 0.0.0.0/0"))
         XCTAssertTrue(patch.contains("gateway: 198.51.100.1"))
         XCTAssertTrue(patch.contains("    legacyBIOSSupport: true"))
-        XCTAssertTrue(patch.contains("  kubelet:\n    extraMounts:"))
+        XCTAssertTrue(patch.contains("    nodeIP:\n      validSubnets:\n        - 198.51.100.0/22"))
+        XCTAssertTrue(patch.contains("    extraMounts:"))
+        XCTAssertTrue(patch.contains("  features:\n    rbac: true"))
+        XCTAssertTrue(patch.contains("cluster:\n  allowSchedulingOnControlPlanes: true"))
+        XCTAssertTrue(patch.contains("    cni:\n      name: none"))
+        XCTAssertTrue(patch.contains("  etcd:\n    advertisedSubnets:\n      - 198.51.100.0/22"))
         XCTAssertTrue(patch.contains("  time:\n    servers:"))
         XCTAssertFalse(patch.contains("  extraMounts:\n    - destination: /var/lib/longhorn"))
         XCTAssertTrue(patch.contains("destination: /var/lib/longhorn"))
@@ -469,6 +475,11 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("          - eno49"))
         XCTAssertTrue(patch.contains("network: 192.168.100.0/24"))
         XCTAssertTrue(patch.contains("gateway: 198.51.101.36"))
+        XCTAssertTrue(patch.contains("hostname: cp-1"))
+        XCTAssertTrue(patch.contains("    nodeIP:\n      validSubnets:\n        - 198.51.100.0/22"))
+        XCTAssertTrue(patch.contains("  nodeLabels:\n    node.kubernetes.io/exclude-from-external-load-balancers: \"\""))
+        XCTAssertTrue(patch.contains("  allowSchedulingOnControlPlanes: true"))
+        XCTAssertTrue(patch.contains("  etcd:\n    advertisedSubnets:\n      - 198.51.100.0/22"))
         XCTAssertTrue(bootPatch.contains("addresses:\n          - 198.51.100.10/22"))
         XCTAssertTrue(bootPatch.contains("network: 0.0.0.0/0"))
         XCTAssertFalse(bootPatch.contains("      - interface: eno3\n        vlans:"))
@@ -477,7 +488,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertFalse(bootPatch.contains("  install:\n"))
     }
 
-    func testTalosBuilderRendersManagementDeviceSelectorWhenMACIsKnown() async throws {
+    func testTalosBuilderPrefersExplicitManagementInterfaceWhenMACIsKnown() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
         let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
@@ -511,8 +522,9 @@ final class TalosDeployCoreTests: XCTestCase {
         let output = try await DefaultTalosBuilder().buildArtifacts(for: spec, plan: plan, in: temp)
         let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
 
-        XCTAssertTrue(patch.contains("      - deviceSelector:\n          hardwareAddr: 3c:a8:2a:1c:a0:28"))
-        XCTAssertFalse(patch.contains("      - interface: eno1\n        addresses:"))
+        XCTAssertTrue(patch.contains("      - interface: eno1\n        addresses:"))
+        XCTAssertFalse(patch.contains("deviceSelector:"))
+        XCTAssertFalse(patch.contains("hardwareAddr: 3c:a8:2a:1c:a0:28"))
         XCTAssertTrue(patch.contains("addresses:\n          - 198.51.100.10/22"))
     }
 
@@ -571,12 +583,13 @@ final class TalosDeployCoreTests: XCTestCase {
         let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "worker-1.yaml"), encoding: .utf8)
         let bootPatch = try String(contentsOf: output.appending(path: "boot-node-patches").appending(path: "worker-1.yaml"), encoding: .utf8)
 
-        XCTAssertTrue(patch.contains("      - deviceSelector:\n          hardwareAddr: 3c:a8:2a:23:eb:b8\n        addresses:\n          - 198.51.100.20/22"))
+        XCTAssertTrue(patch.contains("      - interface: eno1\n        addresses:\n          - 198.51.100.20/22"))
+        XCTAssertFalse(patch.contains("deviceSelector:"))
         XCTAssertTrue(patch.contains("        routes:\n          - network: 0.0.0.0/0\n            gateway: 198.51.100.1"))
         XCTAssertTrue(patch.contains("      - interface: br-ctlplane"))
         XCTAssertTrue(patch.contains("        bridge:\n          interfaces:\n            - eno49"))
         XCTAssertEqual(patch.components(separatedBy: "      - interface: br-ctlplane").count - 1, 1)
-        XCTAssertTrue(bootPatch.contains("      - deviceSelector:\n          hardwareAddr: 3c:a8:2a:23:eb:b8"))
+        XCTAssertTrue(bootPatch.contains("      - interface: eno1\n        addresses:\n          - 198.51.100.20/22"))
         XCTAssertFalse(bootPatch.contains("      - interface: br-ctlplane"))
     }
 
@@ -797,7 +810,8 @@ final class TalosDeployCoreTests: XCTestCase {
 
         XCTAssertEqual(inventory.requests, ["716182"])
         XCTAssertTrue(state.events.contains { $0.message.contains("Selected OOB NIC MAC 3c:a8:2a:1c:a0:28") })
-        XCTAssertTrue(patch.contains("hardwareAddr: 3c:a8:2a:1c:a0:28"))
+        XCTAssertTrue(state.spec.nodes.contains { $0.assignment.staticNetwork.managementHardwareAddress == "3c:a8:2a:1c:a0:28" })
+        XCTAssertFalse(patch.contains("hardwareAddr: 3c:a8:2a:1c:a0:28"))
     }
 
     func testBridgeSessionDetectionParsesHammertimeCachePayload() async throws {

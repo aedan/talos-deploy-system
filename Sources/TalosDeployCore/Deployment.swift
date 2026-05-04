@@ -774,8 +774,8 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
     ) -> String {
         let staticConfig = StaticNetworkPlanner().config(for: node)
         let interfaceName = firstNonEmptyStatic(staticConfig.managementInterface, node.device.networkInterfaces.first?.name ?? "eth0")
-        let managementHardwareAddress = staticConfig.managementHardwareAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         let managementBridge = includeAdditionalNetworking ? finalManagementBridge(for: staticConfig, fallbackInterfaceName: interfaceName) : nil
+        let managementSubnet = ipv4NetworkCIDR(from: staticConfig.managementAddressCIDR)
         let installerImage = deployerRegistryInstallerImage(for: spec)
             ?? TalosFactoryClient().artifactURLs(settings: spec.talosFactory, talosVersion: spec.talosVersion).installerImage
         var lines = [
@@ -783,17 +783,19 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             "  type: \(node.assignment.role == .worker ? "worker" : "controlplane")",
         ]
         lines.append(contentsOf: renderKernelModules(spec.talosKernelModules))
-        lines.append(contentsOf: renderLonghornExtraMounts(enabled: spec.enableLonghornExtraMounts))
+        lines.append(contentsOf: renderKubeletSettings(
+            longhornExtraMountsEnabled: spec.enableLonghornExtraMounts,
+            managementSubnet: managementSubnet
+        ))
+        lines.append(contentsOf: renderControlPlaneNodeLabels(node: node))
         lines.append(contentsOf: renderRegistryMirror(spec: spec))
         lines.append(contentsOf: renderTimeServers(spec: spec))
         lines.append("  network:")
+        lines.append("    hostname: \(yamlScalar(talosHostname(for: node.device)))")
         lines.append(contentsOf: renderNameservers(staticConfig, spec: spec))
         lines.append("    interfaces:")
         if let managementBridge {
             lines.append("      - interface: \(managementBridge.name)")
-        } else if !managementHardwareAddress.isEmpty {
-            lines.append("      - deviceSelector:")
-            lines.append("          hardwareAddr: \(yamlScalar(managementHardwareAddress))")
         } else {
             lines.append("      - interface: \(interfaceName)")
         }
@@ -801,6 +803,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             lines.append("        addresses:")
             lines.append("          - \(staticConfig.managementAddressCIDR)")
         }
+        lines.append("        mtu: 1500")
         lines.append(contentsOf: renderRoutes(staticConfig.routes))
         if let managementBridge {
             lines.append(contentsOf: renderBridgeBody(managementBridge))
@@ -820,6 +823,8 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             lines.append("    legacyBIOSSupport: \(spec.talosProvisioning.legacyBIOSSupport ? "true" : "false")")
             lines.append(contentsOf: renderExtraKernelArgs(spec.talosFactory.extraKernelArgs))
         }
+        lines.append(contentsOf: renderMachineFeatures())
+        lines.append(contentsOf: renderClusterPatch(node: node, managementSubnet: managementSubnet))
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -1055,19 +1060,69 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         return lines
     }
 
-    private func renderLonghornExtraMounts(enabled: Bool) -> [String] {
-        guard enabled else { return [] }
+    private func renderKubeletSettings(longhornExtraMountsEnabled: Bool, managementSubnet: String) -> [String] {
+        guard longhornExtraMountsEnabled || !managementSubnet.isEmpty else { return [] }
+        var lines = ["  kubelet:"]
+        if !managementSubnet.isEmpty {
+            lines.append("    nodeIP:")
+            lines.append("      validSubnets:")
+            lines.append("        - \(managementSubnet)")
+        }
+        if longhornExtraMountsEnabled {
+            lines.append(contentsOf: [
+                "    extraMounts:",
+                "      - destination: /var/lib/longhorn",
+                "        type: bind",
+                "        source: /var/lib/longhorn",
+                "        options:",
+                "          - bind",
+                "          - rshared",
+                "          - rw",
+            ])
+        }
+        return lines
+    }
+
+    private func renderControlPlaneNodeLabels(node: DeploymentNodeSpec) -> [String] {
+        guard node.assignment.role == .controlplane else { return [] }
         return [
-            "  kubelet:",
-            "    extraMounts:",
-            "      - destination: /var/lib/longhorn",
-            "        type: bind",
-            "        source: /var/lib/longhorn",
-            "        options:",
-            "          - bind",
-            "          - rshared",
-            "          - rw",
+            "  nodeLabels:",
+            "    node.kubernetes.io/exclude-from-external-load-balancers: \"\"",
         ]
+    }
+
+    private func renderMachineFeatures() -> [String] {
+        [
+            "  features:",
+            "    rbac: true",
+            "    stableHostname: true",
+            "    apidCheckExtKeyUsage: true",
+            "    diskQuotaSupport: true",
+            "    kubePrism:",
+            "      enabled: true",
+            "      port: 7445",
+            "    hostDNS:",
+            "      enabled: true",
+            "      forwardKubeDNSToHost: true",
+        ]
+    }
+
+    private func renderClusterPatch(node: DeploymentNodeSpec, managementSubnet: String) -> [String] {
+        var lines = ["cluster:"]
+        if node.assignment.role == .controlplane {
+            lines.append("  allowSchedulingOnControlPlanes: true")
+        }
+        lines.append("  network:")
+        lines.append("    cni:")
+        lines.append("      name: none")
+        if node.assignment.role == .controlplane, !managementSubnet.isEmpty {
+            lines.append("  etcd:")
+            lines.append("    advertisedSubnets:")
+            lines.append("      - \(managementSubnet)")
+            lines.append("    listenSubnets:")
+            lines.append("      - \(managementSubnet)")
+        }
+        return lines
     }
 
     private func renderClusterFile(spec: DeploymentSpec) -> String {
@@ -1105,6 +1160,64 @@ private func uniqueNonEmpty(_ values: [String]) -> [String] {
         result.append(value)
     }
     return result
+}
+
+private func talosHostname(for device: DiscoveredDevice) -> String {
+    let base = firstNonEmptyStatic(
+        device.name.split(separator: ".").first.map(String.init) ?? "",
+        device.id,
+        "talos-node"
+    )
+    let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-"))
+    let normalized = base
+        .lowercased()
+        .unicodeScalars
+        .map { allowed.contains($0) ? Character($0) : "-" }
+    var hostname = String(normalized)
+        .reduce(into: "") { partial, character in
+            if character == "-", partial.last == "-" { return }
+            partial.append(character)
+        }
+        .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    if hostname.count > 63 {
+        hostname = String(hostname.prefix(63)).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+    return hostname.isEmpty ? "talos-node" : hostname
+}
+
+private func ipv4NetworkCIDR(from addressCIDR: String) -> String {
+    let parts = addressCIDR.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "/", maxSplits: 1)
+    guard parts.count == 2,
+          let prefix = Int(parts[1]),
+          (0...32).contains(prefix),
+          let address = ipv4Integer(String(parts[0]))
+    else {
+        return ""
+    }
+    let mask = prefix == 0 ? UInt32(0) : UInt32.max << UInt32(32 - prefix)
+    return "\(ipv4String(address & mask))/\(prefix)"
+}
+
+private func ipv4Integer(_ value: String) -> UInt32? {
+    let octets = value.split(separator: ".")
+    guard octets.count == 4 else { return nil }
+    var result = UInt32(0)
+    for octet in octets {
+        guard let number = UInt32(octet), number <= 255 else { return nil }
+        result = (result << 8) | number
+    }
+    return result
+}
+
+private func ipv4String(_ value: UInt32) -> String {
+    [
+        (value >> 24) & 0xff,
+        (value >> 16) & 0xff,
+        (value >> 8) & 0xff,
+        value & 0xff,
+    ]
+    .map(String.init)
+    .joined(separator: ".")
 }
 
 func deployerRegistryHost(for spec: DeploymentSpec) -> String? {

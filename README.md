@@ -58,7 +58,7 @@ Use fake account numbers in examples and docs. Real account numbers belong in op
 4. Use the inventory search field to find physical servers by name, ID, IP, OOB IP, platform/model, or role.
 5. Select one physical device as `deployer`. If it needs Ubuntu reinstalled, leave install enabled and type the destructive confirmation.
 6. Assign Talos nodes as `controlplane` or `worker`.
-7. Review static networking for every Talos node. DHCP may be used for live boot only; final machine configs require static management IPs from Core, capture, or manual overrides. When enabled, `tds` reads iLO/HPE NIC MACs through Hammertime and renders Talos management networking with `deviceSelector.hardwareAddr` instead of trusting OS interface names.
+7. Review static networking for every Talos node. DHCP may be used for live boot only; final machine configs require static management IPs from Core, capture, or manual overrides. When enabled, `tds` reads iLO/HPE NIC MACs through Hammertime and stores them with the node networking for validation and troubleshooting.
 8. In Settings, refresh Talos versions from Image Factory and select the version to deploy. Manual override remains available if Factory is unreachable.
 9. Use `Bootstrap Deployer` to capture/build/validate Ubuntu media and attach it through the embedded iLO local-media WebView when the OOB network cannot fetch external media.
 10. Stage and run deployment. After Ubuntu is online, `tds` installs deployer services, stages Talos artifacts, boots nodes, applies configs, bootstraps etcd, fetches kubeconfig, and verifies health.
@@ -94,7 +94,7 @@ Talos Defaults:
 - Default extensions are `siderolabs/iscsi-tools`, `siderolabs/util-linux-tools`, and `siderolabs/bnx2-bnx2x`.
 - Longhorn `machine.extraMounts` for `/var/lib/longhorn` are rendered by default.
 - Kernel modules, extra kernel args, architecture, platform, and schematic ID are configurable.
-- OOB NIC MAC selectors are enabled by default. If Hammertime/iLO can expose HPE integrated NIC MACs, `tds` maps names such as `eno1` to the matching physical port and writes `deviceSelector.hardwareAddr` into Talos node patches.
+- OOB NIC MAC capture is enabled by default. If Hammertime/iLO can expose HPE integrated NIC MACs, `tds` stores the matching physical-port MACs with the selected node networking while still rendering explicit Talos interface names such as `eno1`.
 - Talos system-disk wipe pre-boot is enabled by default for node installs. `tds` generates a per-node `*-wipe.iso`, boots it once to clear previous or partial Talos installs, waits for the reset pass, then boots the normal per-node ISO with the embedded static machine config.
 - Legacy BIOS disk boot support is enabled by default for bare-metal installs. This renders Talos `machine.install.legacyBIOSSupport: true`, which is important for older servers that report Legacy boot mode through OOB and may not boot a GPT-only install reliably.
 - Final Talos machine configs render the networking configured in the deployment spec, including bridges, VLANs, routes, DNS, install, registry, time, Longhorn, and selected extension settings. To start with only one network, configure only that management network for the selected nodes.
