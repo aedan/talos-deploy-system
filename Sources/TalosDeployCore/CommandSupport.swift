@@ -29,7 +29,14 @@ public enum CommandError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .executionFailed(let result):
-            return "Command failed (\(result.exitCode)): \(result.executable) \(result.arguments.joined(separator: " "))\n\(result.stderr)"
+            let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            let stderr = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            let output = [
+                stderr.isEmpty ? nil : "stderr:\n\(stderr)",
+                stdout.isEmpty ? nil : "stdout:\n\(stdout)",
+            ].compactMap { $0 }.joined(separator: "\n")
+            let suffix = output.isEmpty ? "" : "\n\(output)"
+            return "Command failed (\(result.exitCode)): \(result.executable) \(result.arguments.joined(separator: " "))\(suffix)"
         case .timedOut(let executable, let arguments, let timeout):
             return "Command timed out after \(Int(timeout))s: \(executable) \(arguments.joined(separator: " "))"
         }

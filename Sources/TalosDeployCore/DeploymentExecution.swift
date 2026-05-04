@@ -924,35 +924,72 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
           echo "generated/nodes.tsv is missing; run tds-prepare-talos-media.sh before waiting for Talos boot readiness" >&2
           exit 1
         fi
+        mkdir -p logs
+        WAIT_LOG="logs/talos-readiness-$(date -u +%Y%m%dT%H%M%SZ).log"
+        exec > >(tee -a "$WAIT_LOG") 2>&1
+        echo "[tds-deployer] Talos readiness log: $ROOT/$WAIT_LOG"
+        talos_with_timeout() {
+          if command -v timeout >/dev/null 2>&1; then
+            timeout 20 "$@"
+          else
+            "$@"
+          fi
+        }
         wait_talos_api() {
           local name="$1"
           local ip="$2"
           local attempts="${3:-120}"
+          local secure_out
+          local insecure_out
+          secure_out="$(mktemp)"
+          insecure_out="$(mktemp)"
+          trap 'rm -f "$secure_out" "$insecure_out"' RETURN
           echo "[tds-deployer] waiting for live or configured Talos API on ${name} (${ip}) before OOB media detach"
           for attempt in $(seq 1 "$attempts"); do
-            if "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" version >/dev/null 2>&1; then
+            : > "$secure_out"
+            : > "$insecure_out"
+            if talos_with_timeout "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" version >"$secure_out" 2>&1; then
               echo "[tds-deployer] configured Talos API is reachable on ${name} (${ip})"
+              rm -f "$secure_out" "$insecure_out"
+              trap - RETURN
               return 0
             fi
-            if "$TALOSCTL" --nodes "$ip" --endpoints "$ip" version --insecure >/dev/null 2>&1; then
+            if talos_with_timeout "$TALOSCTL" --nodes "$ip" --endpoints "$ip" version --insecure >"$insecure_out" 2>&1; then
               echo "[tds-deployer] live Talos maintenance API is reachable on ${name} (${ip})"
+              rm -f "$secure_out" "$insecure_out"
+              trap - RETURN
               return 0
             fi
             if [ "$attempt" -eq "$attempts" ]; then
               echo "Timed out waiting for live or configured Talos API on ${name} (${ip})" >&2
+              echo "[tds-deployer] last secure check output for ${name} (${ip}):"
+              tail -40 "$secure_out" || true
+              echo "[tds-deployer] last insecure check output for ${name} (${ip}):"
+              tail -40 "$insecure_out" || true
+              rm -f "$secure_out" "$insecure_out"
+              trap - RETURN
               return 1
             fi
             if [ $((attempt % 6)) -eq 0 ]; then
               echo "[tds-deployer] still waiting for ${name} (${ip}), attempt ${attempt}/${attempts}"
+              echo "[tds-deployer] secure check tail:"
+              tail -8 "$secure_out" || true
+              echo "[tds-deployer] insecure check tail:"
+              tail -8 "$insecure_out" || true
             fi
             sleep 10
           done
+          rm -f "$secure_out" "$insecure_out"
+          trap - RETURN
         }
         failed=0
         while IFS='|' read -r name role ip patch boot_patch meta_path device_id media_file boot_mode; do
           [ -n "$name" ] || continue
           wait_talos_api "$name" "$ip" 120 || failed=1
         done < generated/nodes.tsv
+        if [ "$failed" -ne 0 ]; then
+          echo "[tds-deployer] one or more nodes failed readiness; see $ROOT/$WAIT_LOG" >&2
+        fi
         exit "$failed"
         """
     }
