@@ -876,6 +876,15 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             warnings.append(contentsOf: result.warnings)
         }
 
+        let waitForBootCommand = renderWaitForTalosBootReadinessCommand(
+            state: state,
+            targetDeviceIDs: talosInstalls.map { $0.device.id }
+        )
+        let waitTimeout = TimeInterval(max(1800, talosInstalls.count * 1300))
+        tdsProgress("Waiting for reprovisioned Talos nodes to expose the live/configured API")
+        _ = try await transport.run(waitForBootCommand, timeout: waitTimeout)
+        executedActions.append("Confirmed Talos API reachability for reprovisioned nodes before resume/apply.")
+
         return TalosProvisioningExecution(
             plannedActions: talosInstalls.map { plannedAction(for: $0, mediaBaseURL: mediaBaseURL, state: state) },
             executedActions: executedActions,
@@ -914,11 +923,16 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         return TalosProvisioningExecution(executedActions: executedActions, warnings: warnings)
     }
 
-    private func renderWaitForTalosBootReadinessCommand(state: DeploymentState) -> String {
-        """
+    private func renderWaitForTalosBootReadinessCommand(state: DeploymentState, targetDeviceIDs: [String] = []) -> String {
+        let targetIDList = targetDeviceIDs
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        return """
         bash <<'TDS_TALOS_READINESS'
         set -euo pipefail
         ROOT=\(shellEscape(state.plan.durableStateDirectory))
+        TARGET_IDS=\(shellEscape(targetIDList))
         TDS_DEPLOYER_STATE_ROOT=\(shellEscape(state.spec.deployerStateRoot))
         TALOSCTL="$ROOT/bin/talosctl"
         if [ ! -x "$TALOSCTL" ] && [ -x "${TDS_DEPLOYER_STATE_ROOT}/bin/talosctl" ]; then
@@ -1008,9 +1022,22 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
           rm -f "$secure_out" "$insecure_out"
           trap - RETURN
         }
+        target_selected() {
+          local device_id="$1"
+          if [ -z "$TARGET_IDS" ]; then
+            return 0
+          fi
+          case " $TARGET_IDS " in
+            *" $device_id "*) return 0 ;;
+            *) return 1 ;;
+          esac
+        }
         failed=0
         while IFS='|' read -r name role ip patch boot_patch meta_path device_id media_file boot_mode; do
           [ -n "$name" ] || continue
+          if ! target_selected "$device_id"; then
+            continue
+          fi
           wait_talos_api "$name" "$ip" "$boot_mode" 120 || failed=1
         done < generated/nodes.tsv
         if [ "$failed" -ne 0 ]; then

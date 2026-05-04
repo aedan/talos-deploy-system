@@ -1382,6 +1382,48 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(execution.0.executedActions.contains { $0.contains("OOB URL boot connected") })
     }
 
+    func testTalosReprovisionWaitsForSelectedNodeReadiness() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = talosDevice(id: "deployer", name: "deployer-1", primaryIP: "198.51.100.20", privateIP: "198.51.100.20")
+        let cp = talosDevice(id: "cp1", name: "cp-1", primaryIP: "198.51.100.10", privateIP: "198.51.100.10")
+        let worker = talosDevice(id: "worker1", name: "worker-1", primaryIP: "198.51.100.11", privateIP: "198.51.100.11")
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            talosProvisioning: TalosProvisioningDefaults(wipeSystemDiskBeforeInstall: false),
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer, deployerMode: .existing)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment(role: .controlplane)),
+                DeploymentNodeSpec(device: worker, assignment: talosAssignment(role: .worker)),
+            ]
+        )
+        let state = try await DeploymentCoordinator(settings: AppSettings()).stage(spec: spec, at: temp)
+        let transport = RecordingDeployerTransport()
+        let oob = MockOOBBooter()
+
+        let execution = try await TalosDeploymentExecutor(
+            oobBooter: oob,
+            wipeDelayNanoseconds: 0,
+            mediaRetryDelayNanoseconds: 0
+        ).reprovisionNodes(
+            state: state,
+            transport: transport,
+            configuration: DeployerMediaServiceConfiguration(),
+            targetDeviceIDs: ["worker1"],
+            wipeFirst: false
+        )
+
+        XCTAssertEqual(oob.urlRequests.map(\.deviceID), ["worker1"])
+        let waitCommand = try XCTUnwrap(transport.commands.first { $0.contains("TARGET_IDS='worker1'") })
+        XCTAssertTrue(waitCommand.contains("target_selected"))
+        XCTAssertTrue(waitCommand.contains("waiting for live or configured Talos API"))
+        XCTAssertTrue(execution.executedActions.contains { $0.contains("Confirmed Talos API reachability for reprovisioned nodes") })
+    }
+
     func testTalosExecutorDoesNotForceNodeRoutesFromRegistryInterfaceAlone() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let deployer = talosDevice(id: "deployer", name: "deployer-1", primaryIP: "198.51.100.20", privateIP: "198.51.100.20")
