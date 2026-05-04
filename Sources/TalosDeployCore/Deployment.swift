@@ -822,7 +822,6 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             lines.append("    legacyBIOSSupport: \(spec.talosProvisioning.legacyBIOSSupport ? "true" : "false")")
             lines.append(contentsOf: renderExtraKernelArgs(spec.talosFactory.extraKernelArgs))
         }
-        lines.append(contentsOf: renderMachineFeatures())
         lines.append(contentsOf: renderClusterPatch(node: node, managementSubnet: managementSubnet))
         return lines.joined(separator: "\n") + "\n"
     }
@@ -1087,22 +1086,6 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         return [
             "  nodeLabels:",
             "    node.kubernetes.io/exclude-from-external-load-balancers: \"\"",
-        ]
-    }
-
-    private func renderMachineFeatures() -> [String] {
-        [
-            "  features:",
-            "    rbac: true",
-            "    stableHostname: true",
-            "    apidCheckExtKeyUsage: true",
-            "    diskQuotaSupport: true",
-            "    kubePrism:",
-            "      enabled: true",
-            "      port: 7445",
-            "    hostDNS:",
-            "      enabled: true",
-            "      forwardKubeDNSToHost: true",
         ]
     }
 

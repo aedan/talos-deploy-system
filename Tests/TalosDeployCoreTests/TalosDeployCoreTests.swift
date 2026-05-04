@@ -287,7 +287,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("    legacyBIOSSupport: true"))
         XCTAssertTrue(patch.contains("    nodeIP:\n      validSubnets:\n        - 198.51.100.0/22"))
         XCTAssertTrue(patch.contains("    extraMounts:"))
-        XCTAssertTrue(patch.contains("  features:\n    rbac: true"))
+        XCTAssertFalse(patch.contains("  features:\n"))
         XCTAssertTrue(patch.contains("cluster:\n  allowSchedulingOnControlPlanes: true"))
         XCTAssertTrue(patch.contains("    cni:\n      name: none"))
         XCTAssertTrue(patch.contains("  etcd:\n    advertisedSubnets:\n      - 198.51.100.0/22"))
