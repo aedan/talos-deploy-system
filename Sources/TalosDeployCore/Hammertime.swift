@@ -381,7 +381,7 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
     }
 
     private func discoverCDBootSource(request: OOBBootURLRequest, steps: inout [OOBBootURLStep]) async -> String {
-        let fallback = "/system1/bootconfig1/bootsource2"
+        let fallback = "/system1/bootconfig1/bootsource1"
         let bootSources = await runBestEffortOOBCommand(name: "boot-sources", command: "show /system1/bootconfig1", request: request)
         steps.append(bootSources)
 

@@ -931,7 +931,12 @@ final class TalosDeployCoreTests: XCTestCase {
         )
 
         let fallback = try XCTUnwrap(result.steps.first(where: { $0.name == "clp-power-off" }))
+        let commands = runner.invocations.compactMap { invocation -> String? in
+            guard let index = invocation.arguments.firstIndex(of: "--command") else { return nil }
+            return invocation.arguments[index + 1]
+        }
         XCTAssertTrue(fallback.stdout.contains("Best-effort OOB command failed"))
+        XCTAssertTrue(commands.contains("set /system1/bootconfig1/bootsource1 bootorder=1"))
         XCTAssertTrue(result.steps.contains { $0.name == "cd-boot-order" })
         XCTAssertNotNil(result.steps.first(where: { $0.name == "power-reset" }))
         XCTAssertTrue(result.bootOnce)
