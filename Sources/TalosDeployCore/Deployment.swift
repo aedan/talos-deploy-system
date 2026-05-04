@@ -1699,6 +1699,101 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         )
     }
 
+    public func reprovisionTalosNodes(
+        state: DeploymentState,
+        targetDeviceIDs: [String],
+        wipeFirst: Bool,
+        connection: SSHConnection? = nil,
+        access: DeployerAccessRequest? = nil,
+        dryRun: Bool = true
+    ) async throws -> TalosExecutionRun {
+        let deployer = state.plan.deployer
+        let hostname = DeployerNaming().hostname(for: deployer.device, suffix: settings.deployer.hostnameSuffix)
+        var serviceConfiguration = DeployerMediaServiceConfiguration(defaults: settings.deployer)
+        if serviceConfiguration.talosctlVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            serviceConfiguration.talosctlVersion = state.spec.talosVersion
+        }
+        serviceConfiguration.registryPort = state.spec.talosProvisioning.deployerRegistryPort
+        var updated = state
+        var servicePlan = deployerHostClient.planDeployerServices(configuration: serviceConfiguration)
+        let localDirectory = URL(fileURLWithPath: updated.localStateDirectory, isDirectory: true)
+        _ = try await builder.buildArtifacts(for: updated.spec, plan: updated.plan, in: localDirectory)
+        let maintenanceBundle = try MaintenanceBundleBuilder(fileManager: fileManager).writeBundle(for: updated, in: localDirectory)
+
+        let requested = targetDeviceIDs.isEmpty ? "all Talos nodes" : targetDeviceIDs.joined(separator: ",")
+        if dryRun {
+            return TalosExecutionRun(
+                state: updated,
+                deployerHostname: hostname,
+                deployerServices: servicePlan,
+                networkValidation: state.plan.networkValidation,
+                accessValidation: DeployerAccessValidation(
+                    method: access?.method ?? settings.deployer.accessMethod,
+                    target: deployer.device.id,
+                    succeeded: false,
+                    message: "Dry run: would reprovision \(requested) through the deployer.",
+                    attempts: []
+                ),
+                provisioningExecution: TalosProvisioningExecution(
+                    plannedActions: ["Reissue OOB boot URL requests for \(requested)."],
+                    warnings: ["Dry run only."]
+                ),
+                bootstrapResult: TalosBootstrapResult(
+                    bootstrapNode: state.spec.nodes.first(where: { $0.assignment.role == .controlplane })?.device.name ?? "",
+                    commands: ["Dry run: deployer-hosted media would be prepared and selected Talos nodes would be rebooted."],
+                    succeeded: false,
+                    warnings: ["Dry run only."]
+                ),
+                maintenanceBundle: maintenanceBundle,
+                dryRun: true
+            )
+        }
+
+        let request = access ?? defaultAccessRequest(connection: connection, deployer: deployer.device)
+        tdsProgress("Resolving deployer access path for Talos reprovision on \(deployer.device.id)")
+        let selection = try await DeployerTransportResolver(settings: settings).resolve(request: request, deployer: deployer.device)
+        let transport = selection.transport
+        let accessValidation = DeployerAccessValidation(
+            method: selection.validation.method,
+            target: selection.validation.target,
+            succeeded: true,
+            message: selection.validation.message,
+            attempts: selection.failedAttempts + selection.validation.attempts
+        )
+        tdsProgress("Preparing deployer services before Talos reprovision")
+        servicePlan = try await deployerHostClient.prepareDeployerServices(
+            configuration: serviceConfiguration,
+            transport: transport
+        )
+        tdsProgress("Syncing updated maintenance bundle before Talos reprovision")
+        updated = try await synchronizeToDeployer(updated, transport: transport)
+        let execution = try await TalosDeploymentExecutor(settings: settings).reprovisionNodes(
+            state: updated,
+            transport: transport,
+            configuration: serviceConfiguration,
+            targetDeviceIDs: targetDeviceIDs,
+            wipeFirst: wipeFirst
+        )
+        updated.events.append(DeploymentEvent(message: "Talos node reprovision requests completed for \(requested)."))
+        _ = try stateStore.save(updated, to: localDirectory)
+        return TalosExecutionRun(
+            state: updated,
+            deployerHostname: hostname,
+            deployerServices: servicePlan,
+            networkValidation: state.plan.networkValidation,
+            accessValidation: accessValidation,
+            provisioningExecution: execution,
+            bootstrapResult: TalosBootstrapResult(
+                bootstrapNode: state.spec.nodes.first(where: { $0.assignment.role == .controlplane })?.device.name ?? "",
+                commands: ["Reprovision selected Talos nodes through deployer-hosted media; run deploy resume to apply/bootstrap/verify."],
+                succeeded: true,
+                warnings: execution.warnings
+            ),
+            maintenanceBundle: maintenanceBundle,
+            dryRun: false
+        )
+    }
+
     private func defaultAccessRequest(connection: SSHConnection?, deployer: DiscoveredDevice) -> DeployerAccessRequest {
         var resolvedConnection = connection
         if resolvedConnection?.proxyJump.isEmpty == true, !settings.deployer.proxyJumpHost.isEmpty {

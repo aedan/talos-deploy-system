@@ -605,26 +605,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             registryInstallerImage: registryInstallerImage
         )
         let nodeRouteCommand = renderTalosNodeRouteCommand(state: state)
-        let startMediaCommand = """
-        set -e
-        mkdir -p \(shellEscape(configuration.mediaRoot)) \(shellEscape("\(configuration.stateRoot)/logs"))
-        if command -v curl >/dev/null 2>&1 && [ ! -f \(shellEscape(talosISOPath)) ]; then
-          curl -fL -o \(shellEscape(talosISOPath)) \(shellEscape(state.plan.talosArtifacts.isoURL)) || true
-        fi
-        if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files tds-media-http.service >/dev/null 2>&1; then
-          sudo systemctl restart tds-media-http.service || true
-        fi
-        if [ -f \(shellEscape("\(configuration.stateRoot)/media-service.env")) ]; then
-          . \(shellEscape("\(configuration.stateRoot)/media-service.env"))
-          http_check_host="$HTTP_BIND"
-          if [ "$http_check_host" = "0.0.0.0" ]; then
-            http_check_host="127.0.0.1"
-          fi
-          if ! python3 -c 'import socket,sys; s=socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=2); s.close()' "$http_check_host" "$HTTP_PORT" >/dev/null 2>&1; then
-            sh -c "$START_COMMAND" || true
-          fi
-        fi
-        """
+        let startMediaCommand = renderStartMediaCommand(state: state, configuration: configuration)
         tdsProgress("Preparing deployer-hosted Talos ISO and media service")
         _ = try await transport.run(startMediaCommand, timeout: 900)
         tdsProgress("Deployer-hosted Talos media service is ready")
@@ -716,7 +697,6 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
     public func resumeDeployerState(state: DeploymentState, transport: any DeployerTransport, configuration: DeployerMediaServiceConfiguration) async throws -> (TalosProvisioningExecution, TalosBootstrapResult) {
         var executedActions: [String] = []
         let warnings: [String] = []
-        let talosISOPath = "\(configuration.mediaRoot)/talos-\(state.spec.talosVersion).iso"
         let registryInstallerImage = deployerRegistryInstallerImage(for: state.spec)
         let registryCacheCommand = renderRegistryCacheCommand(
             state: state,
@@ -724,26 +704,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             registryInstallerImage: registryInstallerImage
         )
         let nodeRouteCommand = renderTalosNodeRouteCommand(state: state)
-        let startMediaCommand = """
-        set -e
-        mkdir -p \(shellEscape(configuration.mediaRoot)) \(shellEscape("\(configuration.stateRoot)/logs"))
-        if command -v curl >/dev/null 2>&1 && [ ! -f \(shellEscape(talosISOPath)) ]; then
-          curl -fL -o \(shellEscape(talosISOPath)) \(shellEscape(state.plan.talosArtifacts.isoURL)) || true
-        fi
-        if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files tds-media-http.service >/dev/null 2>&1; then
-          sudo systemctl restart tds-media-http.service || true
-        fi
-        if [ -f \(shellEscape("\(configuration.stateRoot)/media-service.env")) ]; then
-          . \(shellEscape("\(configuration.stateRoot)/media-service.env"))
-          http_check_host="$HTTP_BIND"
-          if [ "$http_check_host" = "0.0.0.0" ]; then
-            http_check_host="127.0.0.1"
-          fi
-          if ! python3 -c 'import socket,sys; s=socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=2); s.close()' "$http_check_host" "$HTTP_PORT" >/dev/null 2>&1; then
-            sh -c "$START_COMMAND" || true
-          fi
-        fi
-        """
+        let startMediaCommand = renderStartMediaCommand(state: state, configuration: configuration)
         tdsProgress("Restarting deployer-hosted media service for resume")
         _ = try await transport.run(startMediaCommand, timeout: 900)
         executedActions.append("Restarted deployer-hosted Talos media service for resume.")
@@ -785,6 +746,76 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         )
     }
 
+    public func reprovisionNodes(
+        state: DeploymentState,
+        transport: any DeployerTransport,
+        configuration: DeployerMediaServiceConfiguration,
+        targetDeviceIDs: [String],
+        wipeFirst: Bool
+    ) async throws -> TalosProvisioningExecution {
+        let mediaBaseURL = deployerMediaBaseURL(state: state, configuration: configuration)
+        let normalizedTargets = Set(targetDeviceIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
+        let talosInstalls = state.plan.installs.filter { install in
+            guard install.assignment.role == .controlplane || install.assignment.role == .worker else { return false }
+            guard !normalizedTargets.isEmpty else { return true }
+            return normalizedTargets.contains(install.device.id.lowercased())
+                || normalizedTargets.contains(install.device.name.lowercased())
+        }
+
+        var executedActions: [String] = []
+        var warnings: [String] = []
+        if talosInstalls.isEmpty {
+            return TalosProvisioningExecution(
+                plannedActions: [],
+                warnings: ["No Talos nodes matched the requested reprovision targets."]
+            )
+        }
+
+        let startMediaCommand = renderStartMediaCommand(state: state, configuration: configuration)
+        tdsProgress("Preparing deployer-hosted media before Talos node reprovision")
+        _ = try await transport.run(startMediaCommand, timeout: 900)
+        executedActions.append("Prepared deployer-hosted media service before reprovisioning \(talosInstalls.count) Talos node(s).")
+
+        let prepareMediaCommand = """
+        cd \(shellEscape(state.plan.durableStateDirectory)) && \\
+        TDS_MEDIA_ROOT=\(shellEscape(configuration.mediaRoot)) \\
+        TDS_TALOS_VERSION=\(shellEscape(state.spec.talosVersion)) \\
+        ./maintenance/tds-prepare-talos-media.sh
+        """
+        _ = try await transport.run(prepareMediaCommand, timeout: 1800)
+        executedActions.append("Regenerated node-specific Talos boot media before reprovisioning.")
+
+        if wipeFirst {
+            var didRequestWipe = false
+            for install in talosInstalls {
+                tdsProgress("Requesting Talos wipe boot for \(install.device.name) (\(install.device.id))")
+                let result = try await provisionTalosWipe(install, mediaBaseURL: mediaBaseURL, state: state)
+                if !result.executedActions.isEmpty {
+                    didRequestWipe = true
+                }
+                executedActions.append(contentsOf: result.executedActions)
+                warnings.append(contentsOf: result.warnings)
+            }
+            if didRequestWipe && wipeDelayNanoseconds > 0 {
+                tdsProgress("Waiting for requested Talos wipe boots before normal reprovision boots")
+                try await Task.sleep(nanoseconds: wipeDelayNanoseconds)
+            }
+        }
+
+        for install in talosInstalls {
+            tdsProgress("Reprovisioning \(install.device.name) (\(install.device.id)) using \(install.method.rawValue)")
+            let result = try await provisionTalosNode(install, mediaBaseURL: mediaBaseURL, state: state)
+            executedActions.append(contentsOf: result.executedActions)
+            warnings.append(contentsOf: result.warnings)
+        }
+
+        return TalosProvisioningExecution(
+            plannedActions: talosInstalls.map { plannedAction(for: $0, mediaBaseURL: mediaBaseURL, state: state) },
+            executedActions: executedActions,
+            warnings: warnings
+        )
+    }
+
     private func plannedAction(for install: PlannedDeviceInstall, mediaBaseURL: String, state: DeploymentState) -> String {
         switch install.method {
         case .bootURL:
@@ -799,6 +830,43 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         case .stagedOnly:
             return "Stage \(install.device.name) without booting."
         }
+    }
+
+    private func renderStartMediaCommand(state: DeploymentState, configuration: DeployerMediaServiceConfiguration) -> String {
+        let talosISOPath = "\(configuration.mediaRoot)/talos-\(state.spec.talosVersion).iso"
+        return """
+        set -e
+        mkdir -p \(shellEscape(configuration.mediaRoot)) \(shellEscape("\(configuration.stateRoot)/logs"))
+        if command -v curl >/dev/null 2>&1 && [ ! -f \(shellEscape(talosISOPath)) ]; then
+          curl -fL -o \(shellEscape(talosISOPath)) \(shellEscape(state.plan.talosArtifacts.isoURL)) || true
+        fi
+        if [ -f \(shellEscape("\(configuration.stateRoot)/media-service.env")) ]; then
+          . \(shellEscape("\(configuration.stateRoot)/media-service.env"))
+          http_check_host="$HTTP_BIND"
+          if [ "$http_check_host" = "0.0.0.0" ]; then
+            http_check_host="127.0.0.1"
+          fi
+          media_http_ready() {
+            python3 -c 'import socket,sys; s=socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=2); s.close()' "$http_check_host" "$HTTP_PORT" >/dev/null 2>&1
+          }
+          if ! media_http_ready; then
+            if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files tds-media-http.service >/dev/null 2>&1; then
+              sudo systemctl reset-failed tds-media-http.service >/dev/null 2>&1 || true
+              sudo systemctl restart tds-media-http.service || true
+            fi
+          fi
+          if ! media_http_ready; then
+            sh -c "$START_COMMAND" || true
+          fi
+          if ! media_http_ready; then
+            echo "TDS media HTTP service is not reachable on ${http_check_host}:${HTTP_PORT}" >&2
+            exit 1
+          fi
+        elif command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files tds-media-http.service >/dev/null 2>&1; then
+          sudo systemctl reset-failed tds-media-http.service >/dev/null 2>&1 || true
+          sudo systemctl restart tds-media-http.service || true
+        fi
+        """
     }
 
     private func renderRegistryCacheCommand(

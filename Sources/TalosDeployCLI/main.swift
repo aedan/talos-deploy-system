@@ -273,6 +273,8 @@ struct TalosDeployCLI {
             for version in catalog.versions {
                 print(version.displayName)
             }
+        case "oob-boot-url":
+            try await handleOOBBootURL(arguments: Array(arguments.dropFirst()), commandName: "talos oob-boot-url")
         default:
             printTalosUsage()
         }
@@ -328,12 +330,16 @@ struct TalosDeployCLI {
     }
 
     private static func handleUbuntuOOBBootURL(arguments: [String]) async throws {
+        try await handleOOBBootURL(arguments: arguments, commandName: "ubuntu oob-boot-url")
+    }
+
+    private static func handleOOBBootURL(arguments: [String], commandName: String) async throws {
         let options = parseOptions(arguments)
         guard let deviceID = options["device"] ?? options["device-id"] else {
-            throw CLIError.missingRequired("ubuntu oob-boot-url requires --device DEVICE_ID")
+            throw CLIError.missingRequired("\(commandName) requires --device DEVICE_ID")
         }
         guard let imageURL = options["url"] ?? options["image-url"] ?? options["iso-url"] else {
-            throw CLIError.missingRequired("ubuntu oob-boot-url requires --url IMAGE_URL")
+            throw CLIError.missingRequired("\(commandName) requires --url IMAGE_URL")
         }
         let settings = (try? SettingsController().load()) ?? AppSettings()
         let result = try await HammertimeOOBBooter(settings: settings.hammertime).bootURL(
@@ -373,6 +379,8 @@ struct TalosDeployCLI {
             try await handleDeployRun(arguments: remaining)
         case "resume":
             try await handleResume(arguments: remaining)
+        case "reprovision":
+            try await handleDeployReprovision(arguments: remaining)
         case "verify":
             try handleDeployVerify(arguments: remaining)
         case "maintenance-bundle":
@@ -427,6 +435,25 @@ struct TalosDeployCLI {
         let settings = (try? SettingsController().load()) ?? AppSettings()
         let result = DeploymentCoordinator(settings: settings).verify(state: state)
         let data = try JSONEncoder.pretty.encode(result)
+        print(String(decoding: data, as: UTF8.self))
+    }
+
+    private static func handleDeployReprovision(arguments: [String]) async throws {
+        let options = parseOptions(arguments)
+        let state = try loadState(path: options["state"] ?? options["path"])
+        let settings = (try? SettingsController().load()) ?? AppSettings()
+        let coordinator = DeploymentCoordinator(settings: settings)
+        let targets = parseTargetList(options["targets"] ?? options["target"] ?? options["devices"])
+        let dryRun = parseBool(options["dry-run"]) ?? !(parseBool(options["execute"]) ?? false)
+        let run = try await coordinator.reprovisionTalosNodes(
+            state: state,
+            targetDeviceIDs: targets,
+            wipeFirst: parseBool(options["wipe"]) ?? false,
+            connection: deployerConnection(options: options),
+            access: deployerAccessRequest(options: options, settings: settings, deployerID: state.spec.deployerNode?.device.id ?? ""),
+            dryRun: dryRun
+        )
+        let data = try JSONEncoder.pretty.encode(run)
         print(String(decoding: data, as: UTF8.self))
     }
 
@@ -597,6 +624,14 @@ struct TalosDeployCLI {
         return positionals
     }
 
+    private static func parseTargetList(_ value: String?) -> [String] {
+        guard let value else { return [] }
+        return value
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
     private static func ubuntuInstallSpec(from options: [String: String], arguments: [String]) throws -> UbuntuInstallSpec {
         guard let sourceISO = options["source-iso"] ?? options["source"] else {
             throw CLIError.missingRequired("ubuntu build requires --source-iso /path/to/ubuntu.iso")
@@ -678,6 +713,7 @@ struct TalosDeployCLI {
               talos schematic [--extensions ext1,ext2] [--extra-kernel-args arg1,arg2]
               talos artifacts [--version v1.13.0] [--schematic-id ID] [--arch amd64]
               talos versions [--factory-url URL] [--output table|json]
+              talos oob-boot-url --device DEVICE_ID --url OOB_REACHABLE_IMAGE_URL [--reboot true]
               ubuntu snapshot --account ACCOUNT --device DEVICE [--source auto|core|hammertime] [--output-dir DIR]
               ubuntu build-iso --capture DIR_OR_SNAPSHOT --source-iso ISO --output-iso ISO [--rack-password-hash HASH]
               ubuntu validate-iso --iso ISO
@@ -691,6 +727,7 @@ struct TalosDeployCLI {
               deploy plan --spec path/to/spec.json
               deploy run --spec path/to/spec.json [--execute true] [--deployer-host HOST --deployer-user USER]
               deploy resume --path /path/to/deployment-state.json [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime]
+              deploy reprovision --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--wipe true] [--execute true]
               deploy verify --state /path/to/deployment-state.json
               deploy maintenance-bundle --state /path/to/deployment-state.json
               deployer access-test --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
@@ -729,6 +766,7 @@ struct TalosDeployCLI {
               schematic [--extensions ext1,ext2] [--extra-kernel-args arg1,arg2]
               artifacts [--version v1.13.0] [--schematic-id ID] [--arch amd64] [--platform metal]
               versions [--factory-url URL] [--output table|json]
+              oob-boot-url --device DEVICE_ID --url http://oob-reachable-media/talos.iso [--reboot true]
 
             The artifact URLs follow the Talos Image Factory model. Extensions affect the image schematic;
             kernel modules are rendered into machine configs during deployment planning.
@@ -743,13 +781,14 @@ struct TalosDeployCLI {
               plan --spec path/to/spec.json
               run --spec path/to/spec.json [--dry-run true|false] [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime] [--deployer-host HOST --deployer-user USER]
               resume --path /path/to/deployment-state.json
+              reprovision --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--wipe true] [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime]
               verify --state /path/to/deployment-state.json
               maintenance-bundle --state /path/to/deployment-state.json
               deployer plan
               deployer access-test --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
               deployer prepare --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
 
-            Non-dry-run run requires --execute true plus a deployer access path. Resume re-syncs maintenance state and reruns the deployer-owned phase without reissuing OOB boots.
+            Non-dry-run run and reprovision require --execute true plus a deployer access path. Resume re-syncs maintenance state and reruns the deployer-owned phase without reissuing OOB boots.
             """
         )
     }
