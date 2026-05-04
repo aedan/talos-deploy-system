@@ -148,6 +148,8 @@ tds deploy run --spec examples/deployment-spec.example.json --dry-run true
 tds deployer access-test --account 0000000 --device 100001 --access auto
 tds deployer prepare --account 0000000 --device 100001 --access auto
 tds deploy run --spec examples/deployment-spec.example.json --execute true --access auto
+tds deploy reprovision --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json --targets 100002,100003 --execute true --access auto
+tds deploy resume --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json --execute true --access auto
 tds deploy verify --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
 tds deploy maintenance-bundle --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
 ```
@@ -224,6 +226,17 @@ tds deploy run \
   --execute true \
   --access auto
 
+tds deploy reprovision \
+  --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json \
+  --targets 100002,100003 \
+  --execute true \
+  --access auto
+
+tds deploy resume \
+  --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json \
+  --execute true \
+  --access auto
+
 tds deploy verify --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
 tds deploy maintenance-bundle --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
 ```
@@ -250,6 +263,7 @@ Procedure:
 8. Validate static management CIDR, management NIC MAC or interface selector, gateway, DNS, VLANs, bridges, bridge ports, routes, and install disk for every Talos node before destructive actions.
 9. Build and validate the Ubuntu deployer ISO, attach it through `tds.app` local media, and verify the deployer returns with Ubuntu, SSH, `rack`, `root`, and preserved networking.
 10. Prepare deployer services, cache the Talos installer image in the deployer registry, stage Talos artifacts, provision nodes, apply machine configs, bootstrap etcd, fetch kubeconfig, and verify Talos/Kubernetes health.
+11. If a subset of nodes fails to boot from virtual media, use `tds deploy reprovision --state "$STATE" --targets DEVICE_ID[,DEVICE_ID] --execute true --access auto` to reissue deployer-hosted OOB boot requests from the saved deployment state, then run `tds deploy resume --state "$STATE" --execute true --access auto`.
 
 Evidence to keep in ignored local storage:
 
