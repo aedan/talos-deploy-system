@@ -791,7 +791,6 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         lines.append(contentsOf: renderRegistryMirror(spec: spec))
         lines.append(contentsOf: renderTimeServers(spec: spec))
         lines.append("  network:")
-        lines.append("    hostname: \(yamlScalar(talosHostname(for: node.device)))")
         lines.append(contentsOf: renderNameservers(staticConfig, spec: spec))
         lines.append("    interfaces:")
         if let managementBridge {
@@ -1160,29 +1159,6 @@ private func uniqueNonEmpty(_ values: [String]) -> [String] {
         result.append(value)
     }
     return result
-}
-
-private func talosHostname(for device: DiscoveredDevice) -> String {
-    let base = firstNonEmptyStatic(
-        device.name.split(separator: ".").first.map(String.init) ?? "",
-        device.id,
-        "talos-node"
-    )
-    let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-"))
-    let normalized = base
-        .lowercased()
-        .unicodeScalars
-        .map { allowed.contains($0) ? Character($0) : "-" }
-    var hostname = String(normalized)
-        .reduce(into: "") { partial, character in
-            if character == "-", partial.last == "-" { return }
-            partial.append(character)
-        }
-        .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-    if hostname.count > 63 {
-        hostname = String(hostname.prefix(63)).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-    }
-    return hostname.isEmpty ? "talos-node" : hostname
 }
 
 private func ipv4NetworkCIDR(from addressCIDR: String) -> String {
