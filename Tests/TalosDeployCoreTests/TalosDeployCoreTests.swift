@@ -342,6 +342,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(prepareScript.contains("wipe_out=\"${out%.iso}-wipe.iso\""))
         XCTAssertTrue(prepareScript.contains("talos.experimental.wipe=system"))
         XCTAssertTrue(prepareScript.contains("boot-machine-configs/${name}.yaml"))
+        XCTAssertTrue(prepareScript.contains("-map \"machine-configs/${name}.yaml\" /config.yaml"))
         XCTAssertTrue(prepareScript.contains("boot-network-meta/cp-1.yaml"))
         XCTAssertTrue(prepareScript.contains("/^    install:[[:space:]]*$/"))
         XCTAssertTrue(prepareScript.contains("boot-node-patches/cp-1.yaml"))

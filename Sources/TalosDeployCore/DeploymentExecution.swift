@@ -422,6 +422,7 @@ public struct MaintenanceBundleBuilder {
             xorriso -indev "$TDS_BASE_TALOS_ISO" -outdev "$out.tmp" \\
               -volid metal-iso \\
               -map "$work/grub.cfg" /boot/grub/grub.cfg \\
+              -map "machine-configs/${name}.yaml" /config.yaml \\
               -boot_image any replay >/dev/null 2>&1
             mv "$out.tmp" "$out"
 
