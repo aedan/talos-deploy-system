@@ -381,6 +381,8 @@ struct TalosDeployCLI {
             try await handleResume(arguments: remaining)
         case "reprovision":
             try await handleDeployReprovision(arguments: remaining)
+        case "disk-boot":
+            try await handleDeployDiskBoot(arguments: remaining)
         case "verify":
             try handleDeployVerify(arguments: remaining)
         case "maintenance-bundle":
@@ -454,6 +456,22 @@ struct TalosDeployCLI {
             dryRun: dryRun
         )
         let data = try JSONEncoder.pretty.encode(run)
+        print(String(decoding: data, as: UTF8.self))
+    }
+
+    private static func handleDeployDiskBoot(arguments: [String]) async throws {
+        let options = parseOptions(arguments)
+        let state = try loadState(path: options["state"] ?? options["path"])
+        let settings = (try? SettingsController().load()) ?? AppSettings()
+        let targets = parseTargetList(options["targets"] ?? options["target"] ?? options["devices"])
+        let dryRun = parseBool(options["dry-run"]) ?? !(parseBool(options["execute"]) ?? false)
+        let execution = try await TalosDeploymentExecutor(settings: settings).prepareInstalledDiskBoot(
+            state: state,
+            targetDeviceIDs: targets,
+            reboot: parseBool(options["reboot"]) ?? false,
+            dryRun: dryRun
+        )
+        let data = try JSONEncoder.pretty.encode(execution)
         print(String(decoding: data, as: UTF8.self))
     }
 
@@ -728,6 +746,7 @@ struct TalosDeployCLI {
               deploy run --spec path/to/spec.json [--execute true] [--deployer-host HOST --deployer-user USER]
               deploy resume --path /path/to/deployment-state.json [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime]
               deploy reprovision --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--wipe true] [--execute true]
+              deploy disk-boot --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--reboot true] [--execute true]
               deploy verify --state /path/to/deployment-state.json
               deploy maintenance-bundle --state /path/to/deployment-state.json
               deployer access-test --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
@@ -782,6 +801,7 @@ struct TalosDeployCLI {
               run --spec path/to/spec.json [--dry-run true|false] [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime] [--deployer-host HOST --deployer-user USER]
               resume --path /path/to/deployment-state.json
               reprovision --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--wipe true] [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime]
+              disk-boot --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--reboot true] [--execute true]
               verify --state /path/to/deployment-state.json
               maintenance-bundle --state /path/to/deployment-state.json
               deployer plan
@@ -789,6 +809,7 @@ struct TalosDeployCLI {
               deployer prepare --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
 
             Non-dry-run run and reprovision require --execute true plus a deployer access path. Resume re-syncs maintenance state and reruns the deployer-owned phase without reissuing OOB boots.
+            disk-boot detaches virtual media where possible, restores installed-disk boot order, and can power-cycle selected nodes for recovery.
             """
         )
     }

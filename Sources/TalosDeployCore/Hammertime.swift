@@ -313,9 +313,46 @@ public struct OOBPXEBootResult: Codable, Equatable, Sendable {
     }
 }
 
+public struct OOBDiskBootRequest: Codable, Equatable, Sendable {
+    public var deviceID: String
+    public var reboot: Bool
+    public var proxyVia: String?
+    public var oobVendor: OOBVendor
+    public var preferPowerReset: Bool
+
+    public init(
+        deviceID: String,
+        reboot: Bool = false,
+        proxyVia: String? = nil,
+        oobVendor: OOBVendor = .unknown,
+        preferPowerReset: Bool = false
+    ) {
+        self.deviceID = deviceID
+        self.reboot = reboot
+        self.proxyVia = proxyVia
+        self.oobVendor = oobVendor
+        self.preferPowerReset = preferPowerReset
+    }
+}
+
+public struct OOBDiskBootResult: Codable, Equatable, Sendable {
+    public var deviceID: String
+    public var diskBootSource: String
+    public var rebooted: Bool
+    public var steps: [OOBBootURLStep]
+
+    public init(deviceID: String, diskBootSource: String, rebooted: Bool, steps: [OOBBootURLStep]) {
+        self.deviceID = deviceID
+        self.diskBootSource = diskBootSource
+        self.rebooted = rebooted
+        self.steps = steps
+    }
+}
+
 public protocol OOBNodeBooting: Sendable {
     func bootURL(_ request: OOBBootURLRequest) async throws -> OOBBootURLResult
     func bootPXE(_ request: OOBPXEBootRequest) async throws -> OOBPXEBootResult
+    func prepareDiskBoot(_ request: OOBDiskBootRequest) async throws -> OOBDiskBootResult
 }
 
 public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
@@ -400,6 +437,26 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
         return fallback
     }
 
+    private func discoverDiskBootSource(request: OOBBootURLRequest, steps: inout [OOBBootURLStep]) async -> String {
+        let fallback = "/system1/bootconfig1/bootsource2"
+        let bootSources = await runBestEffortOOBCommand(name: "boot-sources", command: "show /system1/bootconfig1", request: request)
+        steps.append(bootSources)
+
+        for target in parseBootSourceTargets(from: bootSources.stdout) {
+            let detail = await runBestEffortOOBCommand(
+                name: "boot-source-\(target)",
+                command: "show /system1/bootconfig1/\(target)",
+                request: request
+            )
+            steps.append(detail)
+            if isDiskBootSource(detail.stdout) {
+                return "/system1/bootconfig1/\(target)"
+            }
+        }
+
+        return fallback
+    }
+
     private func parseBootSourceTargets(from output: String) -> [String] {
         let targets = output
             .split(whereSeparator: \.isNewline)
@@ -422,6 +479,32 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
             || normalized.contains("virtual cd")
     }
 
+    private func isDiskBootSource(_ output: String) -> Bool {
+        let normalized = output.lowercased()
+        let excluded = [
+            "bootfmcd",
+            "cd/dvd",
+            "dvd",
+            "cdrom",
+            "virtual usb",
+            "virtual cd",
+            "bootfmnetwork",
+            "network",
+            "pxe",
+            "floppy",
+        ]
+        guard excluded.allSatisfy({ !normalized.contains($0) }) else { return false }
+        return normalized.contains("bootdevice=bootfmhdd")
+            || normalized.contains("bootdevice=bootfmdisk")
+            || normalized.contains("bootdevice=hdd")
+            || normalized.contains("bootdevice=disk")
+            || normalized.contains("hard drive")
+            || normalized.contains("hard disk")
+            || normalized.contains("local disk")
+            || normalized.contains("logical drive")
+            || normalized.contains("smart array")
+    }
+
     public func bootPXE(_ request: OOBPXEBootRequest) async throws -> OOBPXEBootResult {
         guard !request.deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw HammertimeError.missingDeviceID
@@ -435,6 +518,31 @@ public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
         return OOBPXEBootResult(
             deviceID: request.deviceID,
             oneTimeBoot: request.oneTimeBoot,
+            rebooted: request.reboot,
+            steps: steps
+        )
+    }
+
+    public func prepareDiskBoot(_ request: OOBDiskBootRequest) async throws -> OOBDiskBootResult {
+        guard !request.deviceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw HammertimeError.missingDeviceID
+        }
+
+        let urlRequest = request.asURLRequest()
+        var steps: [OOBBootURLStep] = []
+        steps.append(await runBestEffortOOBCommand(name: "media-no-boot", command: "vm cdrom set no_boot", request: urlRequest))
+        steps.append(await runBestEffortOOBCommand(name: "disconnect-media", command: "vm cdrom set disconnect", request: urlRequest))
+        steps.append(await runBestEffortOOBCommand(name: "eject-media", command: "vm cdrom eject", request: urlRequest))
+        let bootSource = await discoverDiskBootSource(request: urlRequest, steps: &steps)
+        steps.append(try await runOOBCommand(name: "disk-boot-order", command: "set \(bootSource) bootorder=1", request: urlRequest))
+        steps.append(await runBestEffortOOBCommand(name: "media-status", command: "vm cdrom get", request: urlRequest))
+        if request.reboot {
+            steps.append(contentsOf: try await rebootSteps(for: urlRequest))
+        }
+
+        return OOBDiskBootResult(
+            deviceID: request.deviceID,
+            diskBootSource: bootSource,
             rebooted: request.reboot,
             steps: steps
         )
@@ -510,6 +618,21 @@ private extension OOBPXEBootRequest {
             proxyVia: proxyVia,
             oobVendor: .unknown,
             preferPowerReset: false
+        )
+    }
+}
+
+private extension OOBDiskBootRequest {
+    func asURLRequest() -> OOBBootURLRequest {
+        OOBBootURLRequest(
+            deviceID: deviceID,
+            imageURL: "disk",
+            connectMedia: false,
+            bootOnce: false,
+            reboot: reboot,
+            proxyVia: proxyVia,
+            oobVendor: oobVendor,
+            preferPowerReset: preferPowerReset
         )
     }
 }

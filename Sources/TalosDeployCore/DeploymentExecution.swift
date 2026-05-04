@@ -249,8 +249,8 @@ public struct MaintenanceBundleBuilder {
           if [ -f "$embedded_media" ] && [ "$boot_mode" = "meta" ]; then
             wait_for_live_api "$name" "$ip" "$live_attempts" || return 1
             capture_live_links "$name" "$ip" insecure
-            log "applying static machine config to $name ($ip)"
-            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --file "machine-configs/${name}.yaml" || return 1
+            log "applying static machine config to $name ($ip) and rebooting to installed disk"
+            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --mode=reboot --file "machine-configs/${name}.yaml" || return 1
             wait_for_configured_api "$name" "$ip" "$configured_attempts" "after static config apply" || return 1
           elif [ -f "$embedded_media" ]; then
             wait_for_configured_api "$name" "$ip" 180 "from boot ISO static networking config" || return 1
@@ -259,14 +259,15 @@ public struct MaintenanceBundleBuilder {
             wait_for_configured_api "$name" "$ip" "$configured_attempts" "after final config apply" || return 1
           else
             wait_for_live_api "$name" "$ip" "$live_attempts" || return 1
-            log "applying static machine config to $name ($ip)"
-            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --file "machine-configs/${name}.yaml" || return 1
+            log "applying static machine config to $name ($ip) and rebooting to installed disk"
+            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --mode=reboot --file "machine-configs/${name}.yaml" || return 1
             wait_for_configured_api "$name" "$ip" "$configured_attempts" "after static config apply" || return 1
           fi
         }
 
         SUCCESSFUL_NODE_IPS=()
         SUCCESSFUL_CONTROL_PLANE_IPS=()
+        SUCCESSFUL_WORKER_IPS=()
         FAILED_NODES=()
 
         run_role_nodes() {
@@ -282,6 +283,8 @@ public struct MaintenanceBundleBuilder {
               SUCCESSFUL_NODE_IPS+=("$ip")
               if [ "$role" = "controlplane" ]; then
                 SUCCESSFUL_CONTROL_PLANE_IPS+=("$ip")
+              elif [ "$role" = "worker" ]; then
+                SUCCESSFUL_WORKER_IPS+=("$ip")
               fi
             else
               FAILED_NODES+=("${name}(${ip})")
@@ -306,7 +309,7 @@ public struct MaintenanceBundleBuilder {
         fi
 
         log "configuring worker nodes after control-plane bootstrap"
-        run_role_nodes worker continue 60 60 || true
+        run_role_nodes worker continue 60 120 || true
 
         join_by_comma() {
           local IFS=,
@@ -315,11 +318,16 @@ public struct MaintenanceBundleBuilder {
 
         successful_nodes="$(join_by_comma "${SUCCESSFUL_NODE_IPS[@]}")"
         successful_controlplanes="$(join_by_comma "${SUCCESSFUL_CONTROL_PLANE_IPS[@]}")"
+        successful_workers="$(join_by_comma "${SUCCESSFUL_WORKER_IPS[@]}")"
 
         health_failed=0
         if [ -n "$successful_nodes" ] && [ -n "$successful_controlplanes" ]; then
           log "running Talos health across all nodes"
-          "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$successful_nodes" --endpoints "$successful_controlplanes" health --wait-timeout 20m || health_failed=1
+          health_args=(--talosconfig generated/talosconfig --endpoints "$successful_controlplanes" health --control-plane-nodes "$successful_controlplanes" --wait-timeout 20m)
+          if [ -n "$successful_workers" ]; then
+            health_args+=(--worker-nodes "$successful_workers")
+          fi
+          "$TALOSCTL" "${health_args[@]}" || health_failed=1
         fi
         if [ "${#FAILED_NODES[@]}" -gt 0 ]; then
           printf 'Nodes failed Talos API/configuration validation:\\n' >&2
@@ -455,13 +463,17 @@ public struct MaintenanceBundleBuilder {
 
     private func renderHealthCheckScript(state: DeploymentState) -> String {
         let controlPlanes = nodeRecords(state: state, role: .controlplane)
-        let allNodes = controlPlanes + nodeRecords(state: state, role: .worker)
+        let workers = nodeRecords(state: state, role: .worker)
         return """
         #!/usr/bin/env bash
         set -euo pipefail
         ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
         \(talosctlResolver(state: state))
-        "$TALOSCTL" --talosconfig "$ROOT/generated/talosconfig" --nodes \(shellEscape(allNodes.map(\.ip).joined(separator: ","))) --endpoints \(shellEscape(controlPlanes.map(\.ip).joined(separator: ","))) health --wait-timeout 10m
+        health_args=(--talosconfig "$ROOT/generated/talosconfig" --endpoints \(shellEscape(controlPlanes.map(\.ip).joined(separator: ","))) health --control-plane-nodes \(shellEscape(controlPlanes.map(\.ip).joined(separator: ","))) --wait-timeout 10m)
+        if [ -n \(shellEscape(workers.map(\.ip).joined(separator: ","))) ]; then
+          health_args+=(--worker-nodes \(shellEscape(workers.map(\.ip).joined(separator: ","))))
+        fi
+        "$TALOSCTL" "${health_args[@]}"
         if [ -f "$ROOT/kubeconfig" ] && command -v kubectl >/dev/null 2>&1; then
           kubectl --kubeconfig "$ROOT/kubeconfig" get nodes -o wide
           kubectl --kubeconfig "$ROOT/kubeconfig" get pods -A
@@ -667,6 +679,15 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             warnings.append(contentsOf: result.warnings)
         }
 
+        let waitForBootCommand = renderWaitForTalosBootReadinessCommand(state: state)
+        tdsProgress("Waiting for Talos nodes to finish live boot before detaching OOB media")
+        _ = try await transport.run(waitForBootCommand, timeout: 7200)
+        executedActions.append("Confirmed Talos API reachability before installed-disk boot preparation.")
+
+        let diskBoot = try await prepareInstalledDiskBoot(talosInstalls, state: state, reboot: false)
+        executedActions.append(contentsOf: diskBoot.executedActions)
+        warnings.append(contentsOf: diskBoot.warnings)
+
         let bootstrapCommand = """
         cd \(shellEscape(state.plan.durableStateDirectory)) && \\
         TDS_MEDIA_ROOT=\(shellEscape(configuration.mediaRoot)) \\
@@ -696,7 +717,8 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
 
     public func resumeDeployerState(state: DeploymentState, transport: any DeployerTransport, configuration: DeployerMediaServiceConfiguration) async throws -> (TalosProvisioningExecution, TalosBootstrapResult) {
         var executedActions: [String] = []
-        let warnings: [String] = []
+        var warnings: [String] = []
+        let talosInstalls = state.plan.installs.filter { $0.assignment.role == .controlplane || $0.assignment.role == .worker }
         let registryInstallerImage = deployerRegistryInstallerImage(for: state.spec)
         let registryCacheCommand = renderRegistryCacheCommand(
             state: state,
@@ -718,6 +740,15 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             _ = try await transport.run(nodeRouteCommand, timeout: 120)
             executedActions.append("Reconciled deployer host routes to Talos node management IPs.")
         }
+
+        let waitForBootCommand = renderWaitForTalosBootReadinessCommand(state: state)
+        tdsProgress("Waiting for Talos nodes to report live or configured API before detaching OOB media")
+        _ = try await transport.run(waitForBootCommand, timeout: 7200)
+        executedActions.append("Confirmed Talos API reachability before installed-disk boot preparation.")
+
+        let diskBoot = try await prepareInstalledDiskBoot(talosInstalls, state: state, reboot: false)
+        executedActions.append(contentsOf: diskBoot.executedActions)
+        warnings.append(contentsOf: diskBoot.warnings)
 
         let bootstrapCommand = """
         cd \(shellEscape(state.plan.durableStateDirectory)) && \\
@@ -744,6 +775,29 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             ),
             bootstrap
         )
+    }
+
+    public func prepareInstalledDiskBoot(
+        state: DeploymentState,
+        targetDeviceIDs: [String],
+        reboot: Bool,
+        dryRun: Bool = false
+    ) async throws -> TalosProvisioningExecution {
+        let normalizedTargets = Set(targetDeviceIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
+        let talosInstalls = state.plan.installs.filter { install in
+            guard install.assignment.role == .controlplane || install.assignment.role == .worker else { return false }
+            guard !normalizedTargets.isEmpty else { return true }
+            return normalizedTargets.contains(install.device.id.lowercased())
+                || normalizedTargets.contains(install.device.name.lowercased())
+        }
+        if dryRun {
+            let targets = talosInstalls.map { "\($0.device.name) (\($0.device.id))" }.joined(separator: ", ")
+            return TalosProvisioningExecution(
+                plannedActions: ["Prepare installed-disk boot for \(targets.isEmpty ? "no matching Talos nodes" : targets)."],
+                warnings: talosInstalls.isEmpty ? ["No Talos nodes matched the requested disk-boot targets."] : []
+            )
+        }
+        return try await prepareInstalledDiskBoot(talosInstalls, state: state, reboot: reboot)
     }
 
     public func reprovisionNodes(
@@ -814,6 +868,91 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             executedActions: executedActions,
             warnings: warnings
         )
+    }
+
+    private func prepareInstalledDiskBoot(_ talosInstalls: [PlannedDeviceInstall], state: DeploymentState, reboot: Bool) async throws -> TalosProvisioningExecution {
+        var executedActions: [String] = []
+        var warnings: [String] = []
+        guard !talosInstalls.isEmpty else {
+            return TalosProvisioningExecution(warnings: ["No Talos nodes matched the requested installed-disk boot preparation."])
+        }
+
+        for install in talosInstalls {
+            switch install.method {
+            case .bootURL, .virtualMedia, .pxe:
+                tdsProgress("Preparing installed-disk boot for \(install.device.name) (\(install.device.id))")
+                let result = try await oobBooter.prepareDiskBoot(
+                    OOBDiskBootRequest(
+                        deviceID: install.device.id,
+                        reboot: reboot,
+                        proxyVia: settings.hammertime.deployerVia,
+                        oobVendor: install.device.oob?.vendor ?? .unknown
+                    )
+                )
+                let rebootText = result.rebooted ? " and power-cycled" : ""
+                executedActions.append("Prepared installed-disk boot\(rebootText) for \(install.device.name) using \(result.diskBootSource).")
+            case .operatorLocalMedia:
+                warnings.append("\(install.device.name) uses operator local media; confirm local media is detached and disk boot is selected before final config apply.")
+            case .stagedOnly:
+                warnings.append("Skipped installed-disk boot preparation for staged-only node \(install.device.name).")
+            }
+        }
+
+        return TalosProvisioningExecution(executedActions: executedActions, warnings: warnings)
+    }
+
+    private func renderWaitForTalosBootReadinessCommand(state: DeploymentState) -> String {
+        """
+        set -euo pipefail
+        ROOT=\(shellEscape(state.plan.durableStateDirectory))
+        TDS_DEPLOYER_STATE_ROOT=\(shellEscape(state.spec.deployerStateRoot))
+        TALOSCTL="$ROOT/bin/talosctl"
+        if [ ! -x "$TALOSCTL" ] && [ -x "${TDS_DEPLOYER_STATE_ROOT}/bin/talosctl" ]; then
+          TALOSCTL="${TDS_DEPLOYER_STATE_ROOT}/bin/talosctl"
+        fi
+        if [ ! -x "$TALOSCTL" ]; then
+          TALOSCTL="$(command -v talosctl || true)"
+        fi
+        if [ -z "${TALOSCTL:-}" ] || [ ! -x "$TALOSCTL" ]; then
+          echo "talosctl is not installed on the deployer" >&2
+          exit 1
+        fi
+        cd "$ROOT"
+        if [ ! -f generated/nodes.tsv ]; then
+          echo "generated/nodes.tsv is missing; run tds-prepare-talos-media.sh before waiting for Talos boot readiness" >&2
+          exit 1
+        fi
+        wait_talos_api() {
+          local name="$1"
+          local ip="$2"
+          local attempts="${3:-120}"
+          echo "[tds-deployer] waiting for live or configured Talos API on ${name} (${ip}) before OOB media detach"
+          for attempt in $(seq 1 "$attempts"); do
+            if "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" version >/dev/null 2>&1; then
+              echo "[tds-deployer] configured Talos API is reachable on ${name} (${ip})"
+              return 0
+            fi
+            if "$TALOSCTL" --nodes "$ip" --endpoints "$ip" version --insecure >/dev/null 2>&1; then
+              echo "[tds-deployer] live Talos maintenance API is reachable on ${name} (${ip})"
+              return 0
+            fi
+            if [ "$attempt" -eq "$attempts" ]; then
+              echo "Timed out waiting for live or configured Talos API on ${name} (${ip})" >&2
+              return 1
+            fi
+            if [ $((attempt % 6)) -eq 0 ]; then
+              echo "[tds-deployer] still waiting for ${name} (${ip}), attempt ${attempt}/${attempts}"
+            fi
+            sleep 10
+          done
+        }
+        failed=0
+        while IFS='|' read -r name role ip patch boot_patch meta_path device_id media_file boot_mode; do
+          [ -n "$name" ] || continue
+          wait_talos_api "$name" "$ip" 120 || failed=1
+        done < generated/nodes.tsv
+        exit "$failed"
+        """
     }
 
     private func plannedAction(for install: PlannedDeviceInstall, mediaBaseURL: String, state: DeploymentState) -> String {

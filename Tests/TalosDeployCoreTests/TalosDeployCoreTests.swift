@@ -330,6 +330,8 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(deployScript.contains("run_role_nodes controlplane strict"))
         XCTAssertTrue(deployScript.contains("run_role_nodes worker continue"))
         XCTAssertTrue(deployScript.contains("get links --nodes \"$ip\" --endpoints \"$ip\" --insecure -o yaml"))
+        XCTAssertTrue(deployScript.contains("apply-config --insecure --mode=reboot"))
+        XCTAssertTrue(deployScript.contains("--control-plane-nodes \"$successful_controlplanes\""))
         XCTAssertTrue(deployScript.contains("wait_for_time_sync"))
         XCTAssertTrue(deployScript.contains("bootstrap_control_plane"))
         let prepareScript = try String(contentsOf: stateDirectory.appending(path: "maintenance/tds-prepare-talos-media.sh"))
@@ -990,6 +992,54 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(commands.contains("set /system1/bootconfig1/oemhp_uefibootsource8 bootorder=1"))
     }
 
+    func testHammertimeOOBBooterPreparesInstalledDiskBoot() async throws {
+        let runner = MockCommandRunner(
+            responses: [
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "no boot", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "disconnected", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "unsupported", exitCode: 1),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: """
+                /system1/bootconfig1
+                  Targets
+                    oemhp_uefibootsource1
+                    oemhp_uefibootsource2
+                    oemhp_uefibootsource8
+                """, stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: """
+                /system1/bootconfig1/oemhp_uefibootsource1
+                  Properties
+                    bootorder=1
+                    oemhp_description=Embedded FlexibleLOM 1 Port 1
+                """, stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: """
+                /system1/bootconfig1/oemhp_uefibootsource2
+                  Properties
+                    bootorder=2
+                    oemhp_description=Embedded RAID : HPE Smart Array P440ar Controller
+                """, stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "disk first", stderr: "", exitCode: 0),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "Image Connected = No\nBoot Option = NO_BOOT", stderr: "", exitCode: 0),
+            ]
+        )
+        let booter = HammertimeOOBBooter(
+            settings: HammertimeSettings(binaryPath: "/tmp/ht", timeoutSeconds: 30),
+            runner: runner
+        )
+
+        let result = try await booter.prepareDiskBoot(OOBDiskBootRequest(deviceID: "node-1"))
+        let commands = runner.invocations.compactMap { invocation -> String? in
+            guard let index = invocation.arguments.firstIndex(of: "--command") else { return nil }
+            return invocation.arguments[index + 1]
+        }
+
+        XCTAssertEqual(result.diskBootSource, "/system1/bootconfig1/oemhp_uefibootsource2")
+        XCTAssertTrue(commands.contains("vm cdrom set no_boot"))
+        XCTAssertTrue(commands.contains("vm cdrom set disconnect"))
+        XCTAssertTrue(commands.contains("vm cdrom eject"))
+        XCTAssertTrue(commands.contains("set /system1/bootconfig1/oemhp_uefibootsource2 bootorder=1"))
+        XCTAssertTrue(result.steps.contains { $0.name == "eject-media" && $0.stdout.contains("Best-effort OOB command failed") })
+    }
+
     func testHammertimeInventoryUsesLongEnoughTimeoutForLargeAccounts() async throws {
         let runner = MockCommandRunner(
             responses: [
@@ -1178,6 +1228,7 @@ final class TalosDeployCoreTests: XCTestCase {
                 CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0),
                 CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0),
                 CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0),
+                CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0),
             ]
         )
         let transport = DirectSSHDeployerTransport(
@@ -1193,6 +1244,7 @@ final class TalosDeployCoreTests: XCTestCase {
         )
 
         XCTAssertEqual(oob.urlRequests.map(\.deviceID), ["cp1", "cp1"])
+        XCTAssertEqual(oob.diskRequests.map(\.deviceID), ["cp1"])
         XCTAssertEqual(oob.urlRequests.first?.imageURL, "http://198.51.100.20:8080/talos-v1.13.0-cp1-wipe.iso")
         XCTAssertEqual(oob.urlRequests.last?.imageURL, "http://198.51.100.20:8080/talos-v1.13.0-cp1.iso")
         XCTAssertTrue(execution.0.executedActions.contains { $0.contains("Destructive Talos wipe boot connected") })
@@ -1226,7 +1278,7 @@ final class TalosDeployCoreTests: XCTestCase {
             ]
         )
         let state = try await DeploymentCoordinator(settings: AppSettings()).stage(spec: spec, at: temp)
-        let runner = MockCommandRunner(responses: Array(repeating: CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0), count: 5))
+        let runner = MockCommandRunner(responses: Array(repeating: CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0), count: 6))
         let transport = DirectSSHDeployerTransport(
             connection: SSHConnection(host: "198.51.100.20", user: "rack"),
             router: SSHCommandRouter(runner: runner)
@@ -1244,6 +1296,7 @@ final class TalosDeployCoreTests: XCTestCase {
         )
 
         XCTAssertEqual(oob.urlRequests.map(\.deviceID), ["cp1", "cp1"])
+        XCTAssertEqual(oob.diskRequests.map(\.deviceID), ["cp1"])
         XCTAssertEqual(oob.urlRequests.map(\.imageURL), [
             "http://198.51.100.20:8080/talos-v1.13.0-cp1.iso",
             "http://198.51.100.20:8080/talos-v1.13.0-cp1.iso",
@@ -1815,6 +1868,7 @@ private struct CommandInvocation {
 private final class MockOOBBooter: OOBNodeBooting, @unchecked Sendable {
     private(set) var urlRequests: [OOBBootURLRequest] = []
     private(set) var pxeRequests: [OOBPXEBootRequest] = []
+    private(set) var diskRequests: [OOBDiskBootRequest] = []
     private var connectedResponses: [Bool]
 
     init(connectedResponses: [Bool] = []) {
@@ -1841,6 +1895,16 @@ private final class MockOOBBooter: OOBNodeBooting, @unchecked Sendable {
             oneTimeBoot: request.oneTimeBoot,
             rebooted: request.reboot,
             steps: [OOBBootURLStep(name: "mock", stdout: "pxe")]
+        )
+    }
+
+    func prepareDiskBoot(_ request: OOBDiskBootRequest) async throws -> OOBDiskBootResult {
+        diskRequests.append(request)
+        return OOBDiskBootResult(
+            deviceID: request.deviceID,
+            diskBootSource: "/system1/bootconfig1/bootsource2",
+            rebooted: request.reboot,
+            steps: [OOBBootURLStep(name: "mock", stdout: "disk")]
         )
     }
 }
