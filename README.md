@@ -94,8 +94,9 @@ Talos Defaults:
 - Kernel modules, extra kernel args, architecture, platform, and schematic ID are configurable.
 - OOB NIC MAC selectors are enabled by default. If Hammertime/iLO can expose HPE integrated NIC MACs, `tds` maps names such as `eno1` to the matching physical port and writes `deviceSelector.hardwareAddr` into Talos node patches.
 - Talos system-disk wipe pre-boot is enabled by default for node installs. `tds` generates a per-node `*-wipe.iso`, boots it once to clear previous or partial Talos installs, waits for the reset pass, then boots the normal per-node ISO with the embedded static machine config.
-- The deployer installer registry is enabled by default. `tds` installs `docker-registry` and `skopeo`, mirrors the selected Talos installer image into the deployer, and renders Talos configs to install from that in-environment registry when nodes do not have Internet access.
-- When the deployer has separate OOB/media and Talos data networks, configure a node-facing registry address CIDR plus interface. `tds` adds and persists that address on the deployer before caching the installer image, then points Talos machine configs at that reachable registry address.
+- The deployer registry is enabled by default. `tds` installs `docker-registry` and `skopeo`, mirrors the selected Talos installer image plus Talos/Kubernetes cluster images into the deployer, and renders Talos configs to install/bootstrap from that in-environment registry when nodes do not have Internet access.
+- By default, Talos nodes mirror `ghcr.io` and `registry.k8s.io` through the deployer registry. Override the comma-separated mirror host list in Settings only when the generated machine configs use additional registries.
+- When the deployer has separate OOB/media and Talos data networks, configure a node-facing registry address CIDR plus interface. `tds` adds and persists that address on the deployer before caching image artifacts, then points Talos machine configs at that reachable registry address.
 - The node-facing registry interface means the interface where Talos node management NICs can actually ARP/reach the deployer. This can be different from the interface that owns the deployer private IP from Core, especially on hosts with bridges, VLANs, or overlapping lab networks.
 - Talos node management host routes are separate from the registry interface and are opt-in. Leave the node route interface blank when the deployer OS can already route to Talos management IPs correctly; set it when Talos management traffic must be forced out a specific bridge/VLAN. In isolated bridged environments, the route source CIDR is commonly the same `/32` alias used for the deployer registry.
 
@@ -262,7 +263,7 @@ Procedure:
 7. If live facts are unavailable on some nodes, use the proven Lab2 director topology as the network template and override each node’s static management IP from Core.
 8. Validate static management CIDR, management NIC MAC or interface selector, gateway, DNS, VLANs, bridges, bridge ports, routes, and install disk for every Talos node before destructive actions.
 9. Build and validate the Ubuntu deployer ISO, attach it through `tds.app` local media, and verify the deployer returns with Ubuntu, SSH, `rack`, `root`, and preserved networking.
-10. Prepare deployer services, cache the Talos installer image in the deployer registry, stage Talos artifacts, provision nodes, apply machine configs, bootstrap etcd, fetch kubeconfig, and verify Talos/Kubernetes health.
+10. Prepare deployer services, cache the Talos installer and cluster images in the deployer registry, stage Talos artifacts, provision nodes, apply machine configs, bootstrap etcd, fetch kubeconfig, and verify Talos/Kubernetes health.
 11. If a subset of nodes fails to boot from virtual media, use `tds deploy reprovision --state "$STATE" --targets DEVICE_ID[,DEVICE_ID] --execute true --access auto` to reissue deployer-hosted OOB boot requests from the saved deployment state, then run `tds deploy resume --state "$STATE" --execute true --access auto`.
 
 Evidence to keep in ignored local storage:

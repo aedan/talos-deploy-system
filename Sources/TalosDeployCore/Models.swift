@@ -692,6 +692,7 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
     public var deployerNodeRouteInterface: String
     public var deployerNodeRouteSourceCIDR: String
     public var deployerRegistryPort: Int
+    public var deployerRegistryMirrorHosts: [String]
 
     public init(
         preferredStrategies: [TalosProvisioningStrategy] = [
@@ -713,7 +714,8 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
         deployerRegistryInterface: String = "",
         deployerNodeRouteInterface: String = "",
         deployerNodeRouteSourceCIDR: String = "",
-        deployerRegistryPort: Int = 5000
+        deployerRegistryPort: Int = 5000,
+        deployerRegistryMirrorHosts: [String] = ["ghcr.io", "registry.k8s.io"]
     ) {
         self.preferredStrategies = preferredStrategies
         self.allowDeployerHostedMedia = allowDeployerHostedMedia
@@ -729,6 +731,7 @@ public struct TalosProvisioningDefaults: Codable, Equatable, Sendable {
         self.deployerNodeRouteInterface = deployerNodeRouteInterface
         self.deployerNodeRouteSourceCIDR = deployerNodeRouteSourceCIDR
         self.deployerRegistryPort = deployerRegistryPort
+        self.deployerRegistryMirrorHosts = deployerRegistryMirrorHosts
     }
 }
 
@@ -748,6 +751,7 @@ extension TalosProvisioningDefaults {
         case deployerNodeRouteInterface
         case deployerNodeRouteSourceCIDR
         case deployerRegistryPort
+        case deployerRegistryMirrorHosts
     }
 
     public init(from decoder: Decoder) throws {
@@ -767,7 +771,8 @@ extension TalosProvisioningDefaults {
             deployerRegistryInterface: try container.decodeIfPresent(String.self, forKey: .deployerRegistryInterface) ?? defaults.deployerRegistryInterface,
             deployerNodeRouteInterface: try container.decodeIfPresent(String.self, forKey: .deployerNodeRouteInterface) ?? defaults.deployerNodeRouteInterface,
             deployerNodeRouteSourceCIDR: try container.decodeIfPresent(String.self, forKey: .deployerNodeRouteSourceCIDR) ?? defaults.deployerNodeRouteSourceCIDR,
-            deployerRegistryPort: try container.decodeIfPresent(Int.self, forKey: .deployerRegistryPort) ?? defaults.deployerRegistryPort
+            deployerRegistryPort: try container.decodeIfPresent(Int.self, forKey: .deployerRegistryPort) ?? defaults.deployerRegistryPort,
+            deployerRegistryMirrorHosts: try container.decodeIfPresent([String].self, forKey: .deployerRegistryMirrorHosts) ?? defaults.deployerRegistryMirrorHosts
         )
     }
 }

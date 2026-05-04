@@ -626,15 +626,6 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         _ = try await transport.run(startMediaCommand, timeout: 900)
         tdsProgress("Deployer-hosted Talos media service is ready")
         executedActions.append("Prepared deployer-hosted Talos media at \(talosISOPath).")
-        if !registryCacheCommand.isEmpty {
-            tdsProgress("Caching Talos installer image in deployer registry")
-            _ = try await transport.run(registryCacheCommand, timeout: 1800)
-            tdsProgress("Talos installer image is cached in deployer registry")
-            executedActions.append("Cached Talos installer image in deployer registry at \(registryInstallerImage ?? "configured registry").")
-            if !state.spec.talosProvisioning.deployerRegistryAddressCIDR.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                executedActions.append("Ensured deployer node-facing registry address \(state.spec.talosProvisioning.deployerRegistryAddressCIDR).")
-            }
-        }
         if !nodeRouteCommand.isEmpty {
             tdsProgress("Reconciling deployer host routes to Talos nodes")
             _ = try await transport.run(nodeRouteCommand, timeout: 120)
@@ -655,6 +646,15 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         _ = try await transport.run(prepareMediaCommand, timeout: 1800)
         tdsProgress("Node-specific Talos boot media generated")
         executedActions.append("Generated node-specific Talos boot media with embedded machine configs.")
+        if !registryCacheCommand.isEmpty {
+            tdsProgress("Caching Talos installer and cluster images in deployer registry")
+            _ = try await transport.run(registryCacheCommand, timeout: 3600)
+            tdsProgress("Talos installer and cluster images are cached in deployer registry")
+            executedActions.append("Cached Talos installer and cluster images in deployer registry at \(registryInstallerImage ?? "configured registry").")
+            if !state.spec.talosProvisioning.deployerRegistryAddressCIDR.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                executedActions.append("Ensured deployer node-facing registry address \(state.spec.talosProvisioning.deployerRegistryAddressCIDR).")
+            }
+        }
 
         if state.spec.talosProvisioning.wipeSystemDiskBeforeInstall {
             var didRequestWipe = false
@@ -734,10 +734,19 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         tdsProgress("Restarting deployer-hosted media service for resume")
         _ = try await transport.run(startMediaCommand, timeout: 900)
         executedActions.append("Restarted deployer-hosted Talos media service for resume.")
+        let prepareMediaCommand = """
+        cd \(shellEscape(state.plan.durableStateDirectory)) && \\
+        TDS_MEDIA_ROOT=\(shellEscape(configuration.mediaRoot)) \\
+        TDS_TALOS_VERSION=\(shellEscape(state.spec.talosVersion)) \\
+        ./maintenance/tds-prepare-talos-media.sh
+        """
+        tdsProgress("Regenerating node-specific Talos machine configs and boot media for resume")
+        _ = try await transport.run(prepareMediaCommand, timeout: 1800)
+        executedActions.append("Regenerated node-specific Talos boot media and machine configs for resume.")
         if !registryCacheCommand.isEmpty {
             tdsProgress("Revalidating deployer registry cache for resume")
-            _ = try await transport.run(registryCacheCommand, timeout: 1800)
-            executedActions.append("Revalidated Talos installer image in deployer registry.")
+            _ = try await transport.run(registryCacheCommand, timeout: 3600)
+            executedActions.append("Revalidated Talos installer and cluster image cache in deployer registry.")
         }
         if !nodeRouteCommand.isEmpty {
             tdsProgress("Reconciling deployer host routes for resume")
@@ -767,7 +776,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         let firstControlPlane = state.spec.nodes.first { $0.assignment.role == .controlplane }
         let bootstrap = TalosBootstrapResult(
             bootstrapNode: firstControlPlane?.device.name ?? "",
-            commands: [startMediaCommand, bootstrapCommand],
+            commands: [startMediaCommand, prepareMediaCommand, bootstrapCommand],
             succeeded: true,
             warnings: warnings
         )
@@ -1084,6 +1093,15 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         let targetPath = registryInstallerImage.split(separator: "/", maxSplits: 1).dropFirst().first.map(String.init) ?? ""
         guard !targetPath.isEmpty else { return "" }
         let localTarget = "\(localRegistry)/\(targetPath)"
+        let mirrorHosts = deployerRegistryMirrorHosts(for: state.spec)
+        let mirrorCases = mirrorHosts.map { host in
+            """
+              \(host)/*)
+                printf '%s/%s' "$local_registry" "${image#\(host)/}"
+                return 0
+                ;;
+            """
+        }.joined(separator: "\n")
         return """
         set -e
         if ! command -v skopeo >/dev/null 2>&1; then
@@ -1105,7 +1123,72 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
           fi
           sleep 2
         done
-        skopeo copy --retry-times 3 --dest-tls-verify=false \(shellEscape("docker://\(state.plan.talosArtifacts.installerImage)")) \(shellEscape("docker://\(localTarget)"))
+        image_list="$(mktemp)"
+        cleanup_registry_cache() {
+          rm -f "$image_list"
+        }
+        trap cleanup_registry_cache EXIT
+        add_image() {
+          image="$1"
+          image="${image#docker://}"
+          image="${image%%@*}"
+          [ -n "$image" ] || return 0
+          case "$image" in
+            *:*) printf '%s\\n' "$image" >> "$image_list" ;;
+          esac
+        }
+        add_image \(shellEscape(state.plan.talosArtifacts.installerImage))
+        if [ -d \(shellEscape("\(state.plan.durableStateDirectory)/machine-configs")) ]; then
+          grep -R "^[[:space:]]*image:" \(shellEscape("\(state.plan.durableStateDirectory)/machine-configs")) 2>/dev/null \\
+            | awk '{print $NF}' \\
+            | while IFS= read -r image; do add_image "$image"; done
+        fi
+        if [ -x \(shellEscape("\(state.plan.durableStateDirectory)/bin/talosctl")) ]; then
+          TALOSCTL_CACHE_BIN=\(shellEscape("\(state.plan.durableStateDirectory)/bin/talosctl"))
+        elif [ -x \(shellEscape("\(configuration.stateRoot)/bin/talosctl")) ]; then
+          TALOSCTL_CACHE_BIN=\(shellEscape("\(configuration.stateRoot)/bin/talosctl"))
+        else
+          TALOSCTL_CACHE_BIN="$(command -v talosctl || true)"
+        fi
+        if [ -n "${TALOSCTL_CACHE_BIN:-}" ] && [ -x "$TALOSCTL_CACHE_BIN" ]; then
+          {
+            "$TALOSCTL_CACHE_BIN" image k8s-bundle --kubernetes-version \(shellEscape(state.spec.kubernetesVersion)) 2>/dev/null || \\
+              "$TALOSCTL_CACHE_BIN" image k8s-bundle \(shellEscape(state.spec.kubernetesVersion)) 2>/dev/null || \\
+              "$TALOSCTL_CACHE_BIN" image k8s-bundle 2>/dev/null || true
+            "$TALOSCTL_CACHE_BIN" image talos-bundle 2>/dev/null || true
+          } | grep -Eo '([[:alnum:]._-]+(:[0-9]+)?/)+[[:alnum:]_.-]+(:[[:alnum:]_.-]+)?(@sha256:[[:xdigit:]]+)?' \\
+            | while IFS= read -r image; do add_image "$image"; done
+        fi
+        sort -u "$image_list" -o "$image_list"
+        local_registry=\(shellEscape(localRegistry))
+        registry_host=\(shellEscape(registryHost))
+        destination_for_image() {
+          image="$1"
+          case "$image" in
+            \(state.plan.talosArtifacts.installerImage))
+              printf '%s' \(shellEscape(localTarget))
+              return 0
+              ;;
+            "$registry_host"/*)
+              printf '%s' "$image"
+              return 0
+              ;;
+        \(mirrorCases)
+            *)
+              return 1
+              ;;
+          esac
+        }
+        while IFS= read -r image; do
+          [ -n "$image" ] || continue
+          dest="$(destination_for_image "$image" || true)"
+          if [ -z "$dest" ]; then
+            echo "Skipping image outside configured deployer registry mirrors: $image"
+            continue
+          fi
+          echo "Caching $image as $dest"
+          skopeo copy --retry-times 3 --format v2s2 --dest-tls-verify=false "docker://$image" "docker://$dest"
+        done < "$image_list"
         """
     }
 

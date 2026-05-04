@@ -944,7 +944,7 @@ private struct SettingsRootView: View {
                 Toggle("Wipe Talos system disk before install", isOn: $controller.settings.talos.provisioning.wipeSystemDiskBeforeInstall)
                     .fieldHelp("Boots a tds-generated Talos reset ISO before normal install media so repeat deployments clear any previous or partial Talos install.")
                 Toggle("Use deployer installer registry", isOn: $controller.settings.talos.provisioning.allowDeployerRegistry)
-                    .fieldHelp("Caches the Talos installer image in a registry on the Ubuntu deployer so Talos nodes do not need Internet access during install.")
+                    .fieldHelp("Caches the Talos installer and selected cluster images in a registry on the Ubuntu deployer so Talos nodes do not need Internet access during install/bootstrap.")
                 TextField("Deployer registry host override", text: $controller.settings.talos.provisioning.deployerRegistryHost)
                     .fieldHelp("Optional host/IP Talos nodes should use for the deployer registry. If blank, tds uses the node-facing registry CIDR host, then the deployer private IP from Core.")
                 TextField("Deployer registry address CIDR", text: $controller.settings.talos.provisioning.deployerRegistryAddressCIDR)
@@ -955,6 +955,16 @@ private struct SettingsRootView: View {
                     .fieldHelp("Optional interface tds should force for reaching Talos node management IPs when the deployer OS would otherwise choose the wrong route.")
                 TextField("Deployer node route source CIDR", text: $controller.settings.talos.provisioning.deployerNodeRouteSourceCIDR)
                     .fieldHelp("Optional source IP/CIDR for forced Talos node management routes. In isolated or bridged environments this is often the same /32 alias used for the deployer registry.")
+                TextField("Deployer registry mirror hosts", text: Binding(
+                    get: { controller.settings.talos.provisioning.deployerRegistryMirrorHosts.joined(separator: ",") },
+                    set: {
+                        controller.settings.talos.provisioning.deployerRegistryMirrorHosts = $0
+                            .split(separator: ",")
+                            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                            .filter { !$0.isEmpty }
+                    }
+                ))
+                .fieldHelp("Comma-separated public registry hosts that Talos nodes should mirror through the deployer registry. Defaults cover ghcr.io and registry.k8s.io for Talos/Kubernetes images.")
                 Toggle("Allow external OOB URL", isOn: $controller.settings.talos.provisioning.allowExternalOOBURL)
                     .fieldHelp("Allows OOB controllers to boot media from an operator-configured external URL when that network path exists.")
                 TextField("External OOB media base URL", text: $controller.settings.talos.provisioning.externalOOBMediaBaseURL)

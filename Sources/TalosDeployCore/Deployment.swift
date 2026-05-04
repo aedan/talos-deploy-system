@@ -867,7 +867,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         else {
             return []
         }
-        return [
+        var lines = [
             "  registries:",
             "    mirrors:",
             "      \(yamlQuotedString(host)):",
@@ -875,6 +875,13 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             "          - \(yamlScalar(endpoint))",
             "        skipFallback: true",
         ]
+        for mirrorHost in deployerRegistryMirrorHosts(for: spec) {
+            lines.append("      \(yamlQuotedString(mirrorHost)):")
+            lines.append("        endpoints:")
+            lines.append("          - \(yamlScalar(endpoint))")
+            lines.append("        skipFallback: true")
+        }
+        return lines
     }
 
     private func renderTimeServers(spec: DeploymentSpec) -> [String] {
@@ -1132,6 +1139,16 @@ func deployerRegistryInstallerImage(for spec: DeploymentSpec) -> String? {
     return "\(host)/installer/\(spec.talosFactory.schematicID):\(spec.talosVersion)"
 }
 
+func deployerRegistryMirrorHosts(for spec: DeploymentSpec) -> [String] {
+    var seen = Set<String>()
+    return spec.talosProvisioning.deployerRegistryMirrorHosts.compactMap { value in
+        let host = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty, !seen.contains(host) else { return nil }
+        seen.insert(host)
+        return host
+    }
+}
+
 func dockerRegistryWritableCommand(registryRoot: String) -> String {
     """
           sudo mkdir -p \(shellEscape(registryRoot))
@@ -1140,7 +1157,7 @@ func dockerRegistryWritableCommand(registryRoot: String) -> String {
           else
             sudo chmod -R 0777 \(shellEscape(registryRoot)) 2>/dev/null || true
           fi
-          sudo chmod -R u+rwX,g+rwX \(shellEscape(registryRoot)) 2>/dev/null || true
+          sudo chmod -R 0777 \(shellEscape(registryRoot)) 2>/dev/null || true
     """
 }
 
