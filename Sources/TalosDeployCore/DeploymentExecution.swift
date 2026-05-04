@@ -905,6 +905,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
 
     private func renderWaitForTalosBootReadinessCommand(state: DeploymentState) -> String {
         """
+        bash <<'TDS_TALOS_READINESS'
         set -euo pipefail
         ROOT=\(shellEscape(state.plan.durableStateDirectory))
         TDS_DEPLOYER_STATE_ROOT=\(shellEscape(state.spec.deployerStateRoot))
@@ -991,6 +992,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
           echo "[tds-deployer] one or more nodes failed readiness; see $ROOT/$WAIT_LOG" >&2
         fi
         exit "$failed"
+        TDS_TALOS_READINESS
         """
     }
 
