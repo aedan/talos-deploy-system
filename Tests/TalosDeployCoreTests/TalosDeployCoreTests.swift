@@ -276,7 +276,7 @@ final class TalosDeployCoreTests: XCTestCase {
         let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
         let bootPatch = try String(contentsOf: output.appending(path: "boot-node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
         let bootMeta = try String(contentsOf: output.appending(path: "boot-network-meta").appending(path: "cp-1.yaml"), encoding: .utf8)
-        XCTAssertTrue(patch.contains("image: factory.talos.dev/installer/abc123:v1.11.3"))
+        XCTAssertTrue(patch.contains("image: factory.talos.dev/metal-installer/abc123:v1.11.3"))
         XCTAssertFalse(patch.contains("hostname: cp-1"))
         XCTAssertTrue(patch.contains("name: br_netfilter"))
         XCTAssertTrue(patch.contains("zfs_arc_max=123"))
@@ -295,7 +295,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertFalse(patch.contains("  extraMounts:\n    - destination: /var/lib/longhorn"))
         XCTAssertTrue(patch.contains("destination: /var/lib/longhorn"))
         XCTAssertFalse(bootPatch.contains("  install:\n"))
-        XCTAssertFalse(bootPatch.contains("image: factory.talos.dev/installer/abc123:v1.11.3"))
+        XCTAssertFalse(bootPatch.contains("image: factory.talos.dev/metal-installer/abc123:v1.11.3"))
         XCTAssertTrue(bootMeta.contains("address: 198.51.100.10/22"))
         XCTAssertTrue(bootMeta.contains("gateway: 198.51.100.1"))
     }
@@ -632,7 +632,7 @@ final class TalosDeployCoreTests: XCTestCase {
             encoding: .utf8
         )
 
-        XCTAssertTrue(patch.contains("image: 198.51.100.196:5000/installer/abc123:v1.13.0"))
+        XCTAssertTrue(patch.contains("image: 198.51.100.196:5000/metal-installer/abc123:v1.13.0"))
         XCTAssertTrue(patch.contains("    wipe: true"))
         XCTAssertTrue(patch.contains("    nameservers:\n      - 198.51.100.196\n      - 198.51.101.10"))
         XCTAssertTrue(patch.contains("registries:"))
@@ -742,7 +742,7 @@ final class TalosDeployCoreTests: XCTestCase {
         let output = try await DefaultTalosBuilder().buildArtifacts(for: spec, plan: plan, in: temp)
         let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
 
-        XCTAssertTrue(patch.contains("image: 198.51.100.55:5000/installer/abc123:v1.13.0"))
+        XCTAssertTrue(patch.contains("image: 198.51.100.55:5000/metal-installer/abc123:v1.13.0"))
         XCTAssertTrue(patch.contains("\"198.51.100.55:5000\":"))
         XCTAssertTrue(patch.contains("http://198.51.100.55:5000"))
         XCTAssertFalse(patch.contains("198.51.100.196:5000"))
@@ -1541,7 +1541,7 @@ final class TalosDeployCoreTests: XCTestCase {
 
         XCTAssertTrue(artifacts.isoURL == "https://factory.talos.dev/image/abc123/v1.12.1/metal-amd64.iso")
         XCTAssertTrue(artifacts.pxeURL == "https://pxe.factory.talos.dev/pxe/abc123/v1.12.1/metal-amd64")
-        XCTAssertTrue(artifacts.installerImage == "factory.talos.dev/installer/abc123:v1.12.1")
+        XCTAssertTrue(artifacts.installerImage == "factory.talos.dev/metal-installer/abc123:v1.12.1")
         XCTAssertTrue(artifacts.schematicYAML.contains("siderolabs/zfs"))
         XCTAssertTrue(artifacts.schematicYAML.contains("extraKernelArgs:"))
     }

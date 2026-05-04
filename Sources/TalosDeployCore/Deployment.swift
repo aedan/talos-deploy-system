@@ -670,7 +670,7 @@ public struct TalosFactoryClient: Sendable {
             schematicYAML: renderSchematic(settings: settings),
             isoURL: "\(baseURL)/image/\(settings.schematicID)/\(talosVersion)/\(model).iso",
             pxeURL: "\(pxeBaseURL)/pxe/\(settings.schematicID)/\(talosVersion)/\(model)",
-            installerImage: "\(settings.registryHost)/installer/\(settings.schematicID):\(talosVersion)"
+            installerImage: "\(settings.registryHost)/metal-installer/\(settings.schematicID):\(talosVersion)"
         )
     }
 
@@ -1209,7 +1209,7 @@ func deployerRegistryEndpoint(for spec: DeploymentSpec) -> String? {
 
 func deployerRegistryInstallerImage(for spec: DeploymentSpec) -> String? {
     guard let host = deployerRegistryHost(for: spec) else { return nil }
-    return "\(host)/installer/\(spec.talosFactory.schematicID):\(spec.talosVersion)"
+    return "\(host)/metal-installer/\(spec.talosFactory.schematicID):\(spec.talosVersion)"
 }
 
 func deployerRegistryMirrorHosts(for spec: DeploymentSpec) -> [String] {
