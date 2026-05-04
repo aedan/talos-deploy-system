@@ -71,9 +71,6 @@ public struct MaintenanceBundleBuilder {
     }
 
     private func renderTalosDeployScript(state: DeploymentState) -> String {
-        let controlPlanes = nodeRecords(state: state, role: .controlplane)
-        let firstControlPlane = controlPlanes.first
-
         return """
         #!/usr/bin/env bash
         set -euo pipefail
@@ -267,6 +264,7 @@ public struct MaintenanceBundleBuilder {
 
         SUCCESSFUL_NODE_IPS=()
         SUCCESSFUL_CONTROL_PLANE_IPS=()
+        SUCCESSFUL_CONTROL_PLANE_NAMES=()
         SUCCESSFUL_WORKER_IPS=()
         FAILED_NODES=()
 
@@ -283,6 +281,7 @@ public struct MaintenanceBundleBuilder {
               SUCCESSFUL_NODE_IPS+=("$ip")
               if [ "$role" = "controlplane" ]; then
                 SUCCESSFUL_CONTROL_PLANE_IPS+=("$ip")
+                SUCCESSFUL_CONTROL_PLANE_NAMES+=("$name")
               elif [ "$role" = "worker" ]; then
                 SUCCESSFUL_WORKER_IPS+=("$ip")
               fi
@@ -297,15 +296,18 @@ public struct MaintenanceBundleBuilder {
         }
 
         log "configuring control-plane nodes before cluster bootstrap"
-        run_role_nodes controlplane strict 120 90
+        run_role_nodes controlplane continue 120 90 || true
 
-        first_cp=\(shellEscape(firstControlPlane?.ip ?? ""))
-        first_cp_name=\(shellEscape(firstControlPlane?.name ?? ""))
-        if [ -n "$first_cp" ]; then
-          log "bootstrapping etcd on first control plane $first_cp"
-          wait_for_time_sync "${first_cp_name:-first-control-plane}" "$first_cp" 30
-          bootstrap_control_plane "$first_cp" 30
-          "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$first_cp" --endpoints "$first_cp" kubeconfig . --force || true
+        bootstrap_cp="${SUCCESSFUL_CONTROL_PLANE_IPS[0]:-}"
+        bootstrap_cp_name="${SUCCESSFUL_CONTROL_PLANE_NAMES[0]:-first-control-plane}"
+        if [ -n "$bootstrap_cp" ]; then
+          log "bootstrapping etcd on selected reachable control plane $bootstrap_cp"
+          wait_for_time_sync "$bootstrap_cp_name" "$bootstrap_cp" 30
+          bootstrap_control_plane "$bootstrap_cp" 30
+          "$TALOSCTL" --talosconfig generated/talosconfig --nodes "$bootstrap_cp" --endpoints "$bootstrap_cp" kubeconfig . --force || true
+        else
+          echo "No control-plane node reached configured Talos API; cannot bootstrap cluster" >&2
+          exit 1
         fi
 
         log "configuring worker nodes after control-plane bootstrap"
