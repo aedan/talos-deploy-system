@@ -350,7 +350,7 @@ public struct MaintenanceBundleBuilder {
         let allNodes = controlPlanes + workers
         let installerImage = state.plan.talosArtifacts.installerImage
         let nodeLines = allNodes.map {
-            "\($0.name)|\($0.role.rawValue)|\($0.ip)|\($0.patchPath)|\($0.bootPatchPath)|\($0.metaPath)|\($0.deviceID)|\($0.mediaFileName)|meta"
+            "\($0.name)|\($0.role.rawValue)|\($0.ip)|\($0.patchPath)|\($0.bootPatchPath)|\($0.metaPath)|\($0.deviceID)|\($0.mediaFileName)|config"
         }.joined(separator: "\n")
 
         return """
@@ -422,7 +422,7 @@ public struct MaintenanceBundleBuilder {
             xorriso -indev "$TDS_BASE_TALOS_ISO" -outdev "$out.tmp" \\
               -volid metal-iso \\
               -map "$work/grub.cfg" /boot/grub/grub.cfg \\
-              -map "machine-configs/${name}.yaml" /config.yaml \\
+              -map "boot-machine-configs/${name}.yaml" /config.yaml \\
               -boot_image any replay >/dev/null 2>&1
             mv "$out.tmp" "$out"
 
@@ -940,13 +940,18 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         wait_talos_api() {
           local name="$1"
           local ip="$2"
-          local attempts="${3:-120}"
+          local boot_mode="${3:-config}"
+          local attempts="${4:-120}"
           local secure_out
           local insecure_out
           secure_out="$(mktemp)"
           insecure_out="$(mktemp)"
           trap 'rm -f "$secure_out" "$insecure_out"' RETURN
-          echo "[tds-deployer] waiting for live or configured Talos API on ${name} (${ip}) before OOB media detach"
+          if [ "$boot_mode" = "meta" ]; then
+            echo "[tds-deployer] waiting for live or configured Talos API on ${name} (${ip}) before OOB media detach"
+          else
+            echo "[tds-deployer] waiting for configured Talos API from boot ISO static networking config on ${name} (${ip}) before OOB media detach"
+          fi
           for attempt in $(seq 1 "$attempts"); do
             : > "$secure_out"
             : > "$insecure_out"
@@ -957,13 +962,22 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
               return 0
             fi
             if talos_with_timeout "$TALOSCTL" --nodes "$ip" --endpoints "$ip" version --insecure >"$insecure_out" 2>&1; then
-              echo "[tds-deployer] live Talos maintenance API is reachable on ${name} (${ip})"
-              rm -f "$secure_out" "$insecure_out"
-              trap - RETURN
-              return 0
+              if [ "$boot_mode" = "meta" ]; then
+                echo "[tds-deployer] live Talos maintenance API is reachable on ${name} (${ip})"
+                rm -f "$secure_out" "$insecure_out"
+                trap - RETURN
+                return 0
+              fi
+              if [ $((attempt % 6)) -eq 0 ]; then
+                echo "[tds-deployer] ${name} (${ip}) is reachable only through live maintenance API; waiting for boot ISO config to load"
+              fi
             fi
             if [ "$attempt" -eq "$attempts" ]; then
-              echo "Timed out waiting for live or configured Talos API on ${name} (${ip})" >&2
+              if [ "$boot_mode" = "meta" ]; then
+                echo "Timed out waiting for live or configured Talos API on ${name} (${ip})" >&2
+              else
+                echo "Timed out waiting for configured Talos API from boot ISO static networking config on ${name} (${ip})" >&2
+              fi
               echo "[tds-deployer] last secure check output for ${name} (${ip}):"
               tail -40 "$secure_out" || true
               echo "[tds-deployer] last insecure check output for ${name} (${ip}):"
@@ -987,7 +1001,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         failed=0
         while IFS='|' read -r name role ip patch boot_patch meta_path device_id media_file boot_mode; do
           [ -n "$name" ] || continue
-          wait_talos_api "$name" "$ip" 120 || failed=1
+          wait_talos_api "$name" "$ip" "$boot_mode" 120 || failed=1
         done < generated/nodes.tsv
         if [ "$failed" -ne 0 ]; then
           echo "[tds-deployer] one or more nodes failed readiness; see $ROOT/$WAIT_LOG" >&2
