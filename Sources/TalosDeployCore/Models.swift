@@ -1262,6 +1262,8 @@ public struct HammertimeSettings: Codable, Equatable, Sendable {
     public var passportReason: String
     public var copyMethod: String
     public var commandTimeoutSeconds: Int
+    public var authPreflightTimeoutSeconds: Int
+    public var deployerSSHArgs: String
     public var defaultFactGroups: [String]
     public var preferredTerminal: String
     public var saveExpectScripts: Bool
@@ -1278,6 +1280,8 @@ public struct HammertimeSettings: Codable, Equatable, Sendable {
         passportReason: String = "",
         copyMethod: String = "rsync",
         commandTimeoutSeconds: Int = 300,
+        authPreflightTimeoutSeconds: Int = 30,
+        deployerSSHArgs: String = "-o ConnectTimeout=20 -o ServerAliveInterval=10 -o ServerAliveCountMax=3",
         defaultFactGroups: [String] = ["hardware", "storage", "setup", "routes"],
         preferredTerminal: String = "iterm",
         saveExpectScripts: Bool = false,
@@ -1293,6 +1297,8 @@ public struct HammertimeSettings: Codable, Equatable, Sendable {
         self.passportReason = passportReason
         self.copyMethod = copyMethod
         self.commandTimeoutSeconds = commandTimeoutSeconds
+        self.authPreflightTimeoutSeconds = authPreflightTimeoutSeconds
+        self.deployerSSHArgs = deployerSSHArgs
         self.defaultFactGroups = defaultFactGroups
         self.preferredTerminal = preferredTerminal
         self.saveExpectScripts = saveExpectScripts
@@ -1312,6 +1318,8 @@ extension HammertimeSettings {
         case passportReason
         case copyMethod
         case commandTimeoutSeconds
+        case authPreflightTimeoutSeconds
+        case deployerSSHArgs
         case defaultFactGroups
         case preferredTerminal
         case saveExpectScripts
@@ -1332,6 +1340,8 @@ extension HammertimeSettings {
             passportReason: try container.decodeIfPresent(String.self, forKey: .passportReason) ?? defaults.passportReason,
             copyMethod: try container.decodeIfPresent(String.self, forKey: .copyMethod) ?? defaults.copyMethod,
             commandTimeoutSeconds: try container.decodeIfPresent(Int.self, forKey: .commandTimeoutSeconds) ?? defaults.commandTimeoutSeconds,
+            authPreflightTimeoutSeconds: try container.decodeIfPresent(Int.self, forKey: .authPreflightTimeoutSeconds) ?? defaults.authPreflightTimeoutSeconds,
+            deployerSSHArgs: try container.decodeIfPresent(String.self, forKey: .deployerSSHArgs) ?? defaults.deployerSSHArgs,
             defaultFactGroups: try container.decodeIfPresent([String].self, forKey: .defaultFactGroups) ?? defaults.defaultFactGroups,
             preferredTerminal: try container.decodeIfPresent(String.self, forKey: .preferredTerminal) ?? defaults.preferredTerminal,
             saveExpectScripts: try container.decodeIfPresent(Bool.self, forKey: .saveExpectScripts) ?? defaults.saveExpectScripts,

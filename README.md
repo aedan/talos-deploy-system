@@ -84,6 +84,8 @@ Hammertime:
 - Binary path defaults to `~/.local/bin/ht`.
 - `--no-checks` is enabled by default so old OS records do not block pre-provision access attempts.
 - Deployer automation can use `ht command`, `ht copy`, and `ht script` when direct SSH or SSH ProxyJump is not reachable.
+- Before attempting deployer commands, `tds` validates cached Hammertime/Core SSO state in batch mode and reports an explicit authentication blocker if interactive SSO must be refreshed.
+- Deployer SSH arguments default to bounded connect/keepalive options so unreachable Hammertime SSH paths fail instead of hanging forever.
 - Live facts are optional enrichment and never block deployment.
 
 Talos Defaults:

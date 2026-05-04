@@ -1136,6 +1136,8 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(runner.invocations[0].arguments.contains("--via"))
         XCTAssertTrue(runner.invocations[0].arguments.contains("ORD"))
         XCTAssertTrue(runner.invocations[0].arguments.contains("--private"))
+        XCTAssertTrue(runner.invocations[0].arguments.contains("--ssh-args"))
+        XCTAssertTrue(runner.invocations[0].arguments.contains { $0.contains("ConnectTimeout=20") })
         XCTAssertTrue(runner.invocations[0].arguments.contains("--method"))
         XCTAssertTrue(runner.invocations[0].arguments.contains("rsync"))
         XCTAssertTrue(runner.invocations[0].arguments.contains("716181"))
@@ -1150,6 +1152,7 @@ final class TalosDeployCoreTests: XCTestCase {
     func testHammertimeDeployerValidationRetriesTransientFailures() async throws {
         let runner = MockCommandRunner(
             responses: [
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "gateway warming up", exitCode: 1),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "", exitCode: 0),
             ]
@@ -1165,8 +1168,32 @@ final class TalosDeployCoreTests: XCTestCase {
 
         XCTAssertTrue(validation.succeeded)
         XCTAssertEqual(validation.method, .hammertime)
-        XCTAssertEqual(runner.invocations.count, 2)
-        XCTAssertTrue(runner.invocations.allSatisfy { $0.arguments.contains("command") })
+        XCTAssertEqual(runner.invocations.count, 3)
+        XCTAssertTrue(runner.invocations[0].arguments.contains("credentials"))
+        XCTAssertTrue(runner.invocations.dropFirst().allSatisfy { $0.arguments.contains("command") })
+    }
+
+    func testHammertimeDeployerValidationReportsAuthUnavailableBeforeTransportProbe() async throws {
+        let runner = MockCommandRunner(
+            responses: [
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "password missing, and can't prompt for it in non-interactive mode", exitCode: 1),
+            ]
+        )
+        let transport = HammertimeDeployerTransport(
+            settings: HammertimeSettings(binaryPath: "/tmp/ht", commandTimeoutSeconds: 60),
+            deviceID: "716181",
+            validationRetryDelaySeconds: 0,
+            runner: runner
+        )
+
+        do {
+            _ = try await transport.validate()
+            XCTFail("Expected Hammertime auth validation failure")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("authentication is not available in batch mode"))
+        }
+        XCTAssertEqual(runner.invocations.count, 1)
+        XCTAssertTrue(runner.invocations[0].arguments.contains("credentials"))
     }
 
     func testHammertimeCopyUsesNoSpaceTemporarySourceForApplicationSupportPaths() async throws {
@@ -1198,6 +1225,7 @@ final class TalosDeployCoreTests: XCTestCase {
         let runner = MockCommandRunner(
             responses: [
                 CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "timeout", exitCode: 255),
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "", exitCode: 0),
                 CommandResult(executable: "/tmp/ht", arguments: [], stdout: "", stderr: "", exitCode: 0),
             ]
         )

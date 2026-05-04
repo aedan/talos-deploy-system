@@ -821,7 +821,7 @@ struct TalosDeployCLI {
               access-test --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
               prepare --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
 
-            Hammertime access uses ht command/copy/script with configured --no-checks behavior.
+            Hammertime access first validates cached SSO/session state, then uses ht command/copy/script with configured --no-checks and bounded SSH timeout behavior.
             """
         )
     }

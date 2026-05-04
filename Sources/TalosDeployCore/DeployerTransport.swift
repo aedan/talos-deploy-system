@@ -131,6 +131,8 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
     }
 
     public func validate() async throws -> DeployerAccessValidation {
+        try await validateAuthentication()
+
         let maximumAttempts = 3
         var lastError: Error?
 
@@ -241,6 +243,38 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
         return arguments
     }
 
+    private func validateAuthentication() async throws {
+        do {
+            _ = try await runner.run(
+                settings.binaryPath.expandingTildeInPath(),
+                arguments: commonArguments() + [
+                    "credentials",
+                    "--identity",
+                    "--validate",
+                    "--format",
+                    "tokenonly",
+                ],
+                environment: [:],
+                currentDirectory: nil,
+                timeout: TimeInterval(settings.authPreflightTimeoutSeconds)
+            )
+        } catch {
+            if case CommandError.timedOut = error {
+                throw HammertimeTransportError.authenticationTimedOut(settings.authPreflightTimeoutSeconds)
+            }
+            if let commandError = error as? CommandError,
+               case .executionFailed(let result) = commandError {
+                let output = [result.stderr, result.stdout].joined(separator: "\n")
+                if output.localizedCaseInsensitiveContains("password missing") ||
+                    output.localizedCaseInsensitiveContains("can't prompt") ||
+                    output.localizedCaseInsensitiveContains("saml") {
+                    throw HammertimeTransportError.authenticationUnavailable(output)
+                }
+            }
+            throw error
+        }
+    }
+
     private func commandOptions() -> [String] {
         var arguments: [String] = []
         if !via.isEmpty {
@@ -251,6 +285,12 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
         }
         if !passportReason.isEmpty {
             arguments.append(contentsOf: ["--passport-reason", passportReason])
+        }
+        if !settings.deployerSSHArgs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            arguments.append(contentsOf: ["--ssh-args", settings.deployerSSHArgs])
+        }
+        if settings.saveExpectScripts {
+            arguments.append("--save-expect")
         }
         return arguments
     }
@@ -280,10 +320,18 @@ public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Se
 }
 
 public enum HammertimeTransportError: Error, LocalizedError {
+    case authenticationTimedOut(Int)
+    case authenticationUnavailable(String)
     case validationTimedOut(String)
 
     public var errorDescription: String? {
         switch self {
+        case .authenticationTimedOut(let seconds):
+            return "Hammertime authentication preflight timed out after \(seconds)s before deployer access was attempted. Refresh Hammertime/Core SSO on the runtime host in an interactive terminal, for example `ht --no-checks login <deployer-device>`, then retry."
+        case .authenticationUnavailable(let output):
+            let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            let detail = trimmed.isEmpty ? "" : " Hammertime reported: \(trimmed)"
+            return "Hammertime authentication is not available in batch mode.\(detail) Refresh Hammertime/Core SSO on the runtime host in an interactive terminal, then retry."
         case .validationTimedOut(let deviceID):
             return "Hammertime access to \(deviceID) timed out while validating deployer command execution. Refresh Hammertime/Core SSO on the runtime host, for example by running `ht --no-checks login \(deviceID)` interactively, then retry."
         }

@@ -845,8 +845,12 @@ private struct SettingsRootView: View {
                     .fieldHelp("Optional Passport/access request reason passed to Hammertime for deployer automation when required.")
                 TextField("Copy Method", text: $controller.settings.hammertime.copyMethod)
                     .fieldHelp("Hammertime copy method for deployer state sync, normally rsync or scp.")
+                TextField("Deployer SSH Args", text: $controller.settings.hammertime.deployerSSHArgs)
+                    .fieldHelp("Extra SSH options passed through Hammertime for deployer automation. Defaults bound connection attempts so failed paths do not hang indefinitely.")
                 Stepper("Command Timeout Seconds: \(controller.settings.hammertime.commandTimeoutSeconds)", value: $controller.settings.hammertime.commandTimeoutSeconds, in: 30...3600)
                     .fieldHelp("Maximum time tds waits for Hammertime deployer command/script operations before failing the deployment step.")
+                Stepper("Auth Preflight Timeout Seconds: \(controller.settings.hammertime.authPreflightTimeoutSeconds)", value: $controller.settings.hammertime.authPreflightTimeoutSeconds, in: 10...300)
+                    .fieldHelp("Maximum time tds waits for Hammertime SSO/session validation before reporting that interactive authentication must be refreshed.")
                 TextField("Default Fact Groups", text: Binding(
                     get: { controller.settings.hammertime.defaultFactGroups.joined(separator: ",") },
                     set: { controller.settings.hammertime.defaultFactGroups = $0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } }
