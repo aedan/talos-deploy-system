@@ -161,7 +161,7 @@ final class TalosDeployCoreTests: XCTestCase {
             bootstrapMedia: BootstrapMediaDefaults(
                 deliveryMode: .existingOSMediaHost,
                 allowExistingOSMediaHost: true,
-                mediaHostDeviceID: "716091"
+                mediaHostDeviceID: "900091"
             )
         )
 
@@ -198,11 +198,11 @@ final class TalosDeployCoreTests: XCTestCase {
     }
 
     func testDeployRunDoesNotRenameCoreWhenDeployerIsUnreachable() async throws {
-        let deployer = talosDevice(id: "deployer", name: "716181-lab2-director.rpc.rackspace.com")
-        let controlPlane = talosDevice(id: "cp1", name: "716182-lab2-controller01.rpc.rackspace.com")
+        let deployer = talosDevice(id: "deployer", name: "900181-fixture-director.rpc.example.com")
+        let controlPlane = talosDevice(id: "cp1", name: "900182-fixture-controller01.rpc.example.com")
         let spec = DeploymentSpec(
             accountNumber: "0000000",
-            clusterName: "lab2-talos",
+            clusterName: "fixture-talos",
             clusterEndpoint: "https://198.51.100.10:6443",
             talosVersion: "v1.13.0",
             kubernetesVersion: "v1.34.1",
@@ -768,9 +768,9 @@ final class TalosDeployCoreTests: XCTestCase {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
         let cp = DiscoveredDevice(
-            id: "716182",
+            id: "900182",
             accountNumber: "0000000",
-            name: "716182-lab2-controller01",
+            name: "900182-fixture-controller01",
             primaryIP: "207.97.193.227",
             privateIP: "172.22.220.227",
             networkInterfaces: [
@@ -778,7 +778,7 @@ final class TalosDeployCoreTests: XCTestCase {
             ]
         )
         let cpAssignment = DeviceAssignment(
-            deviceID: "716182",
+            deviceID: "900182",
             role: .controlplane,
             shouldInstallOS: true,
             staticNetwork: StaticNetworkConfig(
@@ -813,9 +813,9 @@ final class TalosDeployCoreTests: XCTestCase {
             oobHardwareInventoryClient: inventory
         ).stage(spec: spec, at: temp)
         let stateDirectory = URL(fileURLWithPath: state.localStateDirectory, isDirectory: true)
-        let patch = try String(contentsOf: stateDirectory.appending(path: "node-patches/716182-lab2-controller01.yaml"), encoding: .utf8)
+        let patch = try String(contentsOf: stateDirectory.appending(path: "node-patches/900182-fixture-controller01.yaml"), encoding: .utf8)
 
-        XCTAssertEqual(inventory.requests, ["716182"])
+        XCTAssertEqual(inventory.requests, ["900182"])
         XCTAssertTrue(state.events.contains { $0.message.contains("Selected OOB NIC MAC 3c:a8:2a:1c:a0:28") })
         XCTAssertTrue(state.spec.nodes.contains { $0.assignment.staticNetwork.managementHardwareAddress == "3c:a8:2a:1c:a0:28" })
         XCTAssertFalse(patch.contains("hardwareAddr: 3c:a8:2a:1c:a0:28"))
@@ -979,7 +979,7 @@ final class TalosDeployCoreTests: XCTestCase {
 
         let result = try await booter.bootURL(
             OOBBootURLRequest(
-                deviceID: "716182",
+                deviceID: "900182",
                 imageURL: "http://10.0.0.1:8080/talos.iso",
                 reboot: true,
                 oobVendor: .ilo
@@ -1035,7 +1035,7 @@ final class TalosDeployCoreTests: XCTestCase {
         )
 
         let result = try await booter.bootURL(
-            OOBBootURLRequest(deviceID: "716182", imageURL: "http://10.0.0.1:8080/talos.iso", reboot: true)
+            OOBBootURLRequest(deviceID: "900182", imageURL: "http://10.0.0.1:8080/talos.iso", reboot: true)
         )
 
         let fallback = try XCTUnwrap(result.steps.first(where: { $0.name == "clp-power-off" }))
@@ -1088,7 +1088,7 @@ final class TalosDeployCoreTests: XCTestCase {
         )
 
         _ = try await booter.bootURL(
-            OOBBootURLRequest(deviceID: "716185", imageURL: "http://10.0.0.1:8080/talos.iso", reboot: false)
+            OOBBootURLRequest(deviceID: "900185", imageURL: "http://10.0.0.1:8080/talos.iso", reboot: false)
         )
 
         let commands = runner.invocations.compactMap { invocation -> String? in
@@ -1179,7 +1179,7 @@ final class TalosDeployCoreTests: XCTestCase {
         )
         let transport = HammertimeDeployerTransport(
             settings: HammertimeSettings(binaryPath: "/tmp/ht", deployerVia: "ORD", deployerUsePrivate: true, copyMethod: "rsync", commandTimeoutSeconds: 60),
-            deviceID: "716181",
+            deviceID: "900181",
             runner: runner
         )
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
@@ -1197,10 +1197,10 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(runner.invocations[0].arguments.contains { $0.contains("ConnectTimeout=20") })
         XCTAssertTrue(runner.invocations[0].arguments.contains("--method"))
         XCTAssertTrue(runner.invocations[0].arguments.contains("rsync"))
-        XCTAssertTrue(runner.invocations[0].arguments.contains("716181"))
+        XCTAssertTrue(runner.invocations[0].arguments.contains("900181"))
         XCTAssertTrue(runner.invocations[2].arguments.contains("copy"))
         XCTAssertTrue(runner.invocations[2].arguments.contains("--dest"))
-        XCTAssertTrue(runner.invocations[2].arguments.contains("716181:/var/lib/talos-deploy/test/"))
+        XCTAssertTrue(runner.invocations[2].arguments.contains("900181:/var/lib/talos-deploy/test/"))
         XCTAssertTrue(runner.invocations[3].arguments.contains("script"))
         XCTAssertTrue(runner.invocations[3].arguments.contains("--method"))
         XCTAssertTrue(runner.invocations[3].arguments.contains("--root"))
@@ -1216,7 +1216,7 @@ final class TalosDeployCoreTests: XCTestCase {
         )
         let transport = HammertimeDeployerTransport(
             settings: HammertimeSettings(binaryPath: "/tmp/ht", commandTimeoutSeconds: 60),
-            deviceID: "716181",
+            deviceID: "900181",
             validationRetryDelaySeconds: 0,
             runner: runner
         )
@@ -1238,7 +1238,7 @@ final class TalosDeployCoreTests: XCTestCase {
         )
         let transport = HammertimeDeployerTransport(
             settings: HammertimeSettings(binaryPath: "/tmp/ht", commandTimeoutSeconds: 60),
-            deviceID: "716181",
+            deviceID: "900181",
             validationRetryDelaySeconds: 0,
             runner: runner
         )
@@ -1262,7 +1262,7 @@ final class TalosDeployCoreTests: XCTestCase {
         )
         let transport = HammertimeDeployerTransport(
             settings: HammertimeSettings(binaryPath: "/tmp/ht", copyMethod: "rsync"),
-            deviceID: "716181",
+            deviceID: "900181",
             runner: runner
         )
         let temp = FileManager.default.temporaryDirectory
@@ -1294,9 +1294,9 @@ final class TalosDeployCoreTests: XCTestCase {
             request: DeployerAccessRequest(
                 method: .auto,
                 sshConnection: SSHConnection(host: "192.0.2.10", user: "rack"),
-                hammertimeDeviceID: "716181"
+                hammertimeDeviceID: "900181"
             ),
-            deployer: talosDevice(id: "716181", name: "716181-lab2-director")
+            deployer: talosDevice(id: "900181", name: "900181-fixture-director")
         )
 
         XCTAssertEqual(selection.validation.method, .hammertime)
@@ -1323,7 +1323,7 @@ final class TalosDeployCoreTests: XCTestCase {
                 method: .auto,
                 sshConnection: SSHConnection(host: "192.0.2.10", user: "rack", proxyJump: "bastion.example.test")
             ),
-            deployer: talosDevice(id: "716181", name: "716181-lab2-director")
+            deployer: talosDevice(id: "900181", name: "900181-fixture-director")
         )
 
         XCTAssertEqual(selection.validation.method, .proxyJumpSSH)
