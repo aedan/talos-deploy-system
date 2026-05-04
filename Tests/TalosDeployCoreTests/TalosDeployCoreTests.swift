@@ -337,6 +337,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(deployScript.contains("--control-plane-nodes \"$successful_controlplanes\""))
         XCTAssertTrue(deployScript.contains("wait_for_time_sync"))
         XCTAssertTrue(deployScript.contains("bootstrap_control_plane"))
+        XCTAssertTrue(deployScript.contains("etcd data directory is not empty"))
         let prepareScript = try String(contentsOf: stateDirectory.appending(path: "maintenance/tds-prepare-talos-media.sh"))
         XCTAssertTrue(prepareScript.contains("INSTALLER_META_BASE64"))
         XCTAssertTrue(prepareScript.contains("talos-v1.13.0-cp1.iso"))
@@ -406,7 +407,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(run.maintenanceBundle?.scripts.contains("maintenance/tds-run-talos-deploy.sh") == true)
     }
 
-    func testTalosBuilderRendersOnlyManagementNetworkForInitialBringUp() async throws {
+    func testTalosBuilderRendersConfiguredNetworksByDefault() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
         let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
@@ -448,6 +449,75 @@ final class TalosDeployCoreTests: XCTestCase {
             deployerStateRoot: "/var/lib/talos-deploy",
             nodes: [
                 DeploymentNodeSpec(device: deployer, assignment: deployerAssignment),
+                DeploymentNodeSpec(device: cp, assignment: cpAssignment),
+            ]
+        )
+
+        let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
+        let output = try await DefaultTalosBuilder().buildArtifacts(for: spec, plan: plan, in: temp)
+        let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+        let bootPatch = try String(contentsOf: output.appending(path: "boot-node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+
+        XCTAssertTrue(patch.contains("      - interface: eno1\n        addresses:\n          - 198.51.100.10/22"))
+        XCTAssertTrue(patch.contains("network: 0.0.0.0/0"))
+        XCTAssertTrue(patch.contains("gateway: 198.51.100.1"))
+        XCTAssertTrue(patch.contains("      - interface: eno3\n        vlans:\n          - vlanId: 901"))
+        XCTAssertTrue(patch.contains("      - interface: eno50\n        vlans:\n          - vlanId: 1326"))
+        XCTAssertTrue(patch.contains("      - interface: br-ipmi"))
+        XCTAssertTrue(patch.contains("          - eno3.901"))
+        XCTAssertTrue(patch.contains("      - interface: br-ctlplane"))
+        XCTAssertTrue(patch.contains("          - eno49"))
+        XCTAssertTrue(patch.contains("network: 192.168.100.0/24"))
+        XCTAssertTrue(patch.contains("gateway: 198.51.101.36"))
+        XCTAssertTrue(bootPatch.contains("addresses:\n          - 198.51.100.10/22"))
+        XCTAssertTrue(bootPatch.contains("network: 0.0.0.0/0"))
+        XCTAssertFalse(bootPatch.contains("      - interface: eno3\n        vlans:"))
+        XCTAssertFalse(bootPatch.contains("      - interface: br-ipmi"))
+        XCTAssertFalse(bootPatch.contains("          - eno49"))
+        XCTAssertFalse(bootPatch.contains("  install:\n"))
+    }
+
+    func testTalosBuilderCanRenderManagementNetworkOnlyForInitialBringUp() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
+        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
+        let cpAssignment = DeviceAssignment(
+            deviceID: "cp1",
+            role: .controlplane,
+            shouldInstallOS: true,
+            networkSource: .manual,
+            staticNetwork: StaticNetworkConfig(
+                managementInterface: "eno1",
+                managementAddressCIDR: "198.51.100.10/22",
+                gateway: "198.51.100.1",
+                nameservers: ["203.0.113.196", "203.0.113.164"],
+                searchDomains: ["rpc.rackspace.com"],
+                routes: [StaticNetworkRoute(to: "default", via: "198.51.100.1")],
+                vlans: [
+                    NetworkInterface(name: "eno3.901", vlanID: 901, parentInterface: "eno3"),
+                    NetworkInterface(name: "eno50.1326", vlanID: 1326, parentInterface: "eno50"),
+                ],
+                bridges: [
+                    NetworkInterface(name: "br-ipmi", addresses: ["192.0.2.180/26"], bridgePorts: ["eno3.901"]),
+                    NetworkInterface(
+                        name: "br-ctlplane",
+                        addresses: ["198.51.101.10/22"],
+                        bridgePorts: ["eno49"],
+                        routes: [StaticNetworkRoute(to: "192.168.100.0/24", via: "198.51.101.36")]
+                    ),
+                ]
+            )
+        )
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.11.3",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            talosProvisioning: TalosProvisioningDefaults(finalNetworkRenderMode: .managementOnly),
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer)),
                 DeploymentNodeSpec(device: cp, assignment: cpAssignment),
             ]
         )
@@ -515,7 +585,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("addresses:\n          - 198.51.100.10/22"))
     }
 
-    func testTalosBuilderKeepsManagementNICOnlyWhenDeployerRouteBridgeIsConfigured() async throws {
+    func testTalosBuilderUsesConfiguredManagementBridgeByDefault() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
         let cp = talosDevice(id: "cp1", name: "cp-1", primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
@@ -572,9 +642,9 @@ final class TalosDeployCoreTests: XCTestCase {
 
         XCTAssertTrue(patch.contains("      - deviceSelector:\n          hardwareAddr: 3c:a8:2a:23:eb:b8\n        addresses:\n          - 198.51.100.20/22"))
         XCTAssertTrue(patch.contains("        routes:\n          - network: 0.0.0.0/0\n            gateway: 198.51.100.1"))
-        XCTAssertFalse(patch.contains("      - interface: br-ctlplane"))
-        XCTAssertFalse(patch.contains("        bridge:\n          interfaces:\n            - eno49"))
-        XCTAssertEqual(patch.components(separatedBy: "      - interface: br-ctlplane").count - 1, 0)
+        XCTAssertTrue(patch.contains("      - interface: br-ctlplane"))
+        XCTAssertTrue(patch.contains("        bridge:\n          interfaces:\n            - eno49"))
+        XCTAssertEqual(patch.components(separatedBy: "      - interface: br-ctlplane").count - 1, 1)
         XCTAssertTrue(bootPatch.contains("      - deviceSelector:\n          hardwareAddr: 3c:a8:2a:23:eb:b8"))
         XCTAssertFalse(bootPatch.contains("      - interface: br-ctlplane"))
     }

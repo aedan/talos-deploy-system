@@ -724,10 +724,11 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         try fileManager.createDirectory(at: bootNodesDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: bootNetworkMetaDirectory, withIntermediateDirectories: true)
         for node in spec.nodes where node.assignment.role == .controlplane || node.assignment.role == .worker {
+            let includeAdditionalNetworking = spec.talosProvisioning.finalNetworkRenderMode == .allConfigured
             let yaml = renderNodePatch(
                 node: node,
                 spec: spec,
-                includeAdditionalNetworking: false,
+                includeAdditionalNetworking: includeAdditionalNetworking,
                 includeInstall: true
             )
             try yaml.write(

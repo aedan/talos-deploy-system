@@ -97,7 +97,7 @@ Talos Defaults:
 - OOB NIC MAC selectors are enabled by default. If Hammertime/iLO can expose HPE integrated NIC MACs, `tds` maps names such as `eno1` to the matching physical port and writes `deviceSelector.hardwareAddr` into Talos node patches.
 - Talos system-disk wipe pre-boot is enabled by default for node installs. `tds` generates a per-node `*-wipe.iso`, boots it once to clear previous or partial Talos installs, waits for the reset pass, then boots the normal per-node ISO with the embedded static machine config.
 - Legacy BIOS disk boot support is enabled by default for bare-metal installs. This renders Talos `machine.install.legacyBIOSSupport: true`, which is important for older servers that report Legacy boot mode through OOB and may not boot a GPT-only install reliably.
-- Final Talos machine configs intentionally render only the Core private management network: management NIC, static management IP, default route, DNS, install, registry, time, Longhorn, and selected extension settings. Additional bridge and VLAN interface sections are not rendered during initial cluster bring-up.
+- Final Talos machine configs render all configured node networking by default, including bridges, VLANs, routes, DNS, install, registry, time, Longhorn, and selected extension settings. For conservative first bring-up or recovery, set Final network rendering to `Management network only` or pass `--network-render-mode management-only`; that mode renders only the Core/private management NIC, static management IP, default route, and DNS.
 - The deployer registry is enabled by default. `tds` installs `docker-registry` and `skopeo`, mirrors the selected Talos installer image plus Talos/Kubernetes cluster images into the deployer, and renders Talos configs to install/bootstrap from that in-environment registry when nodes do not have Internet access.
 - By default, Talos nodes mirror `ghcr.io` and `registry.k8s.io` through the deployer registry. Override the comma-separated mirror host list in Settings only when the generated machine configs use additional registries.
 - When the deployer has separate OOB/media and Talos data networks, configure a node-facing registry address CIDR plus interface. `tds` adds and persists that address on the deployer before caching image artifacts, then points Talos machine configs at that reachable registry address.
@@ -154,7 +154,7 @@ tds deployer access-test --account 0000000 --device 100001 --access auto
 tds deployer prepare --account 0000000 --device 100001 --access auto
 tds deploy run --spec examples/deployment-spec.example.json --execute true --access auto
 tds deploy reprovision --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json --targets 100002,100003 --execute true --access auto
-tds deploy resume --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json --execute true --access auto
+tds deploy resume --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json --execute true --access auto --network-render-mode management-only
 tds deploy verify --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
 tds deploy maintenance-bundle --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
 ```
@@ -240,7 +240,8 @@ tds deploy reprovision \
 tds deploy resume \
   --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json \
   --execute true \
-  --access auto
+  --access auto \
+  --network-render-mode management-only
 
 tds deploy verify --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
 tds deploy maintenance-bundle --state ~/Library/Application\ Support/tds/state/0000000/cluster.local/deployment-state.json
@@ -268,7 +269,7 @@ Procedure:
 8. Validate static management CIDR, management NIC MAC or interface selector, gateway, DNS, VLANs, bridges, bridge ports, routes, and install disk for every Talos node before destructive actions.
 9. Build and validate the Ubuntu deployer ISO, attach it through `tds.app` local media, and verify the deployer returns with Ubuntu, SSH, `rack`, `root`, and preserved networking.
 10. Prepare deployer services, cache the Talos installer and cluster images in the deployer registry, stage Talos artifacts, provision nodes, apply machine configs, bootstrap etcd, fetch kubeconfig, and verify Talos/Kubernetes health.
-11. If a subset of nodes fails to boot from virtual media, use `tds deploy reprovision --state "$STATE" --targets DEVICE_ID[,DEVICE_ID] --execute true --access auto` to reissue deployer-hosted OOB boot requests from the saved deployment state, then run `tds deploy resume --state "$STATE" --execute true --access auto`.
+11. If a subset of nodes fails to boot from virtual media, use `tds deploy reprovision --state "$STATE" --targets DEVICE_ID[,DEVICE_ID] --execute true --access auto` to reissue deployer-hosted OOB boot requests from the saved deployment state, then run `tds deploy resume --state "$STATE" --execute true --access auto`. If complex networking appears to break Talos API reachability during acceptance, rerun resume with `--network-render-mode management-only` while preserving the full-network spec for later iteration.
 
 Evidence to keep in ignored local storage:
 

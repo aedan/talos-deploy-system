@@ -196,7 +196,7 @@ public struct MaintenanceBundleBuilder {
               return 0
             fi
             cat "$out"
-            if grep -Eiq "already.*bootstrap|bootstrap.*already" "$out"; then
+            if grep -Eiq "already.*bootstrap|bootstrap.*already|AlreadyExists.*etcd data directory|etcd data directory is not empty" "$out"; then
               rm -f "$out"
               log "etcd bootstrap already completed on $ip"
               return 0

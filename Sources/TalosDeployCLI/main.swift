@@ -359,7 +359,8 @@ struct TalosDeployCLI {
 
     private static func handlePlan(arguments: [String]) async throws {
         let options = parseOptions(arguments)
-        let spec = try loadSpec(from: options["spec"] ?? "examples/deployment-spec.example.json")
+        var spec = try loadSpec(from: options["spec"] ?? "examples/deployment-spec.example.json")
+        applyTalosProvisioningOverrides(to: &spec, options: options)
         let settings = (try? SettingsController().load()) ?? AppSettings()
         let plan = try DeploymentPlanner(settings: settings).makePlan(spec: spec)
         let data = try JSONEncoder.pretty.encode(plan)
@@ -396,7 +397,8 @@ struct TalosDeployCLI {
 
     private static func handleDeployRun(arguments: [String]) async throws {
         let options = parseOptions(arguments)
-        let spec = try loadSpec(from: options["spec"] ?? "examples/deployment-spec.example.json")
+        var spec = try loadSpec(from: options["spec"] ?? "examples/deployment-spec.example.json")
+        applyTalosProvisioningOverrides(to: &spec, options: options)
         let settings = (try? SettingsController().load()) ?? AppSettings()
         let paths = AppPaths()
         try paths.ensureExists()
@@ -442,7 +444,8 @@ struct TalosDeployCLI {
 
     private static func handleDeployReprovision(arguments: [String]) async throws {
         let options = parseOptions(arguments)
-        let state = try loadState(path: options["state"] ?? options["path"])
+        var state = try loadState(path: options["state"] ?? options["path"])
+        applyTalosProvisioningOverrides(to: &state, options: options)
         let settings = (try? SettingsController().load()) ?? AppSettings()
         let coordinator = DeploymentCoordinator(settings: settings)
         let targets = parseTargetList(options["targets"] ?? options["target"] ?? options["devices"])
@@ -541,7 +544,8 @@ struct TalosDeployCLI {
 
     private static func handleResume(arguments: [String]) async throws {
         let options = parseOptions(arguments)
-        let state = try loadState(path: options["path"] ?? options["state"])
+        var state = try loadState(path: options["path"] ?? options["state"])
+        applyTalosProvisioningOverrides(to: &state, options: options)
         let dryRun = parseBool(options["dry-run"]) ?? !(parseBool(options["execute"]) ?? false)
         guard parseBool(options["execute"]) == true || parseBool(options["dry-run"]) == true else {
             let data = try JSONEncoder.pretty.encode(state)
@@ -650,6 +654,28 @@ struct TalosDeployCLI {
             .filter { !$0.isEmpty }
     }
 
+    private static func applyTalosProvisioningOverrides(to spec: inout DeploymentSpec, options: [String: String]) {
+        if let renderMode = parseTalosNetworkRenderMode(options["network-render-mode"] ?? options["talos-network-mode"]) {
+            spec.talosProvisioning.finalNetworkRenderMode = renderMode
+        }
+    }
+
+    private static func applyTalosProvisioningOverrides(to state: inout DeploymentState, options: [String: String]) {
+        applyTalosProvisioningOverrides(to: &state.spec, options: options)
+    }
+
+    private static func parseTalosNetworkRenderMode(_ value: String?) -> TalosNetworkRenderMode? {
+        guard let value else { return nil }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "all", "all-configured", "allconfigured", "configured", "full":
+            return .allConfigured
+        case "management", "management-only", "managementonly", "primary", "primary-only":
+            return .managementOnly
+        default:
+            return TalosNetworkRenderMode(rawValue: value)
+        }
+    }
+
     private static func ubuntuInstallSpec(from options: [String: String], arguments: [String]) throws -> UbuntuInstallSpec {
         guard let sourceISO = options["source-iso"] ?? options["source"] else {
             throw CLIError.missingRequired("ubuntu build requires --source-iso /path/to/ubuntu.iso")
@@ -741,11 +767,11 @@ struct TalosDeployCLI {
               devices --account ACCOUNT [--source auto|core|hammertime] [--output table|json]
               facts --account ACCOUNT [--source auto|core|hammertime] [device-id...]
               snapshot --account ACCOUNT --device DEVICE [--source auto|core|hammertime] [--output-dir DIR]
-              plan --spec path/to/spec.json
-              deploy plan --spec path/to/spec.json
-              deploy run --spec path/to/spec.json [--execute true] [--deployer-host HOST --deployer-user USER]
-              deploy resume --path /path/to/deployment-state.json [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime]
-              deploy reprovision --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--wipe true] [--execute true]
+              plan --spec path/to/spec.json [--network-render-mode all|management-only]
+              deploy plan --spec path/to/spec.json [--network-render-mode all|management-only]
+              deploy run --spec path/to/spec.json [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime] [--network-render-mode all|management-only]
+              deploy resume --path /path/to/deployment-state.json [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime] [--network-render-mode all|management-only]
+              deploy reprovision --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--wipe true] [--execute true] [--network-render-mode all|management-only]
               deploy disk-boot --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--reboot true] [--execute true]
               deploy verify --state /path/to/deployment-state.json
               deploy maintenance-bundle --state /path/to/deployment-state.json
@@ -797,10 +823,10 @@ struct TalosDeployCLI {
         print(
             """
             tds deploy commands:
-              plan --spec path/to/spec.json
-              run --spec path/to/spec.json [--dry-run true|false] [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime] [--deployer-host HOST --deployer-user USER]
-              resume --path /path/to/deployment-state.json
-              reprovision --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--wipe true] [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime]
+              plan --spec path/to/spec.json [--network-render-mode all|management-only]
+              run --spec path/to/spec.json [--dry-run true|false] [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime] [--network-render-mode all|management-only] [--deployer-host HOST --deployer-user USER]
+              resume --path /path/to/deployment-state.json [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime] [--network-render-mode all|management-only]
+              reprovision --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--wipe true] [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime] [--network-render-mode all|management-only]
               disk-boot --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--reboot true] [--execute true]
               verify --state /path/to/deployment-state.json
               maintenance-bundle --state /path/to/deployment-state.json
@@ -809,7 +835,7 @@ struct TalosDeployCLI {
               deployer prepare --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
 
             Non-dry-run run and reprovision require --execute true plus a deployer access path. Resume re-syncs maintenance state and reruns the deployer-owned phase without reissuing OOB boots.
-            Final Talos configs render only the management NIC/IP/default route/DNS for initial cluster bring-up; additional bridge/VLAN sections are intentionally omitted.
+            Use --network-render-mode management-only for conservative initial bring-up; otherwise final Talos configs include all configured bridges, VLANs, routes, and DNS.
             disk-boot detaches virtual media where possible, restores installed-disk boot order, and can power-cycle selected nodes for recovery.
             """
         )
