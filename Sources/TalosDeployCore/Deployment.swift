@@ -799,6 +799,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             lines.append("  install:")
             lines.append("    disk: \(node.device.installDisk.isEmpty ? "/dev/sda" : node.device.installDisk)")
             lines.append("    image: \(installerImage)")
+            lines.append("    wipe: \(spec.talosProvisioning.wipeSystemDiskBeforeInstall ? "true" : "false")")
             lines.append(contentsOf: renderExtraKernelArgs(spec.talosFactory.extraKernelArgs))
         }
         return lines.joined(separator: "\n") + "\n"
