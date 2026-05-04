@@ -93,6 +93,8 @@ public struct MaintenanceBundleBuilder {
           ip route get "$ip" || true
           ping -c1 -W1 "$ip" || true
           timeout 5 bash -c "</dev/tcp/$ip/50000" >/dev/null 2>&1 && echo "talos-api-port=open" || echo "talos-api-port=closed"
+          timeout 5 bash -c "</dev/tcp/$ip/50001" >/dev/null 2>&1 && echo "talos-trustd-port=open" || echo "talos-trustd-port=closed"
+          timeout 5 bash -c "</dev/tcp/$ip/10250" >/dev/null 2>&1 && echo "kubelet-port=open" || echo "kubelet-port=closed"
           "$TALOSCTL" --nodes "$ip" --endpoints "$ip" version --insecure || true
         }
 
@@ -151,6 +153,34 @@ public struct MaintenanceBundleBuilder {
           else
             "$TALOSCTL" get links --talosconfig generated/talosconfig --nodes "$ip" --endpoints "$ip" -o yaml > "inventory/talos-live/${name}-links.yaml" 2>"inventory/talos-live/${name}-links.stderr" || true
           fi
+        }
+
+        capture_insecure_install_state() {
+          local name="$1"
+          local ip="$2"
+          mkdir -p inventory/talos-live
+          "$TALOSCTL" get disks --nodes "$ip" --endpoints "$ip" --insecure -o yaml > "inventory/talos-live/${name}-disks.yaml" 2>"inventory/talos-live/${name}-disks.stderr" || true
+          "$TALOSCTL" get routes --nodes "$ip" --endpoints "$ip" --insecure -o yaml > "inventory/talos-live/${name}-routes.yaml" 2>"inventory/talos-live/${name}-routes.stderr" || true
+          "$TALOSCTL" get addresses --nodes "$ip" --endpoints "$ip" --insecure -o yaml > "inventory/talos-live/${name}-addresses.yaml" 2>"inventory/talos-live/${name}-addresses.stderr" || true
+        }
+
+        apply_initial_config() {
+          local name="$1"
+          local ip="$2"
+          local out
+          out="$(mktemp)"
+          log "applying initial static machine config to $name ($ip)"
+          if "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --file "machine-configs/${name}.yaml" >"$out" 2>&1; then
+            cat "$out"
+            if grep -qi "without a reboot" "$out"; then
+              log "warning: initial config apply for $name ($ip) completed without Talos reporting an install reboot"
+            fi
+            rm -f "$out"
+            return 0
+          fi
+          cat "$out"
+          rm -f "$out"
+          return 1
         }
 
         apply_final_config() {
@@ -246,8 +276,8 @@ public struct MaintenanceBundleBuilder {
           if [ -f "$embedded_media" ] && [ "$boot_mode" = "meta" ]; then
             wait_for_live_api "$name" "$ip" "$live_attempts" || return 1
             capture_live_links "$name" "$ip" insecure
-            log "applying static machine config to $name ($ip) and rebooting to installed disk"
-            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --mode=reboot --file "machine-configs/${name}.yaml" || return 1
+            capture_insecure_install_state "$name" "$ip"
+            apply_initial_config "$name" "$ip" || return 1
             wait_for_configured_api "$name" "$ip" "$configured_attempts" "after static config apply" || return 1
           elif [ -f "$embedded_media" ]; then
             wait_for_configured_api "$name" "$ip" 180 "from boot ISO static networking config" || return 1
@@ -256,8 +286,8 @@ public struct MaintenanceBundleBuilder {
             wait_for_configured_api "$name" "$ip" "$configured_attempts" "after final config apply" || return 1
           else
             wait_for_live_api "$name" "$ip" "$live_attempts" || return 1
-            log "applying static machine config to $name ($ip) and rebooting to installed disk"
-            "$TALOSCTL" --nodes "$ip" --endpoints "$ip" apply-config --insecure --mode=reboot --file "machine-configs/${name}.yaml" || return 1
+            capture_insecure_install_state "$name" "$ip"
+            apply_initial_config "$name" "$ip" || return 1
             wait_for_configured_api "$name" "$ip" "$configured_attempts" "after static config apply" || return 1
           fi
         }
