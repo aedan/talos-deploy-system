@@ -350,7 +350,7 @@ public struct MaintenanceBundleBuilder {
         let allNodes = controlPlanes + workers
         let installerImage = state.plan.talosArtifacts.installerImage
         let nodeLines = allNodes.map {
-            "\($0.name)|\($0.role.rawValue)|\($0.ip)|\($0.patchPath)|\($0.bootPatchPath)|\($0.metaPath)|\($0.deviceID)|\($0.mediaFileName)|config"
+            "\($0.name)|\($0.role.rawValue)|\($0.ip)|\($0.patchPath)|\($0.bootPatchPath)|\($0.metaPath)|\($0.deviceID)|\($0.mediaFileName)|meta"
         }.joined(separator: "\n")
 
         return """
@@ -419,7 +419,7 @@ public struct MaintenanceBundleBuilder {
               -extract /boot/grub/grub.cfg "$work/grub.cfg" >/dev/null 2>&1
             meta_payload="$( { printf '0xa='; cat "${meta_path}"; } | gzip -9 | base64 | tr -d '\\n' )"
             sed -i "s/talos.config=metal-iso //g" "$work/grub.cfg"
-            sed -i "s|talos.platform=metal |talos.platform=metal talos.config=metal-iso talos.environment=INSTALLER_META_BASE64=${meta_payload} ${TDS_TALOS_BOOT_ARGS_EXTRA} |g" "$work/grub.cfg"
+            sed -i "s|talos.platform=metal |talos.platform=metal talos.environment=INSTALLER_META_BASE64=${meta_payload} ${TDS_TALOS_BOOT_ARGS_EXTRA} |g" "$work/grub.cfg"
             xorriso -indev "$TDS_BASE_TALOS_ISO" -outdev "$out.tmp" \\
               -volid metal-iso \\
               -map "$work/grub.cfg" /boot/grub/grub.cfg \\
