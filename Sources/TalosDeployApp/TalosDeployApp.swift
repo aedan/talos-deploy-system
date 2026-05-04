@@ -949,8 +949,6 @@ private struct SettingsRootView: View {
                     .fieldHelp("Boots a tds-generated Talos reset ISO before normal install media so repeat deployments clear any previous or partial Talos install.")
                 Toggle("Enable legacy BIOS disk boot support", isOn: $controller.settings.talos.provisioning.legacyBIOSSupport)
                     .fieldHelp("Marks the Talos install disk bootable for legacy BIOS systems. Keep enabled for older HPE/Dell bare metal that reports Legacy boot mode; disable only for environments known to be UEFI-only.")
-                Toggle("Render management network only", isOn: $controller.settings.talos.provisioning.managementNetworkOnly)
-                    .fieldHelp("Limits final Talos machine configs to the management NIC, static management IP, default route, and DNS. Use this to simplify first cluster bring-up before adding bridges, VLANs, or storage networks.")
                 Toggle("Use deployer installer registry", isOn: $controller.settings.talos.provisioning.allowDeployerRegistry)
                     .fieldHelp("Caches the Talos installer and selected cluster images in a registry on the Ubuntu deployer so Talos nodes do not need Internet access during install/bootstrap.")
                 TextField("Deployer registry host override", text: $controller.settings.talos.provisioning.deployerRegistryHost)

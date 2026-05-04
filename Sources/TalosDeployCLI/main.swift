@@ -359,8 +359,7 @@ struct TalosDeployCLI {
 
     private static func handlePlan(arguments: [String]) async throws {
         let options = parseOptions(arguments)
-        var spec = try loadSpec(from: options["spec"] ?? "examples/deployment-spec.example.json")
-        applyTalosProvisioningOverrides(to: &spec, options: options)
+        let spec = try loadSpec(from: options["spec"] ?? "examples/deployment-spec.example.json")
         let settings = (try? SettingsController().load()) ?? AppSettings()
         let plan = try DeploymentPlanner(settings: settings).makePlan(spec: spec)
         let data = try JSONEncoder.pretty.encode(plan)
@@ -397,8 +396,7 @@ struct TalosDeployCLI {
 
     private static func handleDeployRun(arguments: [String]) async throws {
         let options = parseOptions(arguments)
-        var spec = try loadSpec(from: options["spec"] ?? "examples/deployment-spec.example.json")
-        applyTalosProvisioningOverrides(to: &spec, options: options)
+        let spec = try loadSpec(from: options["spec"] ?? "examples/deployment-spec.example.json")
         let settings = (try? SettingsController().load()) ?? AppSettings()
         let paths = AppPaths()
         try paths.ensureExists()
@@ -444,8 +442,7 @@ struct TalosDeployCLI {
 
     private static func handleDeployReprovision(arguments: [String]) async throws {
         let options = parseOptions(arguments)
-        var state = try loadState(path: options["state"] ?? options["path"])
-        applyTalosProvisioningOverrides(to: &state, options: options)
+        let state = try loadState(path: options["state"] ?? options["path"])
         let settings = (try? SettingsController().load()) ?? AppSettings()
         let coordinator = DeploymentCoordinator(settings: settings)
         let targets = parseTargetList(options["targets"] ?? options["target"] ?? options["devices"])
@@ -544,8 +541,7 @@ struct TalosDeployCLI {
 
     private static func handleResume(arguments: [String]) async throws {
         let options = parseOptions(arguments)
-        var state = try loadState(path: options["path"] ?? options["state"])
-        applyTalosProvisioningOverrides(to: &state, options: options)
+        let state = try loadState(path: options["path"] ?? options["state"])
         let dryRun = parseBool(options["dry-run"]) ?? !(parseBool(options["execute"]) ?? false)
         guard parseBool(options["execute"]) == true || parseBool(options["dry-run"]) == true else {
             let data = try JSONEncoder.pretty.encode(state)
@@ -654,16 +650,6 @@ struct TalosDeployCLI {
             .filter { !$0.isEmpty }
     }
 
-    private static func applyTalosProvisioningOverrides(to spec: inout DeploymentSpec, options: [String: String]) {
-        if let managementNetworkOnly = parseBool(options["management-network-only"] ?? options["primary-network-only"]) {
-            spec.talosProvisioning.managementNetworkOnly = managementNetworkOnly
-        }
-    }
-
-    private static func applyTalosProvisioningOverrides(to state: inout DeploymentState, options: [String: String]) {
-        applyTalosProvisioningOverrides(to: &state.spec, options: options)
-    }
-
     private static func ubuntuInstallSpec(from options: [String: String], arguments: [String]) throws -> UbuntuInstallSpec {
         guard let sourceISO = options["source-iso"] ?? options["source"] else {
             throw CLIError.missingRequired("ubuntu build requires --source-iso /path/to/ubuntu.iso")
@@ -757,9 +743,9 @@ struct TalosDeployCLI {
               snapshot --account ACCOUNT --device DEVICE [--source auto|core|hammertime] [--output-dir DIR]
               plan --spec path/to/spec.json
               deploy plan --spec path/to/spec.json
-              deploy run --spec path/to/spec.json [--execute true] [--management-network-only true] [--deployer-host HOST --deployer-user USER]
-              deploy resume --path /path/to/deployment-state.json [--execute true] [--management-network-only true] [--access auto|directSSH|proxyJumpSSH|hammertime]
-              deploy reprovision --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--wipe true] [--management-network-only true] [--execute true]
+              deploy run --spec path/to/spec.json [--execute true] [--deployer-host HOST --deployer-user USER]
+              deploy resume --path /path/to/deployment-state.json [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime]
+              deploy reprovision --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--wipe true] [--execute true]
               deploy disk-boot --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--reboot true] [--execute true]
               deploy verify --state /path/to/deployment-state.json
               deploy maintenance-bundle --state /path/to/deployment-state.json
@@ -768,7 +754,7 @@ struct TalosDeployCLI {
               deploy deployer plan
               deploy deployer access-test --account ACCOUNT --device DEVICE
               deploy deployer prepare --account ACCOUNT --device DEVICE
-              resume --path /path/to/deployment-state.json [--execute true] [--management-network-only true] [--access auto|directSSH|proxyJumpSSH|hammertime]
+              resume --path /path/to/deployment-state.json [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime]
             """
         )
     }
@@ -812,9 +798,9 @@ struct TalosDeployCLI {
             """
             tds deploy commands:
               plan --spec path/to/spec.json
-              run --spec path/to/spec.json [--dry-run true|false] [--execute true] [--management-network-only true] [--access auto|directSSH|proxyJumpSSH|hammertime] [--deployer-host HOST --deployer-user USER]
-              resume --path /path/to/deployment-state.json [--management-network-only true]
-              reprovision --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--wipe true] [--management-network-only true] [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime]
+              run --spec path/to/spec.json [--dry-run true|false] [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime] [--deployer-host HOST --deployer-user USER]
+              resume --path /path/to/deployment-state.json
+              reprovision --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--wipe true] [--execute true] [--access auto|directSSH|proxyJumpSSH|hammertime]
               disk-boot --state /path/to/deployment-state.json --targets DEVICE_ID[,DEVICE_ID] [--reboot true] [--execute true]
               verify --state /path/to/deployment-state.json
               maintenance-bundle --state /path/to/deployment-state.json
@@ -823,7 +809,7 @@ struct TalosDeployCLI {
               deployer prepare --account ACCOUNT --device DEVICE [--access auto|directSSH|proxyJumpSSH|hammertime]
 
             Non-dry-run run and reprovision require --execute true plus a deployer access path. Resume re-syncs maintenance state and reruns the deployer-owned phase without reissuing OOB boots.
-            Use --management-network-only true to render final Talos configs with only the management NIC/IP/default route/DNS while omitting additional bridge/VLAN sections.
+            Final Talos configs render only the management NIC/IP/default route/DNS for initial cluster bring-up; additional bridge/VLAN sections are intentionally omitted.
             disk-boot detaches virtual media where possible, restores installed-disk boot order, and can power-cycle selected nodes for recovery.
             """
         )
