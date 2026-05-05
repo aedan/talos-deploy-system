@@ -33,7 +33,8 @@ let package = Package(
         ),
         .executableTarget(
             name: "TalosDeployApp",
-            dependencies: ["TalosDeployCore"]
+            dependencies: ["TalosDeployCore"],
+            exclude: ["Resources"]
         ),
         .testTarget(
             name: "TalosDeployCoreTests",
