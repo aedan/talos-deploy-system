@@ -13,22 +13,21 @@ This note summarizes the current project state for continuing work in a fresh th
 - Generated Talos configs now use the Image Factory `metal-installer` image path and default Rackspace-oriented extensions.
 - Staged/cloud-image Talos nodes can be configured in place: they skip OOB boot, wipe, and installed-disk boot prep, omit `machine.install`, and still run readiness, apply, bootstrap, and health.
 - The OpenStack lab harness proved the Ubuntu deployer-owned Talos flow with 3 controllers and 1 worker on Talos `v1.13.0`.
-- The Lab-style acceptance spec has been simplified to one static management network for the current debug run; richer networking remains supported by the model/UI but is not the current acceptance target.
+- Bare-metal Lab-style acceptance has proven the deployer-owned Talos apply/bootstrap/health flow on the responsive physical nodes. The remaining risk is isolating hardware/network outliers that do not present Talos networking after successful OOB media boot.
 
 ## Current Blocker
 
-No current virtual-lab blocker. The next risk is the full bare-metal Lab2 run, where OOB boot behavior, physical NIC naming, and deployer-to-node routing need to be proven with the same deployer-owned apply/bootstrap/health flow.
+No current OpenStack or deployer-owned Talos flow blocker. The next risk is hardware-specific remediation for bare-metal nodes that accept virtual media but never expose the Talos management API.
 
 ## Recommended Next Step
 
-Run the Lab2 bare-metal end-to-end acceptance:
+Continue bare-metal hardening:
 
-1. Build and release `v0.1.0-alpha.3`.
-2. Query Lab2 inventory and confirm deployer/control-plane/worker role assignment.
-3. Install or validate the Ubuntu 24.04 deployer.
-4. Run the deployer-owned Talos apply/bootstrap/health flow against the physical Talos nodes.
-5. Keep evidence under ignored local capture directories only.
+1. Build and release `v0.1.0-alpha.4`.
+2. Preserve the OpenStack and bare-metal acceptance evidence under ignored local capture directories only.
+3. Investigate physical nodes that accept OOB media but remain down after Talos boot.
+4. Keep interface-name networking as the default when an interface is known; reserve hardware selectors for hardware-address-only inventory.
 
 ## Release State
 
-`v0.1.0-alpha.3` captures the OpenStack-proven staged Talos config process and harness. Do not include real account numbers, device IDs, credentials, or environment-specific hostnames in committed docs or release notes.
+`v0.1.0-alpha.4` captures the OpenStack-proven staged Talos config process, bare-metal deployer-owned apply/bootstrap/health fixes, and Hammertime inventory parsing improvements. Do not include real account numbers, device IDs, credentials, or environment-specific hostnames in committed docs or release notes.

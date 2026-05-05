@@ -404,7 +404,7 @@ public struct MaintenanceBundleBuilder {
         let allNodes = controlPlanes + workers
         let installerImage = state.plan.talosArtifacts.installerImage
         let nodeLines = allNodes.map {
-            "\($0.name)|\($0.role.rawValue)|\($0.ip)|\($0.patchPath)|\($0.bootPatchPath)|\($0.metaPath)|\($0.deviceID)|\($0.mediaFileName)|meta|\($0.installMode)"
+            "\($0.name)|\($0.role.rawValue)|\($0.ip)|\($0.patchPath)|\($0.bootPatchPath)|\($0.metaPath)|\($0.deviceID)|\($0.mediaFileName)|\($0.bootMode)|\($0.installMode)"
         }.joined(separator: "\n")
 
         return """
@@ -486,17 +486,23 @@ public struct MaintenanceBundleBuilder {
             xorriso -osirrox on -indev "$TDS_BASE_TALOS_ISO" \\
               -extract /boot/grub/grub.cfg "$work/grub.cfg" >/dev/null 2>&1
             meta_payload="$( { printf '0xa='; cat "${meta_path}"; } | gzip -9 | base64 | tr -d '\\n' )"
-            sed -i "s/talos.config=metal-iso //g" "$work/grub.cfg"
-            sed -i "s|talos.platform=metal |talos.platform=metal talos.environment=INSTALLER_META_BASE64=${meta_payload} ${TDS_TALOS_BOOT_ARGS_EXTRA} |g" "$work/grub.cfg"
+            cp "$work/grub.cfg" "$work/meta-grub.cfg"
+            sed -i "s/talos.config=metal-iso //g" "$work/meta-grub.cfg"
+            sed -i "s|talos.platform=metal |talos.platform=metal talos.environment=INSTALLER_META_BASE64=${meta_payload} ${TDS_TALOS_BOOT_ARGS_EXTRA} |g" "$work/meta-grub.cfg"
+            cp "$work/grub.cfg" "$work/config-grub.cfg"
+            if ! grep -q "talos.config=metal-iso" "$work/config-grub.cfg"; then
+              sed -i "s|talos.platform=metal |talos.platform=metal talos.config=metal-iso |g" "$work/config-grub.cfg"
+            fi
+            sed -i "s|talos.platform=metal |talos.platform=metal ${TDS_TALOS_BOOT_ARGS_EXTRA} |g" "$work/config-grub.cfg"
             if [ "$boot_mode" = "meta" ]; then
               xorriso -indev "$TDS_BASE_TALOS_ISO" -outdev "$out.tmp" \\
                 -volid metal-iso \\
-                -map "$work/grub.cfg" /boot/grub/grub.cfg \\
+                -map "$work/meta-grub.cfg" /boot/grub/grub.cfg \\
                 -boot_image any replay >/dev/null 2>&1
             else
               xorriso -indev "$TDS_BASE_TALOS_ISO" -outdev "$out.tmp" \\
                 -volid metal-iso \\
-                -map "$work/grub.cfg" /boot/grub/grub.cfg \\
+                -map "$work/config-grub.cfg" /boot/grub/grub.cfg \\
                 -map "boot-machine-configs/${name}.yaml" /config.yaml \\
                 -boot_image any replay >/dev/null 2>&1
             fi
@@ -504,7 +510,7 @@ public struct MaintenanceBundleBuilder {
 
             wipe_out="${out%.iso}-wipe.iso"
             wipe_grub="$work/wipe-grub.cfg"
-            cp "$work/grub.cfg" "$wipe_grub"
+            cp "$work/meta-grub.cfg" "$wipe_grub"
             sed -i "s/talos.config=metal-iso //g" "$wipe_grub"
             if grep -q "talos.experimental.wipe=system" "$wipe_grub"; then
               sed -i "s/^set default=.*/set default=1/" "$wipe_grub"
@@ -649,9 +655,17 @@ public struct MaintenanceBundleBuilder {
                     metaPath: "boot-network-meta/\(node.device.name).yaml",
                     deviceID: node.device.id,
                     mediaFileName: talosNodeMediaFileName(deviceID: node.device.id, talosVersion: state.spec.talosVersion),
+                    bootMode: talosBootMode(for: node),
                     installMode: install?.method == .stagedOnly ? "staged" : "install"
                 )
             }
+    }
+
+    private func talosBootMode(for node: DeploymentNodeSpec) -> String {
+        let config = StaticNetworkPlanner().config(for: node)
+        let hasInterfaceName = !config.managementInterface.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasHardwareAddress = !config.managementHardwareAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return !hasInterfaceName && hasHardwareAddress ? "config" : "meta"
     }
 
     private struct NodeRecord {
@@ -663,6 +677,7 @@ public struct MaintenanceBundleBuilder {
         var metaPath: String
         var deviceID: String
         var mediaFileName: String
+        var bootMode: String
         var installMode: String
     }
 }
@@ -1572,9 +1587,20 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
     }
 
     private func deployerMediaBaseURL(state: DeploymentState, configuration: DeployerMediaServiceConfiguration) -> String {
+        let oobReachableBase = deployerHostedOOBMediaBaseURL(state: state)
+        if !oobReachableBase.isEmpty {
+            return oobReachableBase
+        }
         let host = firstNonEmpty(configurationHost(from: state), state.plan.deployer.device.privateIP, state.plan.deployer.device.primaryIP)
         guard !host.isEmpty else { return "" }
         return "http://\(host):\(configuration.httpPort)"
+    }
+
+    private func deployerHostedOOBMediaBaseURL(state: DeploymentState) -> String {
+        guard state.spec.talosProvisioning.allowExternalOOBURL else { return "" }
+        let base = state.spec.talosProvisioning.externalOOBMediaBaseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !base.isEmpty, !base.localizedCaseInsensitiveContains(".iso") else { return "" }
+        return base.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
     private func deployerNodeMediaURL(for install: PlannedDeviceInstall, mediaBaseURL: String, state: DeploymentState) -> String {

@@ -821,6 +821,10 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         let staticConfig = StaticNetworkPlanner().config(for: node)
         let interfaceName = firstNonEmptyStatic(staticConfig.managementInterface, node.device.networkInterfaces.first?.name ?? "eth0")
         let managementBridge = includeAdditionalNetworking ? finalManagementBridge(for: staticConfig, fallbackInterfaceName: interfaceName) : nil
+        let hardwareAddress = managementHardwareAddress(for: staticConfig)
+        let shouldUseHardwareSelector = managementBridge == nil
+            && staticConfig.managementInterface.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !hardwareAddress.isEmpty
         let managementSubnet = ipv4NetworkCIDR(from: staticConfig.managementAddressCIDR)
         let mtu = managementMTU(for: node, config: staticConfig, interfaceName: interfaceName, managementBridge: managementBridge) ?? 1500
         let installerImage = deployerRegistryInstallerImage(for: spec)
@@ -842,6 +846,9 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         lines.append("    interfaces:")
         if let managementBridge {
             lines.append("      - interface: \(managementBridge.name)")
+        } else if shouldUseHardwareSelector {
+            lines.append("      - deviceSelector:")
+            lines.append("          hardwareAddr: \(yamlQuotedString(hardwareAddress))")
         } else {
             lines.append("      - interface: \(interfaceName)")
         }
@@ -890,6 +897,12 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             return mtu
         }
 
+        let hardwareAddress = managementHardwareAddress(for: config)
+        if !hardwareAddress.isEmpty,
+           let mtu = node.device.networkInterfaces.first(where: { normalizedHardwareAddress($0.macAddress) == hardwareAddress })?.mtu {
+            return mtu
+        }
+
         let candidates = [
             config.managementInterface,
             interfaceName,
@@ -903,6 +916,10 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         }
 
         return node.device.networkInterfaces.first?.mtu
+    }
+
+    private func managementHardwareAddress(for config: StaticNetworkConfig) -> String {
+        normalizedHardwareAddress(config.managementHardwareAddress)
     }
 
     private func renderInitialNetworkMeta(node: DeploymentNodeSpec, spec: DeploymentSpec) -> String {
@@ -1211,6 +1228,10 @@ private func yamlScalar(_ value: String) -> String {
 
 private func yamlQuotedString(_ value: String) -> String {
     "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+}
+
+private func normalizedHardwareAddress(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 }
 
 private func firstNonEmptyStatic(_ values: String...) -> String {

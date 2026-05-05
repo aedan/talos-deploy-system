@@ -114,44 +114,125 @@ public final class DefaultHammertimeAdapter: HammertimeAdapter, @unchecked Senda
             if dictionary["device_id"] != nil || dictionary["device"] != nil {
                 return [mapInventoryDevice(dictionary, accountNumber: accountNumber)]
             }
+            let keyedDevices = dictionary.compactMap { key, value -> DiscoveredDevice? in
+                guard let device = value as? [String: Any],
+                      device["name"] != nil || device["device_id"] != nil || device["device"] != nil
+                else { return nil }
+                return mapInventoryDevice(device, accountNumber: accountNumber, fallbackID: key)
+            }
+            if !keyedDevices.isEmpty {
+                return keyedDevices.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
+            }
         }
         throw HammertimeError.invalidOutput
     }
 
-    private func mapInventoryDevice(_ value: [String: Any], accountNumber: String) -> DiscoveredDevice {
-        let deviceID = stringify(value["device_id"] ?? value["server"] ?? UUID().uuidString)
-        let oobAddress = stringify(value["drac_ip"])
+    private func mapInventoryDevice(_ value: [String: Any], accountNumber: String, fallbackID: String? = nil) -> DiscoveredDevice {
+        let rawDeviceID = firstNonEmpty(
+            cleanHammertimeString(value["device_id"]),
+            cleanHammertimeString(value["server"]),
+            fallbackID ?? ""
+        )
+        let deviceID = normalizeDeviceID(rawDeviceID, fallbackID: fallbackID)
+        let oobAddress = cleanHammertimeString(value["drac_ip"])
         let oob = oobAddress.isEmpty ? nil : OOBEndpoint(
             vendor: .redfish,
             address: oobAddress,
-            username: stringify(value["drac_user"]),
+            username: cleanHammertimeString(value["drac_user"]),
             credentialReference: ""
         )
         let interfaces: [NetworkInterface]
-        if let networks = value["networks"] as? [[String: Any]] {
-            interfaces = networks.map {
-                NetworkInterface(
-                    name: stringify($0["name"] ?? $0["device"] ?? "eth0"),
-                    addresses: stringArray($0["addresses"] ?? $0["ips"]),
-                    macAddress: stringify($0["mac"] ?? $0["mac_address"])
-                )
-            }
+        if let networks = hammertimeAttributeValue(value["networks"]) as? [[String: Any]] {
+            interfaces = networks.map(mapInventoryNetwork)
         } else {
             interfaces = []
         }
         return DiscoveredDevice(
             id: deviceID,
-            accountNumber: stringify(value["account_num"] ?? accountNumber),
-            name: stringify(value["name"] ?? value["device"] ?? deviceID),
-            primaryIP: stringify(value["primary_ip"]),
-            privateIP: stringify(value["private_ip"]),
-            platformName: stringify(value["platform_name"] ?? value["platform"]),
-            osType: stringify(value["os_type"]),
-            serviceLevel: stringify(value["service_level"]),
+            accountNumber: firstNonEmpty(cleanHammertimeString(value["account_num"]), accountNumber),
+            name: firstNonEmpty(cleanHammertimeString(value["name"]), cleanHammertimeString(value["device"]), deviceID),
+            primaryIP: cleanHammertimeString(value["primary_ip"]),
+            privateIP: cleanHammertimeString(value["private_ip"]),
+            platformName: firstNonEmpty(cleanHammertimeString(value["platform_name"]), cleanHammertimeString(value["platform"])),
+            osType: cleanHammertimeString(value["os_type"]),
+            serviceLevel: cleanHammertimeString(value["service_level"]),
             serviceTag: "",
             networkInterfaces: interfaces,
             oob: oob
         )
+    }
+
+    private func mapInventoryNetwork(_ value: [String: Any]) -> NetworkInterface {
+        let ipAddress = cleanHammertimeString(value["ip_address"])
+        let cidr = cleanHammertimeString(value["ip_block_cidr"])
+        var addresses = stringArray(hammertimeAttributeValue(value["addresses"] ?? value["ips"]))
+            .map { cleanHammertimeLiteral($0) }
+            .filter { !$0.isEmpty }
+        if !ipAddress.isEmpty {
+            let address = cidrPrefix(from: cidr).map { "\(ipAddress)/\($0)" } ?? ipAddress
+            if !addresses.contains(address) {
+                addresses.append(address)
+            }
+        }
+        return NetworkInterface(
+            name: firstNonEmpty(
+                cleanHammertimeString(value["name"]),
+                cleanHammertimeString(value["device"]),
+                cleanHammertimeString(value["label"]),
+                cleanHammertimeString(value["network_type"]),
+                cleanHammertimeString(value["network_name"]),
+                "eth0"
+            ),
+            addresses: addresses,
+            macAddress: firstNonEmpty(cleanHammertimeString(value["mac"]), cleanHammertimeString(value["mac_address"])),
+            vlanID: integer(hammertimeAttributeValue(value["vlan_number"] ?? value["vlanID"])),
+            mtu: integer(hammertimeAttributeValue(value["mtu"]))
+        )
+    }
+
+    private func hammertimeAttributeValue(_ value: Any?) -> Any? {
+        if let dictionary = value as? [String: Any],
+           dictionary.keys.contains("value")
+        {
+            return dictionary["value"]
+        }
+        return value
+    }
+
+    private func cleanHammertimeString(_ value: Any?) -> String {
+        cleanHammertimeLiteral(stringify(hammertimeAttributeValue(value)))
+    }
+
+    private func cleanHammertimeLiteral(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed.caseInsensitiveCompare("none") == .orderedSame || trimmed.caseInsensitiveCompare("null") == .orderedSame {
+            return ""
+        }
+        return trimmed
+    }
+
+    private func normalizeDeviceID(_ value: String, fallbackID: String?) -> String {
+        let candidate = firstNonEmpty(value, fallbackID ?? "")
+        if let firstToken = candidate.split(whereSeparator: \.isWhitespace).first,
+           firstToken.allSatisfy(\.isNumber)
+        {
+            return String(firstToken)
+        }
+        let numericPrefix = candidate.prefix(while: \.isNumber)
+        if !numericPrefix.isEmpty {
+            return String(numericPrefix)
+        }
+        return candidate.isEmpty ? UUID().uuidString : candidate
+    }
+
+    private func cidrPrefix(from cidr: String) -> String? {
+        guard let slash = cidr.lastIndex(of: "/") else { return nil }
+        let prefix = cidr[cidr.index(after: slash)...]
+        return prefix.isEmpty ? nil : String(prefix)
+    }
+
+    private func firstNonEmpty(_ values: String...) -> String {
+        values.first { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? ""
     }
 
     private func parseFacts(stdout: String, devices: [DiscoveredDevice]) throws -> [String: Result<LiveFactSnapshot, Error>] {

@@ -373,6 +373,48 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(bootMeta.contains("mtu: 1442"))
     }
 
+    func testTalosMediaUsesConfigBootModeForHardwareSelectorNodes() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1", primaryIP: "198.51.100.20", privateIP: "198.51.100.20")
+        let cp = DiscoveredDevice(id: "cp1", accountNumber: "0000000", name: "cp-1", primaryIP: "198.51.100.10", privateIP: "198.51.100.10")
+        let assignment = DeviceAssignment(
+            deviceID: "cp1",
+            role: .controlplane,
+            shouldInstallOS: true,
+            staticNetwork: StaticNetworkConfig(
+                managementHardwareAddress: "3c:a8:2a:1c:a0:28",
+                managementAddressCIDR: "198.51.100.10/22",
+                gateway: "198.51.100.1",
+                nameservers: ["198.51.101.10"],
+                searchDomains: ["example.test"],
+                routes: [StaticNetworkRoute(to: "default", via: "198.51.100.1")]
+            )
+        )
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer, deployerMode: .existing)),
+                DeploymentNodeSpec(device: cp, assignment: assignment),
+            ]
+        )
+
+        let state = try await DeploymentCoordinator(settings: AppSettings()).stage(spec: spec, at: temp)
+        let stateDirectory = URL(fileURLWithPath: state.localStateDirectory, isDirectory: true)
+        let prepareScript = try String(contentsOf: stateDirectory.appending(path: "maintenance/tds-prepare-talos-media.sh"), encoding: .utf8)
+        let bootPatch = try String(contentsOf: stateDirectory.appending(path: "boot-node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+
+        XCTAssertTrue(prepareScript.contains("|config|install"))
+        XCTAssertTrue(prepareScript.contains("talos.config=metal-iso"))
+        XCTAssertTrue(prepareScript.contains("-map \"$work/config-grub.cfg\" /boot/grub/grub.cfg"))
+        XCTAssertTrue(prepareScript.contains("-map \"boot-machine-configs/${name}.yaml\" /config.yaml"))
+        XCTAssertTrue(bootPatch.contains("      - deviceSelector:\n          hardwareAddr: \"3c:a8:2a:1c:a0:28\""))
+    }
+
     func testStageWritesMaintenanceBundleForDeployerOwnedOperations() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
@@ -614,6 +656,44 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("      - interface: eno1\n        addresses:"))
         XCTAssertFalse(patch.contains("deviceSelector:"))
         XCTAssertFalse(patch.contains("hardwareAddr: 3c:a8:2a:1c:a0:28"))
+        XCTAssertTrue(patch.contains("addresses:\n          - 198.51.100.10/22"))
+    }
+
+    func testTalosBuilderUsesHardwareSelectorWhenNoInterfaceNameIsKnown() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
+        let cp = DiscoveredDevice(id: "cp1", accountNumber: "0000000", name: "cp-1", primaryIP: "198.51.100.10", privateIP: "198.51.100.10")
+        let cpAssignment = DeviceAssignment(
+            deviceID: "cp1",
+            role: .controlplane,
+            shouldInstallOS: true,
+            staticNetwork: StaticNetworkConfig(
+                managementHardwareAddress: "3c:a8:2a:1c:a0:28",
+                managementAddressCIDR: "198.51.100.10/22",
+                gateway: "198.51.100.1",
+                nameservers: ["203.0.113.53"],
+                routes: [StaticNetworkRoute(to: "default", via: "198.51.100.1")]
+            )
+        )
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer)),
+                DeploymentNodeSpec(device: cp, assignment: cpAssignment),
+            ]
+        )
+
+        let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
+        let output = try await DefaultTalosBuilder().buildArtifacts(for: spec, plan: plan, in: temp)
+        let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+
+        XCTAssertTrue(patch.contains("      - deviceSelector:\n          hardwareAddr: \"3c:a8:2a:1c:a0:28\""))
+        XCTAssertFalse(patch.contains("      - interface: eth0\n        addresses:"))
         XCTAssertTrue(patch.contains("addresses:\n          - 198.51.100.10/22"))
     }
 
@@ -1250,6 +1330,71 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertEqual(runner.invocations.first?.timeout, 90)
     }
 
+    func testHammertimeInventoryParsesDeviceKeyedAttributeOutput() async throws {
+        let output = #"""
+        {
+          "716181": {
+            "account_num": {"name": "Account Number", "value": "4688956"},
+            "name": {"name": "Device Name", "value": "716181-lab2-director.rpc.rackspace.com"},
+            "device_id": {"name": "Device Number", "value": "716181 716181-lab2-director.rpc.rackspace.com"},
+            "primary_ip": {"name": "Primary IP", "value": "69.20.118.196"},
+            "private_ip": {"name": "Private IP", "value": "172.22.220.196"},
+            "drac_ip": {"name": "Drac IP", "value": "10.17.123.132"},
+            "drac_user": {"name": "Drac Username", "value": "root"},
+            "platform_name": {"name": "Platform", "value": "HP DL380 G9 OpenStack"},
+            "os_type": {"name": "Type", "value": "linux"},
+            "service_level": {"name": "SLA", "value": "RPC - Red Hat"},
+            "networks": {
+              "name": "Network Interfaces (CORE)",
+              "value": [
+                {
+                  "label": null,
+                  "network_type": "AggExNet",
+                  "network_name": "L2-DEPLOY-MGMT",
+                  "ip_address": "172.22.220.196",
+                  "ip_block_cidr": "172.22.220.0/22",
+                  "gateway_ip": "172.22.220.1",
+                  "vlan_number": 1349
+                }
+              ]
+            }
+          },
+          "1230474": {
+            "account_num": {"name": "Account Number", "value": "4688956"},
+            "name": {"name": "Device Name", "value": "1230474-lab2-undercloud"},
+            "device_id": {"name": "Device Number", "value": "1230474 1230474-lab2-undercloud"},
+            "primary_ip": {"name": "Primary IP", "value": "None"},
+            "private_ip": {"name": "Private IP", "value": "None"},
+            "drac_ip": {"name": "Drac IP", "value": "None"},
+            "drac_user": {"name": "Drac Username", "value": "None"},
+            "networks": {"name": "Network Interfaces (CORE)", "value": []}
+          }
+        }
+        """#
+        let runner = MockCommandRunner(
+            responses: [
+                CommandResult(executable: "/tmp/ht", arguments: [], stdout: output, stderr: "", exitCode: 0),
+            ]
+        )
+        let adapter = DefaultHammertimeAdapter(
+            settings: HammertimeSettings(binaryPath: "/tmp/ht", timeoutSeconds: 30),
+            runner: runner
+        )
+
+        let devices = try await adapter.inventory(accountNumber: "4688956")
+        let director = try XCTUnwrap(devices.first { $0.id == "716181" })
+        let undercloud = try XCTUnwrap(devices.first { $0.id == "1230474" })
+
+        XCTAssertEqual(devices.count, 2)
+        XCTAssertEqual(director.name, "716181-lab2-director.rpc.rackspace.com")
+        XCTAssertEqual(director.privateIP, "172.22.220.196")
+        XCTAssertEqual(director.oob?.address, "10.17.123.132")
+        XCTAssertEqual(director.networkInterfaces.first?.addresses, ["172.22.220.196/22"])
+        XCTAssertEqual(director.networkInterfaces.first?.vlanID, 1349)
+        XCTAssertEqual(undercloud.primaryIP, "")
+        XCTAssertNil(undercloud.oob)
+    }
+
     func testHammertimeDeployerTransportBuildsCommandCopyAndScriptCalls() async throws {
         let runner = MockCommandRunner(
             responses: [
@@ -1520,6 +1665,46 @@ final class TalosDeployCoreTests: XCTestCase {
         ])
         XCTAssertEqual(oob.urlRequests.map(\.preferPowerReset), [false, true])
         XCTAssertTrue(execution.0.executedActions.contains { $0.contains("OOB URL boot connected") })
+    }
+
+    func testTalosExecutorUsesOOBReachableBaseForDeployerHostedMedia() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = talosDevice(id: "deployer", name: "deployer-1", primaryIP: "203.0.113.20", privateIP: "198.51.100.20")
+        let cp = talosDevice(id: "cp1", name: "cp-1", primaryIP: "198.51.100.10", privateIP: "198.51.100.10")
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            talosProvisioning: TalosProvisioningDefaults(
+                allowExternalOOBURL: true,
+                externalOOBMediaBaseURL: "http://10.17.123.182:8080/"
+            ),
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer, deployerMode: .existing)),
+                DeploymentNodeSpec(device: cp, assignment: talosAssignment()),
+            ]
+        )
+        let state = try await DeploymentCoordinator(settings: AppSettings()).stage(spec: spec, at: temp)
+        let runner = MockCommandRunner(responses: Array(repeating: CommandResult(executable: "/usr/bin/ssh", arguments: [], stdout: "", stderr: "", exitCode: 0), count: 6))
+        let transport = DirectSSHDeployerTransport(
+            connection: SSHConnection(host: "198.51.100.20", user: "rack"),
+            router: SSHCommandRouter(runner: runner)
+        )
+        let oob = MockOOBBooter()
+
+        _ = try await TalosDeploymentExecutor(oobBooter: oob, wipeDelayNanoseconds: 0).execute(
+            state: state,
+            transport: transport,
+            configuration: DeployerMediaServiceConfiguration()
+        )
+
+        XCTAssertEqual(oob.urlRequests.map(\.imageURL), [
+            "http://10.17.123.182:8080/talos-v1.13.0-cp1-wipe.iso",
+            "http://10.17.123.182:8080/talos-v1.13.0-cp1.iso",
+        ])
     }
 
     func testTalosReprovisionWaitsForSelectedNodeReadiness() async throws {
