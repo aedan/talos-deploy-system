@@ -14,6 +14,7 @@ This note summarizes the current project state for continuing work in a fresh th
 - Staged/cloud-image Talos nodes can be configured in place: they skip OOB boot, wipe, and installed-disk boot prep, omit `machine.install`, and still run readiness, apply, bootstrap, and health.
 - The desktop app exposes the CLI operator surface: Talos Factory actions, deployer operations, spec-file deployment, recovery/resume/reprovision/disk-boot/verify/maintenance-bundle actions, per-node install preference, and advanced static network JSON.
 - The macOS application bundle includes a generated `tds.icns` icon.
+- Packaged app and CLI builds resolve the bundled Core bridge script without using SwiftPM's fatal resource accessor, and release packaging includes the Core resource bundle for both app and CLI installs.
 - The OpenStack lab harness proved the Ubuntu deployer-owned Talos flow with 3 controllers and 1 worker on Talos `v1.13.0`.
 - Bare-metal Lab-style acceptance has proven the deployer-owned Talos apply/bootstrap/health flow on the responsive physical nodes. The remaining risk is isolating hardware/network outliers that do not present Talos networking after successful OOB media boot.
 
@@ -25,11 +26,11 @@ No current OpenStack or deployer-owned Talos flow blocker. The next risk is hard
 
 Continue bare-metal hardening:
 
-1. Build and release `v0.1.0-alpha.5`.
+1. Build and release `v0.1.0-alpha.6`.
 2. Preserve the OpenStack and bare-metal acceptance evidence under ignored local capture directories only.
 3. Investigate physical nodes that accept OOB media but remain down after Talos boot.
 4. Keep interface-name networking as the default when an interface is known; reserve hardware selectors for hardware-address-only inventory.
 
 ## Release State
 
-`v0.1.0-alpha.5` captures the feature-complete desktop operator surface, quick start/operator guide, and macOS app icon on top of the OpenStack-proven staged Talos config process, bare-metal deployer-owned apply/bootstrap/health fixes, and Hammertime inventory parsing improvements. Do not include real account numbers, device IDs, credentials, or environment-specific hostnames in committed docs or release notes.
+`v0.1.0-alpha.6` captures the packaged app/CLI Core bridge resource fix on top of the feature-complete desktop operator surface, quick start/operator guide, macOS app icon, OpenStack-proven staged Talos config process, bare-metal deployer-owned apply/bootstrap/health fixes, and Hammertime inventory parsing improvements. Do not include real account numbers, device IDs, credentials, or environment-specific hostnames in committed docs or release notes.

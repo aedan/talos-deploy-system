@@ -1106,6 +1106,62 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(HammertimeSettings().skipDeviceChecks)
     }
 
+    func testCoreBridgeResourceLocatorFindsAppResourceBundle() throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let appBundle = temp.appending(path: "tds.app", directoryHint: .isDirectory)
+        let resources = appBundle.appending(path: "Contents/Resources", directoryHint: .isDirectory)
+        let script = resources
+            .appending(path: CoreBridgeResourceLocator.bundleName, directoryHint: .isDirectory)
+            .appending(path: CoreBridgeResourceLocator.scriptName)
+        try writeFixtureBridgeScript(at: script)
+
+        let resolved = CoreBridgeResourceLocator.bridgeScriptURL(
+            environment: [:],
+            mainBundleURL: appBundle,
+            mainResourceURL: resources,
+            executableURL: nil,
+            sourceFileURL: temp.appending(path: "CoreBridge.swift")
+        )
+
+        XCTAssertEqual(resolved?.standardizedFileURL, script.standardizedFileURL)
+    }
+
+    func testCoreBridgeResourceLocatorFindsExecutableAdjacentBundle() throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let bin = temp.appending(path: "bin", directoryHint: .isDirectory)
+        let executable = bin.appending(path: "tds")
+        let script = bin
+            .appending(path: CoreBridgeResourceLocator.bundleName, directoryHint: .isDirectory)
+            .appending(path: CoreBridgeResourceLocator.scriptName)
+        try writeFixtureBridgeScript(at: script)
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: executable.path, contents: Data())
+
+        let resolved = CoreBridgeResourceLocator.bridgeScriptURL(
+            environment: [:],
+            mainBundleURL: bin,
+            mainResourceURL: nil,
+            executableURL: executable,
+            sourceFileURL: temp.appending(path: "CoreBridge.swift")
+        )
+
+        XCTAssertEqual(resolved?.standardizedFileURL, script.standardizedFileURL)
+    }
+
+    func testCoreBridgeResourceLocatorReturnsNilWhenBridgeIsMissing() {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+
+        let resolved = CoreBridgeResourceLocator.bridgeScriptURL(
+            environment: [:],
+            mainBundleURL: temp.appending(path: "tds.app"),
+            mainResourceURL: temp.appending(path: "tds.app/Contents/Resources"),
+            executableURL: temp.appending(path: "bin/tds"),
+            sourceFileURL: temp.appending(path: "CoreBridge.swift")
+        )
+
+        XCTAssertNil(resolved)
+    }
+
     func testHammertimeOOBBooterColdBootsAfterMediaSelection() async throws {
         let runner = MockCommandRunner(
             responses: [
@@ -2316,6 +2372,11 @@ private func temporarySettingsController() -> SettingsController {
     let base = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
     setenv("TDS_HOME", base.path, 1)
     return SettingsController(paths: AppPaths())
+}
+
+private func writeFixtureBridgeScript(at url: URL) throws {
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try "#!/usr/bin/env python3\n".write(to: url, atomically: true, encoding: .utf8)
 }
 
 private struct StaticAuthProvider: AuthProvider {

@@ -121,7 +121,7 @@ public final class HammertimeBackedCoreClient: CoreClient, EnvironmentCoreSessio
     }
 
     private func bridgeScriptURL() throws -> URL {
-        guard let url = Bundle.module.url(forResource: "core_bridge", withExtension: "py") else {
+        guard let url = CoreBridgeResourceLocator.bridgeScriptURL() else {
             throw CoreBridgeError.bridgeScriptMissing
         }
         return url
@@ -145,6 +145,60 @@ public final class HammertimeBackedCoreClient: CoreClient, EnvironmentCoreSessio
         }
 
         throw CoreBridgeError.pythonNotConfigured(binaryPath)
+    }
+}
+
+struct CoreBridgeResourceLocator {
+    static let bundleName = "TDS_TalosDeployCore.bundle"
+    static let scriptName = "core_bridge.py"
+
+    static func bridgeScriptURL(
+        fileManager: FileManager = .default,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        mainBundleURL: URL = Bundle.main.bundleURL,
+        mainResourceURL: URL? = Bundle.main.resourceURL,
+        executableURL: URL? = Self.executableURL(),
+        sourceFileURL: URL = URL(fileURLWithPath: #filePath)
+    ) -> URL? {
+        let environmentOverride = environment["TDS_CORE_BRIDGE_PATH"].map {
+            URL(fileURLWithPath: $0.expandingTildeInPath())
+        }
+
+        let resourceBundleCandidate = mainResourceURL?
+            .appendingPathComponent(bundleName)
+            .appendingPathComponent(scriptName)
+        let mainBundleCandidate = mainBundleURL
+            .appendingPathComponent(bundleName)
+            .appendingPathComponent(scriptName)
+        let executableAdjacentCandidate = executableURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent(bundleName)
+            .appendingPathComponent(scriptName)
+        let sourceTreeCandidate = sourceFileURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("Resources")
+            .appendingPathComponent(scriptName)
+
+        return [
+            environmentOverride,
+            resourceBundleCandidate,
+            mainBundleCandidate,
+            executableAdjacentCandidate,
+            sourceTreeCandidate,
+        ]
+        .compactMap { $0 }
+        .first { fileManager.isReadableFile(atPath: $0.path) }
+    }
+
+    private static func executableURL() -> URL? {
+        guard let executable = CommandLine.arguments.first, !executable.isEmpty else {
+            return nil
+        }
+        if executable.hasPrefix("/") {
+            return URL(fileURLWithPath: executable)
+        }
+        let currentDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        return currentDirectory.appendingPathComponent(executable)
     }
 }
 

@@ -23,6 +23,7 @@ cp "$EXECUTABLE" "$OUTPUT_APP/Contents/MacOS/tds"
 for bundle in "$BIN_DIR"/TDS_*.bundle; do
   [[ -e "$bundle" ]] || continue
   cp -R "$bundle" "$OUTPUT_APP/Contents/Resources/"
+  cp -R "$bundle" "$OUTPUT_APP/"
 done
 if [[ -f "$APP_ICON" ]]; then
   cp "$APP_ICON" "$OUTPUT_APP/Contents/Resources/tds.icns"
