@@ -27,11 +27,21 @@ struct TalosDeployApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var resolvedApplicationIcon: NSImage?
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        applyApplicationIcon()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         applyApplicationIcon()
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         NSApplication.shared.windows.first?.makeKeyAndOrderFront(nil)
+        applyWindowIcons()
+        DispatchQueue.main.async { [weak self] in
+            self?.applyWindowIcons()
+        }
     }
 
     private func applyApplicationIcon() {
@@ -53,7 +63,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { return }
 
         image.isTemplate = false
+        resolvedApplicationIcon = image
         NSApp.applicationIconImage = image
+    }
+
+    private func applyWindowIcons() {
+        guard let image = resolvedApplicationIcon ?? NSApp.applicationIconImage else { return }
+        for window in NSApp.windows {
+            window.miniwindowImage = image
+        }
     }
 }
 

@@ -53,6 +53,20 @@ cat >"$OUTPUT_APP/Contents/Info.plist" <<'PLIST'
   <string>APPL</string>
   <key>CFBundleIconFile</key>
   <string>tds</string>
+  <key>CFBundleIconName</key>
+  <string>tds</string>
+  <key>CFBundleIcons</key>
+  <dict>
+    <key>CFBundlePrimaryIcon</key>
+    <dict>
+      <key>CFBundleIconFiles</key>
+      <array>
+        <string>tds</string>
+      </array>
+      <key>CFBundleIconName</key>
+      <string>tds</string>
+    </dict>
+  </dict>
   <key>CFBundleShortVersionString</key>
   <string>__BUNDLE_SHORT_VERSION__</string>
   <key>CFBundleVersion</key>
