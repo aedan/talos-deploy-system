@@ -31,6 +31,7 @@ for bundle in "$BIN_DIR"/TDS_*.bundle; do
   cp -R "$bundle" "$OUTPUT_APP/Contents/Resources/"
 done
 if [[ -f "$APP_ICON" ]]; then
+  cp "$APP_ICON" "$OUTPUT_APP/Contents/Resources/AppIcon.icns"
   cp "$APP_ICON" "$OUTPUT_APP/Contents/Resources/tds.icns"
 fi
 
@@ -51,21 +52,7 @@ cat >"$OUTPUT_APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleIconFile</key>
-  <string>tds</string>
-  <key>CFBundleIconName</key>
-  <string>tds</string>
-  <key>CFBundleIcons</key>
-  <dict>
-    <key>CFBundlePrimaryIcon</key>
-    <dict>
-      <key>CFBundleIconFiles</key>
-      <array>
-        <string>tds</string>
-      </array>
-      <key>CFBundleIconName</key>
-      <string>tds</string>
-    </dict>
-  </dict>
+  <string>AppIcon.icns</string>
   <key>CFBundleShortVersionString</key>
   <string>__BUNDLE_SHORT_VERSION__</string>
   <key>CFBundleVersion</key>

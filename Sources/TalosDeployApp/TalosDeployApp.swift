@@ -28,6 +28,7 @@ struct TalosDeployApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var resolvedApplicationIcon: NSImage?
+    private var dockTileIconView: NSImageView?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         applyApplicationIcon()
@@ -47,7 +48,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func applyApplicationIcon() {
         let executableURL = URL(fileURLWithPath: CommandLine.arguments.first ?? "")
         let candidates = [
+            Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
             Bundle.main.url(forResource: "tds", withExtension: "icns"),
+            executableURL
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Resources/AppIcon.icns"),
             executableURL
                 .deletingLastPathComponent()
                 .deletingLastPathComponent()
@@ -68,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         image.isTemplate = false
         resolvedApplicationIcon = image
         NSApp.applicationIconImage = image
+        applyDockTileIcon(image)
     }
 
     private func applyWindowIcons() {
@@ -75,6 +82,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for window in NSApp.windows {
             window.miniwindowImage = image
         }
+    }
+
+    private func applyDockTileIcon(_ image: NSImage) {
+        let iconView = NSImageView(frame: NSRect(origin: .zero, size: NSApp.dockTile.size))
+        iconView.image = image
+        iconView.imageScaling = .scaleProportionallyUpOrDown
+        iconView.imageAlignment = .alignCenter
+        dockTileIconView = iconView
+        NSApp.dockTile.contentView = iconView
+        NSApp.dockTile.display()
     }
 }
 
