@@ -4,6 +4,8 @@
 
 The deployer is a selected physical server that receives Ubuntu first and then manages Talos artifacts, PXE/media services, machine configs, cluster bootstrap, and health checks. The deployer is not a Talos node.
 
+For the operator walkthrough and full feature/options reference, start with [docs/QUICK_START.md](docs/QUICK_START.md).
+
 ## Prerequisites
 
 - macOS 14 or newer.
@@ -23,7 +25,7 @@ Release artifacts are unsigned and not notarized during alpha. macOS may require
 
 ## Components
 
-- `tds.app`: SwiftUI desktop UI for Core session discovery, account lookup, physical-server filtering/search, role assignment, deployer bootstrap, OOB local media, static networking, Talos version selection, deployment staging, resume, and settings.
+- `tds.app`: SwiftUI desktop UI for Core session discovery, account lookup, physical-server filtering/search, role assignment, deployer bootstrap, OOB local media, static networking, Talos Image Factory work, deployer operations, deployment staging/execution, recovery, and settings.
 - `tds`: CLI for testing, automation, and repeatable runbooks.
 - `TalosDeployCore`: shared Swift core for Core inventory, Hammertime integration, OOB hardware enrichment, Ubuntu autoinstall media, deployer service planning, Talos artifact rendering, and deployment orchestration.
 - Core bridge: bundled Python bridge used to query Core through an active hammertime-authenticated environment.

@@ -52,10 +52,14 @@ private struct RootView: View {
                 InventoryView()
             case .bootstrap:
                 BootstrapDeployerView()
+            case .talosFactory:
+                TalosFactoryView()
             case .deployment:
                 DeploymentView()
-            case .resume:
-                ResumeView()
+            case .deployerOps:
+                DeployerOpsView()
+            case .recovery:
+                RecoveryView()
             case .settings:
                 SettingsRootView()
             }
@@ -77,8 +81,10 @@ private enum SidebarItem: String, CaseIterable, Identifiable {
     case signin
     case inventory
     case bootstrap
+    case talosFactory
     case deployment
-    case resume
+    case deployerOps
+    case recovery
     case settings
 
     var id: String { rawValue }
@@ -87,8 +93,10 @@ private enum SidebarItem: String, CaseIterable, Identifiable {
         case .signin: "Sign In"
         case .inventory: "Inventory + Roles"
         case .bootstrap: "Bootstrap Deployer"
+        case .talosFactory: "Talos Factory"
         case .deployment: "Deployment Run"
-        case .resume: "Resume"
+        case .deployerOps: "Deployer Ops"
+        case .recovery: "Recovery"
         case .settings: "Settings"
         }
     }
@@ -97,8 +105,10 @@ private enum SidebarItem: String, CaseIterable, Identifiable {
         case .signin: "person.badge.key"
         case .inventory: "server.rack"
         case .bootstrap: "externaldrive.badge.plus"
+        case .talosFactory: "shippingbox"
         case .deployment: "bolt.badge.clock"
-        case .resume: "arrow.clockwise"
+        case .deployerOps: "terminal"
+        case .recovery: "arrow.clockwise"
         case .settings: "gearshape"
         }
     }
@@ -111,6 +121,26 @@ private struct BootstrapDeployerView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                SectionCard(title: "Preinstall Snapshot") {
+                    TextField("Snapshot device ID or name", text: $controller.ubuntuSnapshotDeviceSelector)
+                        .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Defaults to the selected deployer when blank.")
+                    TextField("Output directory", text: $controller.ubuntuSnapshotOutputDirectory)
+                        .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Defaults to the app state directory when blank.")
+                    Button("Capture Snapshot") {
+                        Task { await controller.captureUbuntuSnapshot() }
+                    }
+                    if let snapshot = controller.ubuntuLastSnapshot {
+                        Text("Captured \(snapshot.device.name) at \(snapshot.directory)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Hostname: \(snapshot.summary.hostname)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 SectionCard(title: "Ubuntu Autoinstall Media") {
                     Text("Builds a NoCloud-seeded Ubuntu 24.04 ISO from the preinstall capture. Greenfield installs use operator local media through the embedded OOB session, so they do not depend on another selected node having an OS.")
                         .font(.caption)
@@ -233,10 +263,74 @@ private struct BootstrapDeployerView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
                 }
+
+                SectionCard(title: "Ubuntu OOB URL Boot") {
+                    DirectOOBBootFields(defaultImageURL: controller.settings.bootstrapMedia.externalMediaBaseURL)
+                }
             }
             .padding()
         }
         .navigationTitle("Bootstrap Deployer")
+    }
+}
+
+private struct TalosFactoryView: View {
+    @EnvironmentObject private var controller: AppController
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                SectionCard(title: "Image Factory") {
+                    HStack {
+                        Button("Refresh Versions") {
+                            Task { await controller.refreshTalosVersions() }
+                        }
+                        Button("Render Schematic") {
+                            controller.renderTalosSchematic()
+                        }
+                        Button("Upload Schematic") {
+                            Task { await controller.uploadTalosSchematic() }
+                        }
+                        Button("Compute Artifacts") {
+                            controller.computeTalosArtifacts()
+                        }
+                    }
+                    Text(controller.talosVersionRefreshStatus)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if !controller.talosRenderedSchematic.isEmpty {
+                        Text("Schematic")
+                            .font(.headline)
+                        ScrollView(.horizontal) {
+                            Text(controller.talosRenderedSchematic)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                        .frame(maxHeight: 180)
+                    }
+                    if let upload = controller.talosLastSchematicUpload {
+                        Text("Uploaded schematic ID: \(upload.id)")
+                            .font(.caption)
+                            .textSelection(.enabled)
+                    }
+                    if let artifacts = controller.talosLastArtifacts {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("ISO: \(artifacts.isoURL)")
+                            Text("PXE: \(artifacts.pxeURL)")
+                            Text("Installer: \(artifacts.installerImage)")
+                        }
+                        .font(.caption)
+                        .textSelection(.enabled)
+                    }
+                }
+
+                SectionCard(title: "Talos OOB URL Boot") {
+                    DirectOOBBootFields(defaultImageURL: controller.talosLastArtifacts?.isoURL ?? "")
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("Talos Factory")
     }
 }
 
@@ -548,6 +642,23 @@ private struct DeviceNetworkEditor: View {
                 }
             }
             .pickerStyle(.segmented)
+            Picker("Install Preference", selection: Binding(
+                get: { controller.binding(for: device).preferredInstall },
+                set: {
+                    var updated = controller.binding(for: device)
+                    updated.preferredInstall = $0
+                    if $0 == .stagedOnly {
+                        updated.shouldInstallOS = false
+                    }
+                    controller.updateAssignment(updated)
+                }
+            )) {
+                ForEach(InstallPreference.allCases, id: \.self) { preference in
+                    Text(preference.rawValue).tag(preference)
+                }
+            }
+            .pickerStyle(.segmented)
+            .fieldHelp("Use stagedOnly for cloud-image or prebooted Talos nodes that should be configured in place.")
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
                 GridRow {
                     Text("Interface")
@@ -593,6 +704,8 @@ private struct DeviceNetworkEditor: View {
                     .fieldHelp("Optional path to a reviewed network plan when Core/captured data is incomplete or needs overrides.")
                 }
             }
+            StaticNetworkAdvancedEditor(device: device)
+                .environmentObject(controller)
             ForEach(validation.errors, id: \.self) { error in
                 Text(error)
                     .font(.caption)
@@ -636,110 +749,426 @@ private struct DeviceNetworkEditor: View {
     }
 }
 
+private struct StaticNetworkAdvancedEditor: View {
+    @EnvironmentObject private var controller: AppController
+    let device: DiscoveredDevice
+    @State private var routesJSON = ""
+    @State private var vlansJSON = ""
+    @State private var bridgesJSON = ""
+
+    var body: some View {
+        DisclosureGroup("Advanced Routes, VLANs, And Bridges") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Routes JSON")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextEditor(text: $routesJSON)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(minHeight: 70)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+                Text("VLAN Interfaces JSON")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextEditor(text: $vlansJSON)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(minHeight: 90)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+                Text("Bridge Interfaces JSON")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextEditor(text: $bridgesJSON)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(minHeight: 90)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+                HStack {
+                    Button("Reload JSON") {
+                        reload()
+                    }
+                    Button("Apply JSON") {
+                        apply()
+                    }
+                }
+            }
+            .padding(.top, 6)
+        }
+        .onAppear {
+            reload()
+        }
+    }
+
+    private func reload() {
+        let config = controller.binding(for: device).staticNetwork
+        routesJSON = prettyJSONString(config.routes)
+        vlansJSON = prettyJSONString(config.vlans)
+        bridgesJSON = prettyJSONString(config.bridges)
+    }
+
+    private func apply() {
+        do {
+            var updated = controller.binding(for: device)
+            updated.staticNetwork.routes = try decodeJSONString([StaticNetworkRoute].self, from: routesJSON)
+            updated.staticNetwork.vlans = try decodeJSONString([NetworkInterface].self, from: vlansJSON)
+            updated.staticNetwork.bridges = try decodeJSONString([NetworkInterface].self, from: bridgesJSON)
+            controller.updateAssignment(updated)
+            controller.statusMessage = "Applied advanced network JSON for \(device.name)."
+        } catch {
+            controller.statusMessage = error.localizedDescription
+        }
+    }
+}
+
 private struct DeploymentView: View {
     @EnvironmentObject private var controller: AppController
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Button("Stage Deployment") {
-                    Task { await controller.stageDeployment() }
-                }
-                .fieldHelp("Builds the local deployment state, Talos artifacts, network validation, and deployer maintenance bundle without touching servers.")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                SectionCard(title: "Selected Inventory Deployment") {
+                    HStack {
+                        Button("Stage Deployment") {
+                            Task { await controller.stageDeployment() }
+                        }
+                        .fieldHelp("Builds the local deployment state, Talos artifacts, network validation, and deployer maintenance bundle without touching servers.")
 
-                Button("Dry Run") {
-                    Task { await controller.runDeployment(dryRun: true) }
-                }
-                .fieldHelp("Plans deployer access, provisioning, and bootstrap actions without running OOB, SSH, Hammertime, or talosctl commands.")
+                        Button("Dry Run") {
+                            Task { await controller.runDeployment(dryRun: true) }
+                        }
+                        .fieldHelp("Plans deployer access, provisioning, and bootstrap actions without running OOB, SSH, Hammertime, or talosctl commands.")
 
-                Button("Execute Deployment") {
-                    Task { await controller.runDeployment(dryRun: false) }
+                        Button("Execute Deployment") {
+                            Task { await controller.runDeployment(dryRun: false) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .fieldHelp("Runs the full owned workflow: validate deployer access, prepare services, sync state, boot Talos nodes, apply configs, bootstrap, and verify health.")
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .fieldHelp("Runs the full owned workflow: validate deployer access, prepare services, sync state, boot Talos nodes, apply configs, bootstrap, and verify health.")
-            }
-            if let plan = controller.lastPlan {
-                Text("Phases")
-                    .font(.headline)
-                List(plan.phases) { phase in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(phase.title)
-                            .font(.headline)
-                        ForEach(phase.steps, id: \.self) { step in
-                            Text(step)
-                                .foregroundStyle(.secondary)
+
+                SectionCard(title: "Deployment Spec File") {
+                    TextField("deployment-spec.json", text: $controller.deploymentSpecPath)
+                        .textFieldStyle(.roundedBorder)
+                    HStack {
+                        Button("Plan Spec") {
+                            Task { await controller.planDeploymentSpecFromPath() }
+                        }
+                        Button("Dry Run Spec") {
+                            Task { await controller.runDeploymentSpecFromPath(dryRun: true) }
+                        }
+                        Button("Execute Spec") {
+                            Task { await controller.runDeploymentSpecFromPath(dryRun: false) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+
+                if let plan = controller.lastPlan {
+                    SectionCard(title: "Phases") {
+                        ForEach(plan.phases) { phase in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(phase.title)
+                                    .font(.headline)
+                                ForEach(phase.steps, id: \.self) { step in
+                                    Text(step)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 4)
                         }
                     }
-                    .padding(.vertical, 6)
+                } else {
+                    Text("No deployment has been staged yet.")
+                        .foregroundStyle(.secondary)
                 }
-            } else {
-                Text("No deployment has been staged yet.")
-                    .foregroundStyle(.secondary)
-            }
 
-            if let run = controller.lastRun {
-                GroupBox("Last Run") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let access = run.accessValidation {
-                            Text("Access path: \(access.method.displayName) via \(access.target)")
-                            Text(access.message)
-                                .foregroundStyle(access.succeeded ? Color.secondary : Color.red)
-                        }
-                        if let provisioning = run.provisioningExecution {
-                            Text("Provisioning")
-                                .font(.headline)
-                            ForEach(provisioning.executedActions, id: \.self) { action in
-                                Text(action)
-                                    .foregroundStyle(.secondary)
-                            }
-                            ForEach(provisioning.warnings, id: \.self) { warning in
-                                Text(warning)
-                                    .foregroundStyle(.orange)
-                            }
-                        }
-                        if let bootstrap = run.bootstrapResult {
-                            Text("Bootstrap node: \(bootstrap.bootstrapNode)")
-                            Text(bootstrap.succeeded ? "Bootstrap/health completed." : "Bootstrap/health not executed.")
-                                .foregroundStyle(bootstrap.succeeded ? Color.green : Color.secondary)
-                        }
-                        if !run.state.events.isEmpty {
-                            Text("Run Log")
-                                .font(.headline)
-                            ForEach(Array(run.state.events.suffix(8).enumerated()), id: \.offset) { _, event in
-                                Text(event.message)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let run = controller.lastRun {
+                    RunResultView(run: run)
                 }
             }
+            .padding()
         }
-        .padding()
         .navigationTitle("Deployment Run")
     }
 }
 
-private struct ResumeView: View {
+private struct DeployerOpsView: View {
     @EnvironmentObject private var controller: AppController
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Resume uses the saved deployment-state.json from the local staging directory or the deployer state root.")
-                .foregroundStyle(.secondary)
-            if let state = controller.lastState {
-                Text("Last staged deployment: \(state.spec.clusterName)")
-                Text("State directory: \(state.localStateDirectory)")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                SectionCard(title: "Deployer Services") {
+                    TextField("Device override, optional", text: $controller.deployerOpsDeviceID)
+                        .textFieldStyle(.roundedBorder)
+                        .fieldHelp("Blank uses the selected deployer; enter a device ID to match the CLI deployer commands directly.")
+                    HStack {
+                        Button("Plan Services") {
+                            controller.planDeployerServices()
+                        }
+                        Button("Access Test") {
+                            Task { await controller.testDeployerAccess() }
+                        }
+                        Button("Prepare Services") {
+                            Task { await controller.prepareDeployerServices() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    if let validation = controller.lastDeployerAccessValidation {
+                        Text("Access: \(validation.method.displayName) via \(validation.target)")
+                            .font(.caption)
+                        Text(validation.message)
+                            .font(.caption)
+                            .foregroundStyle(validation.succeeded ? Color.secondary : Color.red)
+                    }
+                    if let plan = controller.lastDeployerServicePlan {
+                        Text("Packages: \(plan.packages.joined(separator: ", "))")
+                            .font(.caption)
+                        Text("Units: \(plan.systemdUnits.joined(separator: ", "))")
+                            .font(.caption)
+                        DisclosureGroup("Online Install Commands") {
+                            ForEach(plan.onlineInstallCommands, id: \.self) { command in
+                                Text(command)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        DisclosureGroup("Cache Fallback Commands") {
+                            ForEach(plan.cacheFallbackCommands, id: \.self) { command in
+                                Text(command)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("Deployer Ops")
+    }
+}
+
+private struct RecoveryView: View {
+    @EnvironmentObject private var controller: AppController
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                SectionCard(title: "Deployment State") {
+                    TextField("deployment-state.json or containing directory", text: $controller.recoveryStatePath)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Load State") {
+                        controller.loadDeploymentStateFromPath()
+                    }
+                    if let state = controller.lastState {
+                        Text("Loaded: \(state.spec.clusterName)")
+                            .font(.caption)
+                        Text("State directory: \(state.localStateDirectory)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    } else {
+                        Text("No deployment state is loaded.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                SectionCard(title: "Resume") {
+                    HStack {
+                        Button("Resume Dry Run") {
+                            Task { await controller.resumeDeployment(dryRun: true) }
+                        }
+                        Button("Resume Execute") {
+                            Task { await controller.resumeDeployment(dryRun: false) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+
+                SectionCard(title: "Reprovision Talos Nodes") {
+                    TextField("Target device IDs or names, comma separated; blank means all Talos nodes", text: $controller.recoveryTargetDeviceIDs)
+                        .textFieldStyle(.roundedBorder)
+                    Toggle("Wipe before normal media boot", isOn: $controller.recoveryWipeFirst)
+                    HStack {
+                        Button("Reprovision Dry Run") {
+                            Task { await controller.reprovisionDeployment(dryRun: true) }
+                        }
+                        Button("Reprovision Execute") {
+                            Task { await controller.reprovisionDeployment(dryRun: false) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+
+                SectionCard(title: "Installed-Disk Boot") {
+                    Toggle("Reboot after restoring disk boot", isOn: $controller.recoveryRebootAfterDiskBoot)
+                    HStack {
+                        Button("Disk Boot Dry Run") {
+                            Task { await controller.prepareInstalledDiskBoot(dryRun: true) }
+                        }
+                        Button("Disk Boot Execute") {
+                            Task { await controller.prepareInstalledDiskBoot(dryRun: false) }
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    if let execution = controller.lastDiskBootExecution {
+                        ProvisioningExecutionView(execution: execution)
+                    }
+                }
+
+                SectionCard(title: "Verify And Maintenance") {
+                    HStack {
+                        Button("Verify") {
+                            controller.verifyDeploymentState()
+                        }
+                        Button("Write Maintenance Bundle") {
+                            controller.writeMaintenanceBundle()
+                        }
+                    }
+                    if let health = controller.lastClusterHealth {
+                        Text("Talos ready: \(health.talosNodesReady ? "yes" : "planned")  Kubernetes ready: \(health.kubernetesReady ? "yes" : "planned")")
+                            .font(.caption)
+                        ForEach(health.checkedCommands, id: \.self) { command in
+                            Text(command)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                        ForEach(health.warnings, id: \.self) { warning in
+                            Text(warning)
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    if let manifest = controller.lastMaintenanceBundle {
+                        Text("Bundle: \(manifest.clusterName) at \(manifest.stateRoot)")
+                            .font(.caption)
+                        Text("Scripts: \(manifest.scripts.joined(separator: ", "))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                SectionCard(title: "Direct OOB URL Boot") {
+                    DirectOOBBootFields(defaultImageURL: "")
+                }
+
+                if let run = controller.lastRun {
+                    RunResultView(run: run)
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("Recovery")
+    }
+}
+
+private struct DirectOOBBootFields: View {
+    @EnvironmentObject private var controller: AppController
+    let defaultImageURL: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("Device ID", text: $controller.directOOBDeviceID)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                TextField("OOB-reachable image URL", text: $controller.directOOBImageURL)
+                    .textFieldStyle(.roundedBorder)
+                if !defaultImageURL.isEmpty {
+                    Button("Use Current") {
+                        controller.directOOBImageURL = defaultImageURL
+                    }
+                }
+            }
+            TextField("One-time boot target, optional", text: $controller.directOOBOneTimeBoot)
+                .textFieldStyle(.roundedBorder)
+            Toggle("Reboot after media request", isOn: $controller.directOOBReboot)
+            Button("Boot OOB URL") {
+                Task { await controller.bootDirectOOBURL() }
+            }
+            .buttonStyle(.borderedProminent)
+            if let result = controller.lastOOBBootResult {
+                Text("Device \(result.deviceID): connected \(result.connected ? "yes" : "no"), boot once \(result.bootOnce ? "yes" : "no"), rebooted \(result.rebooted ? "yes" : "no")")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("No local deployment state is loaded.")
-                    .foregroundStyle(.secondary)
+                ForEach(result.steps, id: \.name) { step in
+                    DisclosureGroup(step.name) {
+                        Text(step.stdout)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                    }
+                }
             }
         }
-        .padding()
-        .navigationTitle("Resume")
+    }
+}
+
+private struct RunResultView: View {
+    let run: TalosExecutionRun
+
+    var body: some View {
+        SectionCard(title: "Last Run") {
+            VStack(alignment: .leading, spacing: 8) {
+                if let access = run.accessValidation {
+                    Text("Access path: \(access.method.displayName) via \(access.target)")
+                    Text(access.message)
+                        .foregroundStyle(access.succeeded ? Color.secondary : Color.red)
+                }
+                if let provisioning = run.provisioningExecution {
+                    ProvisioningExecutionView(execution: provisioning)
+                }
+                if let bootstrap = run.bootstrapResult {
+                    Text("Bootstrap node: \(bootstrap.bootstrapNode)")
+                    Text(bootstrap.succeeded ? "Bootstrap/health completed." : "Bootstrap/health not executed.")
+                        .foregroundStyle(bootstrap.succeeded ? Color.green : Color.secondary)
+                    ForEach(bootstrap.warnings, id: \.self) { warning in
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                if !run.state.events.isEmpty {
+                    Text("Run Log")
+                        .font(.headline)
+                    ForEach(Array(run.state.events.suffix(8).enumerated()), id: \.offset) { _, event in
+                        Text(event.message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct ProvisioningExecutionView: View {
+    let execution: TalosProvisioningExecution
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !execution.plannedActions.isEmpty {
+                Text("Planned")
+                    .font(.headline)
+                ForEach(execution.plannedActions, id: \.self) { action in
+                    Text(action)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if !execution.executedActions.isEmpty {
+                Text("Executed")
+                    .font(.headline)
+                ForEach(execution.executedActions, id: \.self) { action in
+                    Text(action)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            ForEach(execution.warnings, id: \.self) { warning in
+                Text(warning)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
     }
 }
 
@@ -1250,6 +1679,22 @@ private func firstNonEmpty(_ values: String...) -> String {
 
 private func emptyDash(_ value: String) -> String {
     value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "-" : value
+}
+
+private func prettyJSONString<T: Encodable>(_ value: T) -> String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    guard let data = try? encoder.encode(value),
+          let rendered = String(data: data, encoding: .utf8)
+    else {
+        return "[]"
+    }
+    return rendered
+}
+
+private func decodeJSONString<T: Decodable>(_ type: T.Type, from value: String) throws -> T {
+    let data = Data(value.utf8)
+    return try JSONDecoder().decode(type, from: data)
 }
 
 private func parseKernelModules(_ value: String) -> [TalosKernelModule] {

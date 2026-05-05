@@ -2108,6 +2108,35 @@ public enum DeploymentCoordinatorError: Error, LocalizedError {
     }
 }
 
+public enum AppControllerOperationError: Error, LocalizedError {
+    case missingDeployer
+    case missingAccount
+    case missingDevice
+    case missingState
+    case missingStatePath
+    case missingSpecPath
+    case missingOOBImageURL
+
+    public var errorDescription: String? {
+        switch self {
+        case .missingDeployer:
+            return "Select exactly one deployer before running this operation."
+        case .missingAccount:
+            return "Enter an account number before running this operation."
+        case .missingDevice:
+            return "Choose a device before running this operation."
+        case .missingState:
+            return "Load or stage a deployment state before running this operation."
+        case .missingStatePath:
+            return "Choose a deployment-state.json path or a directory containing one."
+        case .missingSpecPath:
+            return "Choose a deployment spec JSON file."
+        case .missingOOBImageURL:
+            return "Enter an OOB-reachable image URL before booting media."
+        }
+    }
+}
+
 @MainActor
 public final class AppController: ObservableObject {
     @Published public var settings: AppSettings
@@ -2119,7 +2148,19 @@ public final class AppController: ObservableObject {
     @Published public var lastPlan: DeploymentPlan?
     @Published public var lastState: DeploymentState?
     @Published public var lastRun: TalosExecutionRun?
+    @Published public var lastDeployerServicePlan: DeployerServicePlan?
+    @Published public var lastDeployerAccessValidation: DeployerAccessValidation?
+    @Published public var lastClusterHealth: ClusterHealthResult?
+    @Published public var lastDiskBootExecution: TalosProvisioningExecution?
+    @Published public var lastMaintenanceBundle: MaintenanceBundleManifest?
+    @Published public var lastOOBBootResult: OOBBootURLResult?
+    @Published public var talosRenderedSchematic: String
+    @Published public var talosLastSchematicUpload: TalosFactorySchematicUpload?
+    @Published public var talosLastArtifacts: TalosFactoryArtifacts?
     @Published public var ubuntuCapturePath: String
+    @Published public var ubuntuSnapshotDeviceSelector: String
+    @Published public var ubuntuSnapshotOutputDirectory: String
+    @Published public var ubuntuLastSnapshot: NetworkPreservationSnapshot?
     @Published public var ubuntuSourceISOPath: String
     @Published public var ubuntuOutputISOPath: String
     @Published public var ubuntuWorkDirectoryPath: String
@@ -2137,6 +2178,16 @@ public final class AppController: ObservableObject {
     @Published public var talosVersionRefreshStatus: String
     @Published public var useManualTalosVersion: Bool
     @Published public var inventoryFilterText: String
+    @Published public var deploymentSpecPath: String
+    @Published public var recoveryStatePath: String
+    @Published public var recoveryTargetDeviceIDs: String
+    @Published public var recoveryWipeFirst: Bool
+    @Published public var recoveryRebootAfterDiskBoot: Bool
+    @Published public var deployerOpsDeviceID: String
+    @Published public var directOOBDeviceID: String
+    @Published public var directOOBImageURL: String
+    @Published public var directOOBOneTimeBoot: String
+    @Published public var directOOBReboot: Bool
     @Published public var statusMessage: String
 
     private let settingsController: SettingsController
@@ -2174,7 +2225,19 @@ public final class AppController: ObservableObject {
         self.assignments = [:]
         self.liveFactsErrors = [:]
         self.lastRun = nil
+        self.lastDeployerServicePlan = nil
+        self.lastDeployerAccessValidation = nil
+        self.lastClusterHealth = nil
+        self.lastDiskBootExecution = nil
+        self.lastMaintenanceBundle = nil
+        self.lastOOBBootResult = nil
+        self.talosRenderedSchematic = ""
+        self.talosLastSchematicUpload = nil
+        self.talosLastArtifacts = nil
         self.ubuntuCapturePath = ""
+        self.ubuntuSnapshotDeviceSelector = ""
+        self.ubuntuSnapshotOutputDirectory = ""
+        self.ubuntuLastSnapshot = nil
         self.ubuntuSourceISOPath = ""
         self.ubuntuOutputISOPath = ""
         self.ubuntuWorkDirectoryPath = ""
@@ -2188,6 +2251,16 @@ public final class AppController: ObservableObject {
         self.talosVersionRefreshStatus = "Talos versions have not been refreshed yet."
         self.useManualTalosVersion = false
         self.inventoryFilterText = ""
+        self.deploymentSpecPath = ""
+        self.recoveryStatePath = ""
+        self.recoveryTargetDeviceIDs = ""
+        self.recoveryWipeFirst = false
+        self.recoveryRebootAfterDiskBoot = false
+        self.deployerOpsDeviceID = ""
+        self.directOOBDeviceID = ""
+        self.directOOBImageURL = ""
+        self.directOOBOneTimeBoot = ""
+        self.directOOBReboot = false
         self.statusMessage = "Ready"
     }
 
@@ -2466,10 +2539,31 @@ public final class AppController: ObservableObject {
         "\(settings.safety.destructiveConfirmationTextPrefix) \(device.name)"
     }
 
-    public func stageDeployment() async {
+    private func selectedDeployer() throws -> DiscoveredDevice {
+        let deployers = clusterEligibleDevices.filter { binding(for: $0).role == .deployer }
+        guard deployers.count == 1, let deployer = deployers.first else {
+            throw AppControllerOperationError.missingDeployer
+        }
+        return deployer
+    }
+
+    private func selectedDeployerID() -> String {
+        (try? selectedDeployer().id) ?? ""
+    }
+
+    private func deployerForOperations() throws -> DiscoveredDevice {
+        let override = deployerOpsDeviceID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !override.isEmpty {
+            return clusterEligibleDevices.first { $0.id == override || $0.name == override }
+                ?? DiscoveredDevice(id: override, accountNumber: accountNumber, name: override)
+        }
+        return try selectedDeployer()
+    }
+
+    private func deploymentSpecFromSelection() -> DeploymentSpec {
         var talosProvisioning = settings.talos.provisioning
         talosProvisioning.deployerRegistryPort = settings.deployer.registryPort
-        let spec = DeploymentSpec(
+        return DeploymentSpec(
             accountNumber: accountNumber,
             clusterName: settings.talos.clusterName,
             clusterEndpoint: settings.talos.clusterEndpoint,
@@ -2487,6 +2581,50 @@ public final class AppController: ObservableObject {
                 return DeploymentNodeSpec(device: device, assignment: assignment)
             }
         )
+    }
+
+    private func loadDeploymentSpec(from path: String) throws -> DeploymentSpec {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw AppControllerOperationError.missingSpecPath }
+        let data = try Data(contentsOf: URL(fileURLWithPath: trimmed.expandingTildeInPath()))
+        return try JSONDecoder().decode(DeploymentSpec.self, from: data)
+    }
+
+    private func stateFromRecoveryPathOrLastState() throws -> DeploymentState {
+        let path = recoveryStatePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !path.isEmpty {
+            return try loadState(path: path)
+        }
+        guard let lastState else { throw AppControllerOperationError.missingState }
+        return lastState
+    }
+
+    private func loadState(path: String) throws -> DeploymentState {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw AppControllerOperationError.missingStatePath }
+        let expanded = trimmed.expandingTildeInPath()
+        let url = URL(fileURLWithPath: expanded)
+        var isDirectory: ObjCBool = false
+        let directory: URL
+        if FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory) {
+            directory = isDirectory.boolValue ? url : url.deletingLastPathComponent()
+        } else if url.lastPathComponent == "deployment-state.json" {
+            directory = url.deletingLastPathComponent()
+        } else {
+            directory = url
+        }
+        return try DeploymentStateStore().load(from: directory)
+    }
+
+    private func targetDeviceIDs() -> [String] {
+        recoveryTargetDeviceIDs
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    public func stageDeployment() async {
+        let spec = deploymentSpecFromSelection()
         let coordinator = DeploymentCoordinator(
             settings: settings,
             oobHardwareInventoryClient: makeOOBHardwareInventoryClient()
@@ -2498,6 +2636,38 @@ public final class AppController: ObservableObject {
             lastPlan = state.plan
             lastRun = nil
             statusMessage = "Deployment staged at \(state.localStateDirectory)."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    public func planDeploymentSpecFromPath() async {
+        do {
+            let spec = try loadDeploymentSpec(from: deploymentSpecPath)
+            let plan = try DeploymentPlanner(settings: settings).makePlan(spec: spec)
+            lastPlan = plan
+            lastState = nil
+            lastRun = nil
+            statusMessage = "Planned deployment spec from \(deploymentSpecPath)."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    public func runDeploymentSpecFromPath(dryRun: Bool) async {
+        do {
+            let spec = try loadDeploymentSpec(from: deploymentSpecPath)
+            try? paths.ensureExists()
+            let coordinator = DeploymentCoordinator(
+                settings: settings,
+                oobHardwareInventoryClient: makeOOBHardwareInventoryClient()
+            )
+            let state = try await coordinator.stage(spec: spec, at: paths.stateDirectory)
+            let run = try await coordinator.run(state: state, dryRun: dryRun)
+            lastState = run.state
+            lastPlan = run.state.plan
+            lastRun = run
+            statusMessage = dryRun ? "Deployment spec dry run completed." : "Deployment spec execution completed."
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -2524,6 +2694,216 @@ public final class AppController: ObservableObject {
             lastState = run.state
             lastPlan = run.state.plan
             statusMessage = dryRun ? "Deployment dry run completed." : "Deployment execution completed."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    private func deployerServiceConfiguration(talosVersion: String? = nil) -> DeployerMediaServiceConfiguration {
+        var configuration = DeployerMediaServiceConfiguration(defaults: settings.deployer)
+        if configuration.talosctlVersion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            configuration.talosctlVersion = talosVersion ?? settings.talos.talosVersion
+        }
+        return configuration
+    }
+
+    private func deployerAccessRequest(for deployer: DiscoveredDevice) -> DeployerAccessRequest {
+        DeployerAccessRequest(
+            method: settings.deployer.accessMethod,
+            sshConnection: nil,
+            hammertimeDeviceID: deployer.id,
+            hammertimeVia: settings.hammertime.deployerVia,
+            hammertimePrivate: settings.hammertime.deployerUsePrivate,
+            passportReason: settings.hammertime.passportReason,
+            copyMethod: settings.hammertime.copyMethod
+        )
+    }
+
+    public func planDeployerServices() {
+        let configuration = deployerServiceConfiguration()
+        lastDeployerServicePlan = DefaultDeployerHostClient().planDeployerServices(configuration: configuration)
+        statusMessage = "Planned deployer service preparation."
+    }
+
+    public func testDeployerAccess() async {
+        do {
+            let deployer = try deployerForOperations()
+            let selection = try await DeployerTransportResolver(settings: settings).resolve(
+                request: deployerAccessRequest(for: deployer),
+                deployer: deployer
+            )
+            lastDeployerAccessValidation = selection.validation
+            statusMessage = selection.validation.message
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    public func prepareDeployerServices() async {
+        do {
+            let deployer = try deployerForOperations()
+            let selection = try await DeployerTransportResolver(settings: settings).resolve(
+                request: deployerAccessRequest(for: deployer),
+                deployer: deployer
+            )
+            lastDeployerAccessValidation = selection.validation
+            lastDeployerServicePlan = try await DefaultDeployerHostClient().prepareDeployerServices(
+                configuration: deployerServiceConfiguration(),
+                transport: selection.transport
+            )
+            statusMessage = "Prepared deployer services through \(selection.validation.method.displayName)."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    public func loadDeploymentStateFromPath() {
+        do {
+            let state = try stateFromRecoveryPathOrLastState()
+            lastState = state
+            lastPlan = state.plan
+            lastRun = nil
+            statusMessage = "Loaded deployment state for \(state.spec.clusterName)."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    public func resumeDeployment(dryRun: Bool) async {
+        do {
+            let state = try stateFromRecoveryPathOrLastState()
+            let run = try await DeploymentCoordinator(settings: settings).resumeDeployerExecution(
+                state: state,
+                dryRun: dryRun
+            )
+            lastRun = run
+            lastState = run.state
+            lastPlan = run.state.plan
+            statusMessage = dryRun ? "Resume dry run completed." : "Resume completed."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    public func reprovisionDeployment(dryRun: Bool) async {
+        do {
+            let state = try stateFromRecoveryPathOrLastState()
+            let run = try await DeploymentCoordinator(settings: settings).reprovisionTalosNodes(
+                state: state,
+                targetDeviceIDs: targetDeviceIDs(),
+                wipeFirst: recoveryWipeFirst,
+                dryRun: dryRun
+            )
+            lastRun = run
+            lastState = run.state
+            lastPlan = run.state.plan
+            statusMessage = dryRun ? "Reprovision dry run completed." : "Reprovision requests completed."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    public func prepareInstalledDiskBoot(dryRun: Bool) async {
+        do {
+            let state = try stateFromRecoveryPathOrLastState()
+            let execution = try await TalosDeploymentExecutor(settings: settings).prepareInstalledDiskBoot(
+                state: state,
+                targetDeviceIDs: targetDeviceIDs(),
+                reboot: recoveryRebootAfterDiskBoot,
+                dryRun: dryRun
+            )
+            lastDiskBootExecution = execution
+            statusMessage = dryRun ? "Disk boot dry run completed." : "Installed-disk boot prepared."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    public func verifyDeploymentState() {
+        do {
+            let state = try stateFromRecoveryPathOrLastState()
+            lastClusterHealth = DeploymentCoordinator(settings: settings).verify(state: state)
+            statusMessage = "Generated verification command plan."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    public func writeMaintenanceBundle() {
+        do {
+            let state = try stateFromRecoveryPathOrLastState()
+            let localDirectory = URL(fileURLWithPath: state.localStateDirectory, isDirectory: true)
+            lastMaintenanceBundle = try MaintenanceBundleBuilder().writeBundle(for: state, in: localDirectory)
+            statusMessage = "Wrote maintenance bundle in \(state.localStateDirectory)."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    public func renderTalosSchematic() {
+        talosRenderedSchematic = TalosFactoryClient().renderSchematic(settings: settings.talos.factory)
+        statusMessage = "Rendered Talos Image Factory schematic."
+    }
+
+    public func uploadTalosSchematic() async {
+        do {
+            talosLastSchematicUpload = try await TalosFactoryClient().uploadSchematic(settings: settings.talos.factory)
+            statusMessage = "Uploaded Talos schematic \(talosLastSchematicUpload?.id ?? "")."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    public func computeTalosArtifacts() {
+        talosLastArtifacts = TalosFactoryClient().artifactURLs(
+            settings: settings.talos.factory,
+            talosVersion: settings.talos.talosVersion
+        )
+        statusMessage = "Computed Talos artifact URLs."
+    }
+
+    public func bootDirectOOBURL() async {
+        do {
+            let deviceID = firstNonEmptyForController(directOOBDeviceID, selectedDeployerID())
+            guard !deviceID.isEmpty else { throw AppControllerOperationError.missingDevice }
+            guard !directOOBImageURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw AppControllerOperationError.missingOOBImageURL
+            }
+            lastOOBBootResult = try await HammertimeOOBBooter(settings: settings.hammertime).bootURL(
+                OOBBootURLRequest(
+                    deviceID: deviceID,
+                    imageURL: directOOBImageURL,
+                    oneTimeBoot: directOOBOneTimeBoot.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : directOOBOneTimeBoot,
+                    reboot: directOOBReboot,
+                    proxyVia: settings.hammertime.deployerVia
+                )
+            )
+            statusMessage = "Requested OOB URL boot for \(deviceID)."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    public func captureUbuntuSnapshot() async {
+        do {
+            let resolvedAccount = accountNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !resolvedAccount.isEmpty else { throw AppControllerOperationError.missingAccount }
+            let selector = firstNonEmptyForController(ubuntuSnapshotDeviceSelector, selectedDeployerID())
+            guard !selector.isEmpty else { throw AppControllerOperationError.missingDevice }
+            let outputDirectory = firstNonEmptyForController(ubuntuSnapshotOutputDirectory, paths.stateDirectory.path)
+            let snapshot = try await PreinstallSnapshotCapturer(
+                settings: settings,
+                coreClient: coreClient,
+                hammertime: hammertime
+            ).capture(
+                accountNumber: resolvedAccount,
+                deviceSelector: selector,
+                source: settings.core.inventorySource,
+                baseDirectory: URL(fileURLWithPath: outputDirectory.expandingTildeInPath(), isDirectory: true)
+            )
+            ubuntuLastSnapshot = snapshot
+            ubuntuCapturePath = snapshot.directory
+            statusMessage = "Captured Ubuntu preinstall snapshot at \(snapshot.directory)."
         } catch {
             statusMessage = error.localizedDescription
         }
