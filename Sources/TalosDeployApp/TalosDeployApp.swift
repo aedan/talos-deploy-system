@@ -48,11 +48,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let executableURL = URL(fileURLWithPath: CommandLine.arguments.first ?? "")
         let candidates = [
             Bundle.main.url(forResource: "tds", withExtension: "icns"),
-            Bundle.module.url(forResource: "tds", withExtension: "icns"),
             executableURL
                 .deletingLastPathComponent()
                 .deletingLastPathComponent()
                 .appendingPathComponent("Resources/tds.icns"),
+            executableURL
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Resources/TDS_TalosDeployApp.bundle/tds.icns"),
             executableURL
                 .deletingLastPathComponent()
                 .appendingPathComponent("TDS_TalosDeployApp.bundle/tds.icns"),

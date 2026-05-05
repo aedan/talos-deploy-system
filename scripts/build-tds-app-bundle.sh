@@ -29,7 +29,6 @@ cp "$EXECUTABLE" "$OUTPUT_APP/Contents/MacOS/tds"
 for bundle in "$BIN_DIR"/TDS_*.bundle; do
   [[ -e "$bundle" ]] || continue
   cp -R "$bundle" "$OUTPUT_APP/Contents/Resources/"
-  cp -R "$bundle" "$OUTPUT_APP/"
 done
 if [[ -f "$APP_ICON" ]]; then
   cp "$APP_ICON" "$OUTPUT_APP/Contents/Resources/tds.icns"
@@ -89,5 +88,9 @@ text = text.replace("__BUNDLE_SHORT_VERSION__", sys.argv[2])
 text = text.replace("__BUNDLE_BUILD_NUMBER__", sys.argv[3])
 path.write_text(text)
 PY
+
+if command -v codesign >/dev/null 2>&1; then
+  codesign --force --deep --sign - "$OUTPUT_APP" >/dev/null
+fi
 
 echo "Built $OUTPUT_APP"
