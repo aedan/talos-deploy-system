@@ -289,7 +289,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(patch.contains("    extraMounts:"))
         XCTAssertFalse(patch.contains("  features:\n"))
         XCTAssertTrue(patch.contains("cluster:\n  allowSchedulingOnControlPlanes: true"))
-        XCTAssertTrue(patch.contains("    cni:\n      name: none"))
+        XCTAssertTrue(patch.contains("    cni:\n      name: flannel"))
         XCTAssertTrue(patch.contains("  etcd:\n    advertisedSubnets:\n      - 198.51.100.0/22"))
         XCTAssertTrue(patch.contains("  time:\n    servers:"))
         XCTAssertFalse(patch.contains("  extraMounts:\n    - destination: /var/lib/longhorn"))
@@ -298,6 +298,79 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertFalse(bootPatch.contains("image: factory.talos.dev/metal-installer/abc123:v1.11.3"))
         XCTAssertTrue(bootMeta.contains("address: 198.51.100.10/22"))
         XCTAssertTrue(bootMeta.contains("gateway: 198.51.100.1"))
+    }
+
+    func testStagedTalosConfigOmitsInstallAndUsesCloudValidation() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1", primaryIP: "198.51.100.20", privateIP: "198.51.100.20")
+        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
+        var cpAssignment = talosAssignment(shouldInstallOS: false)
+        cpAssignment.preferredInstall = .stagedOnly
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            talosFactory: TalosImageFactorySettings(schematicID: "abc123"),
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer, deployerMode: .existing)),
+                DeploymentNodeSpec(device: cp, assignment: cpAssignment),
+            ]
+        )
+        let state = try await DeploymentCoordinator(settings: AppSettings()).stage(spec: spec, at: temp)
+        let stateDirectory = URL(fileURLWithPath: state.localStateDirectory, isDirectory: true)
+
+        let patch = try String(contentsOf: stateDirectory.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+        let prepareScript = try String(contentsOf: stateDirectory.appending(path: "maintenance/tds-prepare-talos-media.sh"), encoding: .utf8)
+
+        XCTAssertEqual(state.plan.installs.first { $0.device.id == cp.id }?.method, .stagedOnly)
+        XCTAssertFalse(patch.contains("  install:\n"))
+        XCTAssertTrue(prepareScript.contains("|meta|staged"))
+        XCTAssertTrue(prepareScript.contains("remove_machine_install \"machine-configs/${name}.yaml\""))
+        XCTAssertTrue(prepareScript.contains("validate_mode=\"cloud\""))
+    }
+
+    func testTalosBuilderUsesInventoryMTUForManagementInterface() async throws {
+        let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1", primaryIP: "198.51.100.20", privateIP: "198.51.100.20")
+        let cp = DiscoveredDevice(
+            id: "cp1",
+            accountNumber: "0000000",
+            name: "cp-1",
+            primaryIP: "192.168.120.10",
+            privateIP: "192.168.120.10",
+            installDisk: "/dev/vda",
+            networkInterfaces: [
+                NetworkInterface(name: "eth0", addresses: ["192.168.120.10/24"], macAddress: "fa:16:3e:00:00:10", mtu: 1442),
+            ]
+        )
+        var assignment = talosAssignment()
+        assignment.staticNetwork.managementInterface = "eth0"
+        assignment.staticNetwork.managementAddressCIDR = "192.168.120.10/24"
+        assignment.staticNetwork.gateway = "192.168.120.1"
+        assignment.staticNetwork.nameservers = ["1.1.1.1"]
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer, deployerMode: .existing)),
+                DeploymentNodeSpec(device: cp, assignment: assignment),
+            ]
+        )
+        let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
+        let output = try await DefaultTalosBuilder().buildArtifacts(for: spec, plan: plan, in: temp)
+
+        let patch = try String(contentsOf: output.appending(path: "node-patches").appending(path: "cp-1.yaml"), encoding: .utf8)
+        let bootMeta = try String(contentsOf: output.appending(path: "boot-network-meta").appending(path: "cp-1.yaml"), encoding: .utf8)
+
+        XCTAssertTrue(patch.contains("mtu: 1442"))
+        XCTAssertTrue(bootMeta.contains("mtu: 1442"))
     }
 
     func testStageWritesMaintenanceBundleForDeployerOwnedOperations() async throws {
@@ -342,8 +415,15 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(deployScript.contains("apply_initial_config"))
         XCTAssertTrue(deployScript.contains("apply-config --insecure --file"))
         XCTAssertFalse(deployScript.contains("apply-config --insecure --mode=reboot"))
+        XCTAssertTrue(deployScript.contains("configured-api"))
+        XCTAssertTrue(deployScript.contains("live-api"))
+        XCTAssertTrue(deployScript.contains("kubelet-only"))
+        XCTAssertTrue(deployScript.contains("ping-only"))
+        XCTAssertTrue(deployScript.contains("down"))
         XCTAssertTrue(deployScript.contains("get disks --nodes \"$ip\" --endpoints \"$ip\" --insecure -o yaml"))
         XCTAssertTrue(deployScript.contains("warning: initial config apply"))
+        XCTAssertTrue(deployScript.contains("--nodes \"$bootstrap_cp\""))
+        XCTAssertFalse(deployScript.contains("--init-node \"$bootstrap_cp\""))
         XCTAssertTrue(deployScript.contains("--control-plane-nodes \"$successful_controlplanes\""))
         XCTAssertTrue(deployScript.contains("wait_for_time_sync"))
         XCTAssertTrue(deployScript.contains("bootstrap_control_plane"))
@@ -364,7 +444,9 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(prepareScript.contains("/^    install:[[:space:]]*$/"))
         XCTAssertTrue(prepareScript.contains("boot-node-patches/cp-1.yaml"))
         XCTAssertTrue(prepareScript.contains("gen config 'cluster' 'https://cluster.example.com:6443'"))
-        XCTAssertTrue(prepareScript.contains("validate --mode metal --config \"machine-configs/${name}.yaml\" --strict"))
+        XCTAssertTrue(prepareScript.contains("--kubernetes-version 'v1.34.1'"))
+        XCTAssertTrue(prepareScript.contains("validate_mode=\"metal\""))
+        XCTAssertTrue(prepareScript.contains("validate --mode \"$validate_mode\" --config \"machine-configs/${name}.yaml\" --strict"))
         XCTAssertFalse(prepareScript.contains("if [ ! -f generated/talosconfig ]; then"))
     }
 
@@ -1479,6 +1561,12 @@ final class TalosDeployCoreTests: XCTestCase {
         let waitCommand = try XCTUnwrap(transport.commands.first { $0.contains("TARGET_IDS='worker1'") })
         XCTAssertTrue(waitCommand.contains("target_selected"))
         XCTAssertTrue(waitCommand.contains("waiting for live or configured Talos API"))
+        XCTAssertTrue(waitCommand.contains("node-state=$(classify_node \"$ip\")"))
+        XCTAssertTrue(waitCommand.contains("configured-api"))
+        XCTAssertTrue(waitCommand.contains("live-api"))
+        XCTAssertTrue(waitCommand.contains("kubelet-only"))
+        XCTAssertTrue(waitCommand.contains("ping-only"))
+        XCTAssertTrue(waitCommand.contains("down"))
         XCTAssertTrue(execution.executedActions.contains { $0.contains("Confirmed Talos API reachability for reprovisioned nodes") })
     }
 
@@ -1594,6 +1682,29 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(plan.phases.last?.steps.contains(where: { $0.contains("deployer-hosted ISO") }) == true)
     }
 
+    func testPlannerSelectsStagedOnlyForCloudImageTalosNodes() throws {
+        let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
+        let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
+        var cpAssignment = talosAssignment(shouldInstallOS: false)
+        cpAssignment.preferredInstall = .stagedOnly
+        let spec = DeploymentSpec(
+            accountNumber: "0000000",
+            clusterName: "cluster",
+            clusterEndpoint: "https://cluster.example.com:6443",
+            talosVersion: "v1.13.0",
+            kubernetesVersion: "v1.34.1",
+            deployerStateRoot: "/var/lib/talos-deploy",
+            nodes: [
+                DeploymentNodeSpec(device: deployer, assignment: DeviceAssignment(deviceID: deployer.id, role: .deployer, deployerMode: .existing)),
+                DeploymentNodeSpec(device: cp, assignment: cpAssignment),
+            ]
+        )
+
+        let plan = try DeploymentPlanner(settings: AppSettings()).makePlan(spec: spec)
+
+        XCTAssertEqual(plan.installs.first { $0.device.id == cp.id }?.method, .stagedOnly)
+    }
+
     func testDeployerRoleIsTheOnlyInstallControlRole() {
         XCTAssertTrue(DeviceRole.deployer.isDeployer)
         XCTAssertTrue(DeviceRole.selectableRoles.contains(.deployer))
@@ -1697,7 +1808,24 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(plan.systemdUnits.contains("tds-media-http.service"))
         XCTAssertTrue(plan.systemdUnits.contains("tds-dnsmasq.service"))
         XCTAssertTrue(plan.systemdUnits.contains("chrony.service"))
+        XCTAssertTrue(plan.onlineInstallCommands.contains { $0.contains("DEBIAN_FRONTEND=noninteractive") })
+        XCTAssertTrue(plan.onlineInstallCommands.contains { $0.contains("--no-install-recommends") })
         XCTAssertTrue(plan.cacheFallbackCommands.contains { $0.contains("/var/cache/tds") })
+    }
+
+    func testPrepareDeployerServicesBoundsAptOperations() async throws {
+        let transport = RecordingDeployerTransport()
+
+        _ = try await DefaultDeployerHostClient().prepareDeployerServices(
+            configuration: DeployerMediaServiceConfiguration(),
+            transport: transport
+        )
+
+        let command = try XCTUnwrap(transport.commands.first)
+        XCTAssertTrue(command.contains("DEBIAN_FRONTEND=noninteractive"))
+        XCTAssertTrue(command.contains("Acquire::http::Timeout=30"))
+        XCTAssertTrue(command.contains("timeout 420 apt-get"))
+        XCTAssertTrue(command.contains("--no-install-recommends"))
     }
 
     func testPrepareDeployerServicesConfiguresChronyAsNTPServer() async throws {

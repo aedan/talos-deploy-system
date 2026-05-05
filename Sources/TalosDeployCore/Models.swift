@@ -55,6 +55,7 @@ public enum InstallPreference: String, Codable, CaseIterable, Sendable {
     case automatic
     case virtualMedia
     case pxe
+    case stagedOnly
 }
 
 public enum InstallMethod: String, Codable, CaseIterable, Sendable {
@@ -674,6 +675,34 @@ public struct TalosImageFactorySettings: Codable, Equatable, Sendable {
         self.schematicID = schematicID
         self.selectedSystemExtensions = selectedSystemExtensions
         self.extraKernelArgs = extraKernelArgs
+    }
+}
+
+extension TalosImageFactorySettings {
+    enum CodingKeys: String, CodingKey {
+        case baseURL
+        case pxeBaseURL
+        case registryHost
+        case architecture
+        case platform
+        case schematicID
+        case selectedSystemExtensions
+        case extraKernelArgs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = TalosImageFactorySettings()
+        self.init(
+            baseURL: try container.decodeIfPresent(String.self, forKey: .baseURL) ?? defaults.baseURL,
+            pxeBaseURL: try container.decodeIfPresent(String.self, forKey: .pxeBaseURL) ?? defaults.pxeBaseURL,
+            registryHost: try container.decodeIfPresent(String.self, forKey: .registryHost) ?? defaults.registryHost,
+            architecture: try container.decodeIfPresent(String.self, forKey: .architecture) ?? defaults.architecture,
+            platform: try container.decodeIfPresent(String.self, forKey: .platform) ?? defaults.platform,
+            schematicID: try container.decodeIfPresent(String.self, forKey: .schematicID) ?? defaults.schematicID,
+            selectedSystemExtensions: try container.decodeIfPresent([String].self, forKey: .selectedSystemExtensions) ?? defaults.selectedSystemExtensions,
+            extraKernelArgs: try container.decodeIfPresent([String].self, forKey: .extraKernelArgs) ?? defaults.extraKernelArgs
+        )
     }
 }
 

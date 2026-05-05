@@ -8,8 +8,28 @@ struct TalosDeployCLI {
             try AppPaths().ensureExists()
             try await run(arguments: Array(CommandLine.arguments.dropFirst()))
         } catch {
-            fputs("error: \(error.localizedDescription)\n", stderr)
+            fputs("error: \(describe(error))\n", stderr)
             exit(1)
+        }
+    }
+
+    private static func describe(_ error: Error) -> String {
+        func path(_ codingPath: [any CodingKey]) -> String {
+            let rendered = codingPath.map(\.stringValue).joined(separator: ".")
+            return rendered.isEmpty ? "<root>" : rendered
+        }
+
+        switch error {
+        case let DecodingError.keyNotFound(key, context):
+            return "missing key '\(key.stringValue)' at \(path(context.codingPath)): \(context.debugDescription)"
+        case let DecodingError.valueNotFound(type, context):
+            return "missing value for \(type) at \(path(context.codingPath)): \(context.debugDescription)"
+        case let DecodingError.typeMismatch(type, context):
+            return "type mismatch for \(type) at \(path(context.codingPath)): \(context.debugDescription)"
+        case let DecodingError.dataCorrupted(context):
+            return "data corrupted at \(path(context.codingPath)): \(context.debugDescription)"
+        default:
+            return error.localizedDescription
         }
     }
 
@@ -259,6 +279,14 @@ struct TalosDeployCLI {
         switch subcommand {
         case "schematic":
             print(TalosFactoryClient().renderSchematic(settings: factory))
+        case "upload-schematic":
+            let upload = try await TalosFactoryClient().uploadSchematic(settings: factory)
+            if options["output"] == "json" {
+                let data = try JSONEncoder.pretty.encode(upload)
+                print(String(decoding: data, as: UTF8.self))
+            } else {
+                print(upload.id)
+            }
         case "artifacts":
             let artifacts = TalosFactoryClient().artifactURLs(settings: factory, talosVersion: version)
             let data = try JSONEncoder.pretty.encode(artifacts)
@@ -729,6 +757,7 @@ struct TalosDeployCLI {
             tds commands:
               login [--source hammertime] | --username USER --secret VALUE [--header-name Cookie]
               talos schematic [--extensions ext1,ext2] [--extra-kernel-args arg1,arg2]
+              talos upload-schematic [--extensions ext1,ext2] [--extra-kernel-args arg1,arg2] [--output json]
               talos artifacts [--version v1.13.0] [--schematic-id ID] [--arch amd64]
               talos versions [--factory-url URL] [--output table|json]
               talos oob-boot-url --device DEVICE_ID --url OOB_REACHABLE_IMAGE_URL [--reboot true]

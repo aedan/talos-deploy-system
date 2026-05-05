@@ -282,7 +282,7 @@ Evidence to keep in ignored local storage:
 
 ## Release Packaging
 
-Alpha releases are published as GitHub pre-releases. The current pre-alpha release is `v0.1.0-alpha.2`.
+Alpha releases are published as GitHub pre-releases. The current pre-alpha release is `v0.1.0-alpha.3`.
 
 ```bash
 scripts/package-release.sh

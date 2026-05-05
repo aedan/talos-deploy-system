@@ -114,12 +114,12 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
         return DeployerServicePlan(
             packages: packages,
             onlineInstallCommands: [
-                "apt-get update",
-                "apt-get install -y \(packages.joined(separator: " "))",
+                "DEBIAN_FRONTEND=noninteractive apt-get update",
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \(packages.joined(separator: " "))",
                 "install pinned talosctl \(talosctlVersion) into \(configuration.stateRoot)/bin/talosctl",
             ],
             cacheFallbackCommands: [
-                "dpkg -i \(configuration.packageCacheRoot)/apt/*.deb || apt-get -f install -y",
+                "dpkg -i \(configuration.packageCacheRoot)/apt/*.deb || DEBIAN_FRONTEND=noninteractive apt-get -f install -y",
                 "install cached talosctl from \(configuration.packageCacheRoot)/talosctl/",
             ],
             systemdUnits: [
@@ -177,8 +177,15 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
         sudo mkdir -p \(shellEscape("\(configuration.stateRoot)/maintenance")) \(shellEscape("\(configuration.stateRoot)/machine-configs")) \(shellEscape("\(configuration.stateRoot)/generated")) \(shellEscape("\(configuration.stateRoot)/run"))
         sudo chown -R "$(id -un):$(id -gn)" \(shellEscape(configuration.stateRoot)) \(shellEscape(cacheRoot)) || true
         if command -v apt-get >/dev/null 2>&1; then
-          sudo apt-get update || true
-          sudo apt-get install -y \(packageList) || sudo dpkg -i \(shellEscape(cacheRoot))/apt/*.deb || true
+          export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a
+          APT_OPTIONS="-o Dpkg::Use-Pty=0 -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          if command -v timeout >/dev/null 2>&1; then
+            sudo -E timeout 420 apt-get $APT_OPTIONS update || true
+            sudo -E timeout 600 apt-get $APT_OPTIONS install -y --no-install-recommends \(packageList) || sudo dpkg -i \(shellEscape(cacheRoot))/apt/*.deb || true
+          else
+            sudo -E apt-get $APT_OPTIONS update || true
+            sudo -E apt-get $APT_OPTIONS install -y --no-install-recommends \(packageList) || sudo dpkg -i \(shellEscape(cacheRoot))/apt/*.deb || true
+          fi
         fi
         TALOSCTL_VERSION=\(shellEscape(talosctlVersion))
         ARCH="$(uname -m)"
@@ -592,6 +599,7 @@ public enum TalosFactoryError: Error, LocalizedError {
     case invalidURL(String)
     case unexpectedStatus(Int)
     case emptyVersionCatalog
+    case invalidSchematicResponse
 
     public var errorDescription: String? {
         switch self {
@@ -601,8 +609,14 @@ public enum TalosFactoryError: Error, LocalizedError {
             return "Talos Image Factory returned HTTP \(status) while loading versions."
         case .emptyVersionCatalog:
             return "Talos Image Factory returned no deployable versions."
+        case .invalidSchematicResponse:
+            return "Talos Image Factory returned an invalid schematic response."
         }
     }
+}
+
+public struct TalosFactorySchematicUpload: Codable, Equatable, Sendable {
+    public var id: String
 }
 
 private struct TalosSemanticVersion: Comparable {
@@ -659,6 +673,37 @@ public struct TalosFactoryClient: Sendable {
             lines.append(contentsOf: settings.selectedSystemExtensions.map { "      - \(yamlScalar($0))" })
         }
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    public func uploadSchematic(settings: TalosImageFactorySettings) async throws -> TalosFactorySchematicUpload {
+        try await uploadSchematic(yaml: renderSchematic(settings: settings), baseURL: settings.baseURL)
+    }
+
+    public func uploadSchematic(yaml: String, baseURL: String) async throws -> TalosFactorySchematicUpload {
+        let normalizedBaseURL = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let url = URL(string: "\(normalizedBaseURL)/schematics"),
+              url.scheme != nil,
+              url.host != nil
+        else {
+            throw TalosFactoryError.invalidURL(baseURL)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 30
+        request.httpBody = yaml.data(using: .utf8)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw TalosFactoryError.unexpectedStatus(-1)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw TalosFactoryError.unexpectedStatus(http.statusCode)
+        }
+        let upload = try JSONDecoder().decode(TalosFactorySchematicUpload.self, from: data)
+        guard !upload.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw TalosFactoryError.invalidSchematicResponse
+        }
+        return upload
     }
 
     public func artifactURLs(settings: TalosImageFactorySettings, talosVersion: String) -> TalosFactoryArtifacts {
@@ -724,11 +769,12 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         try fileManager.createDirectory(at: bootNodesDirectory, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: bootNetworkMetaDirectory, withIntermediateDirectories: true)
         for node in spec.nodes where node.assignment.role == .controlplane || node.assignment.role == .worker {
+            let includeInstall = shouldRenderInstall(for: node)
             let yaml = renderNodePatch(
                 node: node,
                 spec: spec,
                 includeAdditionalNetworking: true,
-                includeInstall: true
+                includeInstall: includeInstall
             )
             try yaml.write(
                 to: nodesDirectory.appending(path: "\(node.device.name).yaml"),
@@ -776,6 +822,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         let interfaceName = firstNonEmptyStatic(staticConfig.managementInterface, node.device.networkInterfaces.first?.name ?? "eth0")
         let managementBridge = includeAdditionalNetworking ? finalManagementBridge(for: staticConfig, fallbackInterfaceName: interfaceName) : nil
         let managementSubnet = ipv4NetworkCIDR(from: staticConfig.managementAddressCIDR)
+        let mtu = managementMTU(for: node, config: staticConfig, interfaceName: interfaceName, managementBridge: managementBridge) ?? 1500
         let installerImage = deployerRegistryInstallerImage(for: spec)
             ?? TalosFactoryClient().artifactURLs(settings: spec.talosFactory, talosVersion: spec.talosVersion).installerImage
         var lines = [
@@ -802,7 +849,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             lines.append("        addresses:")
             lines.append("          - \(staticConfig.managementAddressCIDR)")
         }
-        lines.append("        mtu: 1500")
+        lines.append("        mtu: \(mtu)")
         lines.append(contentsOf: renderRoutes(staticConfig.routes))
         if let managementBridge {
             lines.append(contentsOf: renderBridgeBody(managementBridge))
@@ -826,9 +873,42 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         return lines.joined(separator: "\n") + "\n"
     }
 
+    private func shouldRenderInstall(for node: DeploymentNodeSpec) -> Bool {
+        guard node.assignment.role == .controlplane || node.assignment.role == .worker else {
+            return false
+        }
+        return node.assignment.shouldInstallOS && node.assignment.preferredInstall != .stagedOnly
+    }
+
+    private func managementMTU(
+        for node: DeploymentNodeSpec,
+        config: StaticNetworkConfig,
+        interfaceName: String,
+        managementBridge: NetworkInterface?
+    ) -> Int? {
+        if let mtu = managementBridge?.mtu {
+            return mtu
+        }
+
+        let candidates = [
+            config.managementInterface,
+            interfaceName,
+            node.device.networkInterfaces.first?.name ?? "",
+        ].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+        for candidate in candidates where !candidate.isEmpty {
+            if let mtu = node.device.networkInterfaces.first(where: { $0.name == candidate })?.mtu {
+                return mtu
+            }
+        }
+
+        return node.device.networkInterfaces.first?.mtu
+    }
+
     private func renderInitialNetworkMeta(node: DeploymentNodeSpec, spec: DeploymentSpec) -> String {
         let staticConfig = StaticNetworkPlanner().config(for: node)
         let interfaceName = firstNonEmptyStatic(staticConfig.managementInterface, node.device.networkInterfaces.first?.name ?? "eth0")
+        let mtu = managementMTU(for: node, config: staticConfig, interfaceName: interfaceName, managementBridge: nil)
         var lines = [
             "addresses:",
             "  - address: \(yamlScalar(staticConfig.managementAddressCIDR))",
@@ -842,6 +922,9 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
             "    up: true",
             "    layer: platform",
         ]
+        if let mtu {
+            lines.append("    mtu: \(mtu)")
+        }
         if !staticConfig.gateway.isEmpty {
             lines.append(contentsOf: [
                 "routes:",
@@ -1096,7 +1179,7 @@ public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
         }
         lines.append("  network:")
         lines.append("    cni:")
-        lines.append("      name: none")
+        lines.append("      name: flannel")
         if node.assignment.role == .controlplane, !managementSubnet.isEmpty {
             lines.append("  etcd:")
             lines.append("    advertisedSubnets:")
@@ -1399,7 +1482,15 @@ public struct DeploymentPlanner: Sendable {
             }
         }
 
+        if !node.assignment.role.isDeployer,
+           node.assignment.role != .unassigned,
+           (!node.assignment.shouldInstallOS || node.assignment.preferredInstall == .stagedOnly) {
+            return .stagedOnly
+        }
+
         switch node.assignment.preferredInstall {
+        case .stagedOnly:
+            return .stagedOnly
         case .virtualMedia:
             return .virtualMedia
         case .pxe:

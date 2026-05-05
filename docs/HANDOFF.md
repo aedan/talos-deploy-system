@@ -11,22 +11,24 @@ This note summarizes the current project state for continuing work in a fresh th
 - Hammertime-backed deployer access works as the fallback transport when direct SSH is unavailable.
 - Deployer-hosted OOB URL media can boot Talos nodes into maintenance/live mode.
 - Generated Talos configs now use the Image Factory `metal-installer` image path and default Rackspace-oriented extensions.
+- Staged/cloud-image Talos nodes can be configured in place: they skip OOB boot, wipe, and installed-disk boot prep, omit `machine.install`, and still run readiness, apply, bootstrap, and health.
+- The OpenStack lab harness proved the Ubuntu deployer-owned Talos flow with 3 controllers and 1 worker on Talos `v1.13.0`.
 - The Lab-style acceptance spec has been simplified to one static management network for the current debug run; richer networking remains supported by the model/UI but is not the current acceptance target.
 
 ## Current Blocker
 
-Talos node provisioning is reaching the post-boot configuration phase, but at least one worker transitions from live maintenance API to a partial installed state where kubelet is reachable on `10250` and Talos API `50000` is not reachable. This points to Talos config/apply/bootstrap behavior rather than OOB media or Ubuntu deployer provisioning.
+No current virtual-lab blocker. The next risk is the full bare-metal Lab2 run, where OOB boot behavior, physical NIC naming, and deployer-to-node routing need to be proven with the same deployer-owned apply/bootstrap/health flow.
 
 ## Recommended Next Step
 
-Move the next iteration into a fast config-focused harness before another full physical acceptance run:
+Run the Lab2 bare-metal end-to-end acceptance:
 
-1. Build a virtual Talos test loop using the same generated `tds` machine configs, local registry behavior, and deployer-owned scripts.
-2. Start with one control plane and one worker.
-3. Classify node state as `configured-api`, `live-api`, `kubelet-only`, `ping-only`, or `down`.
-4. Capture Talos service states and logs around first apply and installed boot.
-5. Replay on one physical worker only after the virtual config path is green.
+1. Build and release `v0.1.0-alpha.3`.
+2. Query Lab2 inventory and confirm deployer/control-plane/worker role assignment.
+3. Install or validate the Ubuntu 24.04 deployer.
+4. Run the deployer-owned Talos apply/bootstrap/health flow against the physical Talos nodes.
+5. Keep evidence under ignored local capture directories only.
 
 ## Release State
 
-`v0.1.0-alpha.2` captures the current proven progress. Do not include real account numbers, device IDs, credentials, or environment-specific hostnames in committed docs or release notes.
+`v0.1.0-alpha.3` captures the OpenStack-proven staged Talos config process and harness. Do not include real account numbers, device IDs, credentials, or environment-specific hostnames in committed docs or release notes.
