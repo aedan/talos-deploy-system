@@ -2178,6 +2178,7 @@ public final class AppController: ObservableObject {
     @Published public var talosVersionRefreshStatus: String
     @Published public var useManualTalosVersion: Bool
     @Published public var inventoryFilterText: String
+    @Published public var isInventoryLoading: Bool
     @Published public var deploymentSpecPath: String
     @Published public var recoveryStatePath: String
     @Published public var recoveryTargetDeviceIDs: String
@@ -2251,6 +2252,7 @@ public final class AppController: ObservableObject {
         self.talosVersionRefreshStatus = "Talos versions have not been refreshed yet."
         self.useManualTalosVersion = false
         self.inventoryFilterText = ""
+        self.isInventoryLoading = false
         self.deploymentSpecPath = ""
         self.recoveryStatePath = ""
         self.recoveryTargetDeviceIDs = ""
@@ -2269,6 +2271,17 @@ public final class AppController: ObservableObject {
             try saveAccessProfileProxyPasswords()
             try settingsController.save(settings)
             statusMessage = "Settings saved."
+        } catch {
+            statusMessage = error.localizedDescription
+        }
+    }
+
+    public func reloadSettings() {
+        do {
+            let loadedSettings = try settingsController.load()
+            settings = loadedSettings
+            accessProfileProxyPasswords = Self.loadProxyPasswords(for: loadedSettings.accessProfiles, secretStore: secretStore)
+            statusMessage = "Settings changes reverted."
         } catch {
             statusMessage = error.localizedDescription
         }
@@ -2413,10 +2426,16 @@ public final class AppController: ObservableObject {
     }
 
     public func refreshInventory() async {
+        guard !isInventoryLoading else { return }
         let resolvedAccountNumber = accountNumber.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !resolvedAccountNumber.isEmpty else {
             statusMessage = "Enter an account number before loading devices."
             return
+        }
+        isInventoryLoading = true
+        statusMessage = "Loading devices for account \(resolvedAccountNumber)..."
+        defer {
+            isInventoryLoading = false
         }
         do {
             let source = settings.core.inventorySource

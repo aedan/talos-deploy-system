@@ -34,7 +34,9 @@ let package = Package(
         .executableTarget(
             name: "TalosDeployApp",
             dependencies: ["TalosDeployCore"],
-            exclude: ["Resources"]
+            resources: [
+                .copy("Resources/tds.icns"),
+            ]
         ),
         .testTarget(
             name: "TalosDeployCoreTests",

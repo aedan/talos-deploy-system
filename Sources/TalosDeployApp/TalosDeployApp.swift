@@ -25,11 +25,35 @@ struct TalosDeployApp: App {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        applyApplicationIcon()
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         NSApplication.shared.windows.first?.makeKeyAndOrderFront(nil)
+    }
+
+    private func applyApplicationIcon() {
+        let executableURL = URL(fileURLWithPath: CommandLine.arguments.first ?? "")
+        let candidates = [
+            Bundle.main.url(forResource: "tds", withExtension: "icns"),
+            Bundle.module.url(forResource: "tds", withExtension: "icns"),
+            executableURL
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Resources/tds.icns"),
+            executableURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("TDS_TalosDeployApp.bundle/tds.icns"),
+        ]
+
+        guard let iconURL = candidates.compactMap({ $0 }).first(where: { FileManager.default.fileExists(atPath: $0.path) }),
+              let image = NSImage(contentsOf: iconURL)
+        else { return }
+
+        image.isTemplate = false
+        NSApp.applicationIconImage = image
     }
 }
 
@@ -435,17 +459,39 @@ private struct InventoryView: View {
                     TextField("Account Number", text: $controller.accountNumber)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 220)
+                        .disabled(controller.isInventoryLoading)
                         .fieldHelp("Core account number to inventory; tds does not ship with a default real account.")
-                    Button("Load Devices") {
+                    Button {
                         Task { await controller.refreshInventory() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if controller.isInventoryLoading {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                            Text(controller.isInventoryLoading ? "Loading..." : "Load Devices")
+                        }
                     }
+                    .disabled(controller.isInventoryLoading)
                     Button("Refresh Live Facts") {
                         Task { await controller.refreshLiveFacts() }
                     }
+                    .disabled(controller.isInventoryLoading)
                 }
                 TextField("Filter physical servers by name, ID, IP, OOB, platform, or role", text: $controller.inventoryFilterText)
                     .textFieldStyle(.roundedBorder)
+                    .disabled(controller.isInventoryLoading)
                     .fieldHelp("Narrows the physical-server table without changing selected roles or install choices; clear it to show every eligible server.")
+
+                if controller.isInventoryLoading {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Waiting for inventory to load...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
                 if !controller.devices.isEmpty {
                     Text("Showing \(controller.filteredClusterEligibleDevices.count) of \(controller.clusterEligibleDevices.count) physical server candidates; \(controller.filteredDevices.count) non-server devices filtered out.")
@@ -1176,8 +1222,10 @@ private struct SettingsRootView: View {
     @EnvironmentObject private var controller: AppController
 
     var body: some View {
-        Form {
-            Section("Access Profiles") {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+            SectionCard(title: "Access Profiles") {
                 ForEach(Array(controller.settings.accessProfiles.enumerated()), id: \.element.id) { index, profile in
                     VStack(alignment: .leading) {
                         TextField("Name", text: Binding(
@@ -1242,7 +1290,7 @@ private struct SettingsRootView: View {
                     }
                 }
             }
-            Section("Core Session") {
+            SectionCard(title: "Core Session") {
                 TextField("Default Account", text: $controller.settings.core.defaultAccountNumber)
                     .fieldHelp("Optional operator convenience default; leave blank unless you repeatedly work one account.")
                 Picker("Inventory Source", selection: $controller.settings.core.inventorySource) {
@@ -1255,7 +1303,7 @@ private struct SettingsRootView: View {
                 TextField("Service URL", text: $controller.settings.core.serviceURL)
                     .fieldHelp("Base WS Core API endpoint used for account inventory and device details.")
             }
-            Section("Hammertime") {
+            SectionCard(title: "Hammertime") {
                 Toggle("Enabled", isOn: $controller.settings.hammertime.enabled)
                     .fieldHelp("Allows tds to use hammertime for inventory fallback, live facts, and OOB helper actions when available.")
                 Toggle("Skip device checks (--no-checks)", isOn: $controller.settings.hammertime.skipDeviceChecks)
@@ -1288,7 +1336,7 @@ private struct SettingsRootView: View {
                 Stepper("Timeout Seconds: \(controller.settings.hammertime.timeoutSeconds)", value: $controller.settings.hammertime.timeoutSeconds, in: 5...300)
                     .fieldHelp("Maximum time tds waits for each hammertime command before treating enrichment as non-blocking failed data.")
             }
-            Section("Talos Defaults") {
+            SectionCard(title: "Talos Defaults") {
                 HStack {
                     if !controller.availableTalosVersions.isEmpty && !controller.useManualTalosVersion {
                         Picker("Talos Version", selection: Binding(
@@ -1350,7 +1398,7 @@ private struct SettingsRootView: View {
                 Toggle("Render Longhorn extraMounts", isOn: $controller.settings.talos.enableLonghornExtraMounts)
                     .fieldHelp("Adds the /var/lib/longhorn bind mount required by Longhorn on every Talos node.")
             }
-            Section("Talos Image Factory") {
+            SectionCard(title: "Talos Image Factory") {
                 TextField("Factory URL", text: $controller.settings.talos.factory.baseURL)
                     .fieldHelp("Base Image Factory URL for metal ISO and installer artifacts.")
                 TextField("PXE Factory URL", text: $controller.settings.talos.factory.pxeBaseURL)
@@ -1367,7 +1415,7 @@ private struct SettingsRootView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Section("Talos Provisioning") {
+            SectionCard(title: "Talos Provisioning") {
                 Toggle("Allow deployer-hosted media", isOn: $controller.settings.talos.provisioning.allowDeployerHostedMedia)
                     .fieldHelp("Lets tds serve Talos ISO media from the Ubuntu deployer when OOB controllers can reach it.")
                 Toggle("Allow deployer PXE", isOn: $controller.settings.talos.provisioning.allowDeployerPXE)
@@ -1417,7 +1465,7 @@ private struct SettingsRootView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Section("Bootstrap Media") {
+            SectionCard(title: "Bootstrap Media") {
                 Picker("First deployer media delivery", selection: $controller.settings.bootstrapMedia.deliveryMode) {
                     ForEach(BootstrapMediaDeliveryMode.allCases, id: \.self) { mode in
                         Text(mode.rawValue).tag(mode)
@@ -1435,7 +1483,7 @@ private struct SettingsRootView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Section("Deployer Defaults") {
+            SectionCard(title: "Deployer Defaults") {
                 Picker("Access Method", selection: $controller.settings.deployer.accessMethod) {
                     ForEach(DeployerAccessMethod.allCases, id: \.self) { method in
                         Text(method.displayName).tag(method)
@@ -1468,16 +1516,35 @@ private struct SettingsRootView: View {
                 Stepper("Registry Port: \(controller.settings.deployer.registryPort)", value: $controller.settings.deployer.registryPort, in: 1...65535)
                     .fieldHelp("TCP port used by the deployer-hosted OCI registry for Talos installer images.")
             }
-            Section("Safety") {
+            SectionCard(title: "Safety") {
                 Toggle("Require typed confirmation for deployer reinstall", isOn: $controller.settings.safety.requireTypedConfirmationForDeployerReinstall)
                     .fieldHelp("Requires an exact typed phrase before reinstalling the deployer because that action destroys its current OS.")
                 TextField("Confirmation Prefix", text: $controller.settings.safety.destructiveConfirmationTextPrefix)
                     .fieldHelp("Prefix used for destructive reinstall confirmation, combined with the selected deployer name.")
             }
-            Button("Save Settings") {
-                controller.saveSettings()
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
+            Divider()
+            HStack {
+                Text("Settings are saved locally on this workstation.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel Changes") {
+                    controller.reloadSettings()
+                }
+                Button("Save Settings") {
+                    controller.saveSettings()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 12)
+            .background(Color(nsColor: .windowBackgroundColor))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle("Settings")
     }
 }

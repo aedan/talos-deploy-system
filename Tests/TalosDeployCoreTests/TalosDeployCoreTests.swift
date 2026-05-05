@@ -2038,6 +2038,38 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertEqual(controller.binding(for: worker).role, .worker)
     }
 
+    @MainActor
+    func testRefreshInventoryExposesLoadingStateWhileCoreResponds() async throws {
+        let device = DiscoveredDevice(
+            id: "100002",
+            accountNumber: "0000000",
+            name: "100002-lab-controller01.example.test",
+            primaryIP: "198.51.100.20",
+            privateIP: "198.51.100.20",
+            platformName: "HP DL380 G9 OpenStack"
+        )
+        let controller = AppController(
+            settingsController: temporarySettingsController(),
+            authProvider: StaticAuthProvider(),
+            coreClient: SlowCoreClient(devices: [device]),
+            hammertime: StaticHammertimeAdapter(devices: [])
+        )
+        controller.accountNumber = "0000000"
+
+        let refresh = Task {
+            await controller.refreshInventory()
+        }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        XCTAssertTrue(controller.isInventoryLoading)
+        XCTAssertEqual(controller.statusMessage, "Loading devices for account 0000000...")
+
+        await refresh.value
+
+        XCTAssertFalse(controller.isInventoryLoading)
+        XCTAssertEqual(controller.devices.map(\.id), [device.id])
+        XCTAssertTrue(controller.statusMessage.contains("Loaded 1 devices"))
+    }
+
     func testDeployerServicePlanIncludesManagedPackagesAndUnits() {
         let plan = DefaultDeployerHostClient().planDeployerServices(configuration: DeployerMediaServiceConfiguration())
 
@@ -2503,6 +2535,20 @@ private struct StaticCoreClient: CoreClient, EnvironmentCoreSessionProviding {
 
     func discoverEnvironmentSession(includeSecret: Bool) async throws -> EnvironmentCoreSession? {
         nil
+    }
+}
+
+private struct SlowCoreClient: CoreClient {
+    let devices: [DiscoveredDevice]
+    var delayNanoseconds: UInt64 = 100_000_000
+
+    func fetchDevices(accountNumber: String) async throws -> [DiscoveredDevice] {
+        try await Task.sleep(nanoseconds: delayNanoseconds)
+        return devices
+    }
+
+    func fetchDeviceDetails(accountNumber: String, deviceID: String) async throws -> DiscoveredDevice {
+        devices.first(where: { $0.id == deviceID || $0.name == deviceID }) ?? devices[0]
     }
 }
 

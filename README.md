@@ -4,7 +4,7 @@
 
 The deployer is a selected physical server that receives Ubuntu first and then manages Talos artifacts, PXE/media services, machine configs, cluster bootstrap, and health checks. The deployer is not a Talos node.
 
-For the operator walkthrough and full feature/options reference, start with [docs/QUICK_START.md](docs/QUICK_START.md).
+For the operator walkthrough, start with [QUICKSTART.md](QUICKSTART.md). For the full feature/options reference, use [docs/QUICK_START.md](docs/QUICK_START.md).
 
 ## Prerequisites
 
@@ -284,7 +284,7 @@ Evidence to keep in ignored local storage:
 
 ## Release Packaging
 
-Alpha releases are published as GitHub pre-releases. The current pre-alpha release is `v0.1.0-alpha.6`.
+Alpha releases are published as GitHub pre-releases. The current pre-alpha release is `v0.1.0-alpha.7`.
 
 ```bash
 scripts/package-release.sh

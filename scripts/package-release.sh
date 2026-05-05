@@ -17,10 +17,10 @@ swift build --product tds -c "$CONFIGURATION"
 rm -rf "$CLI_STAGE"
 mkdir -p "$CLI_STAGE"
 cp "$CLI_PATH" "$CLI_STAGE/tds"
-for bundle in ".build/$CONFIGURATION"/TDS_*.bundle; do
-  [[ -e "$bundle" ]] || continue
-  cp -R "$bundle" "$CLI_STAGE/"
-done
+CORE_BUNDLE=".build/$CONFIGURATION/TDS_TalosDeployCore.bundle"
+if [[ -d "$CORE_BUNDLE" ]]; then
+  cp -R "$CORE_BUNDLE" "$CLI_STAGE/"
+fi
 
 ditto -c -k --keepParent "$APP_PATH" "$RELEASE_DIR/tds-app-$VERSION-macos.zip"
 ditto -c -k "$CLI_STAGE" "$RELEASE_DIR/tds-cli-$VERSION-macos.zip"

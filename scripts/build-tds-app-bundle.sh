@@ -5,7 +5,13 @@ CONFIGURATION="${CONFIGURATION:-debug}"
 OUTPUT_APP="${1:-build-cache/tds.app}"
 VERSION="${TDS_VERSION:-$(cat VERSION 2>/dev/null || echo 0.1.0-alpha.1)}"
 BUNDLE_SHORT_VERSION="${TDS_BUNDLE_SHORT_VERSION:-${VERSION%%-*}}"
-BUNDLE_BUILD_NUMBER="${TDS_BUNDLE_BUILD_NUMBER:-1}"
+if [[ -n "${TDS_BUNDLE_BUILD_NUMBER:-}" ]]; then
+  BUNDLE_BUILD_NUMBER="$TDS_BUNDLE_BUILD_NUMBER"
+elif [[ "$VERSION" =~ alpha\.([0-9]+)$ ]]; then
+  BUNDLE_BUILD_NUMBER="${BASH_REMATCH[1]}"
+else
+  BUNDLE_BUILD_NUMBER="1"
+fi
 APP_ICON="${TDS_APP_ICON:-Sources/TalosDeployApp/Resources/tds.icns}"
 
 swift build --product tds-app -c "$CONFIGURATION"
@@ -46,7 +52,7 @@ cat >"$OUTPUT_APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleIconFile</key>
-  <string>tds.icns</string>
+  <string>tds</string>
   <key>CFBundleShortVersionString</key>
   <string>__BUNDLE_SHORT_VERSION__</string>
   <key>CFBundleVersion</key>

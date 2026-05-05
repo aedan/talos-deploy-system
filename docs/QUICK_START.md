@@ -2,6 +2,8 @@
 
 This guide explains how to start using `tds`, what each major feature does, and how the deployment engine works end to end. It uses fake account numbers, device IDs, hostnames, and IPs. Put real account data, credentials, generated specs, kubeconfigs, and run captures only in local ignored state.
 
+For the short UI-and-CLI operator walkthrough, see [../QUICKSTART.md](../QUICKSTART.md). This file is the full reference guide.
+
 ## What TDS Does
 
 `tds` is a macOS-first Rackspace bare-metal Talos deployment system. It has two operator surfaces:
@@ -20,43 +22,33 @@ The deployer is not a Talos node. It is the in-environment machine that owns the
 
 ## Fastest Useful Start
 
-Build and smoke-test from source:
-
-```bash
-git clone git@github.com:aedan/talos-deploy-system.git
-cd talos-deploy-system
-swift test
-swift build --product tds
-swift build --product tds-app
-scripts/build-tds-app-bundle.sh build-cache/tds.app
-open build-cache/tds.app
-```
+Open the released `tds.app` for the normal desktop workflow. Use the released `tds` CLI for repeatable checks and automation.
 
 Validate inventory access with fake placeholders replaced locally:
 
 ```bash
-.build/debug/tds login --source hammertime
-.build/debug/tds devices --account 0000000 --source auto --output table
+tds login --source hammertime
+tds devices --account 0000000 --source auto --output table
 ```
 
 Inspect Talos Image Factory versions and artifact URLs:
 
 ```bash
-.build/debug/tds talos versions --output table
-.build/debug/tds talos artifacts --version v1.13.0 --arch amd64 --platform metal
+tds talos versions --output table
+tds talos artifacts --version v1.13.0 --arch amd64 --platform metal
 ```
 
 Dry-run a deployment spec before doing anything destructive:
 
 ```bash
-.build/debug/tds deploy plan --spec examples/deployment-spec.example.json
-.build/debug/tds deploy run --spec examples/deployment-spec.example.json --dry-run true --access auto
+tds deploy plan --spec examples/deployment-spec.example.json
+tds deploy run --spec examples/deployment-spec.example.json --dry-run true --access auto
 ```
 
 Run only when the plan, static networking, deployer access, and OOB media path are known good:
 
 ```bash
-.build/debug/tds deploy run \
+tds deploy run \
   --spec path/to/local-deployment-spec.json \
   --execute true \
   --access auto
@@ -67,8 +59,6 @@ Run only when the plan, static networking, deployer access, and OOB media path a
 Operator workstation:
 
 - macOS 14 or newer.
-- Xcode or Xcode Command Line Tools.
-- Git.
 - Network access to Core, Hammertime-backed Core auth, OOB/iLO/iDRAC paths, and any required proxy or bastion.
 - `ht` when using Hammertime inventory, OOB commands, or Hammertime deployer transport.
 - `xorriso` when building or validating Ubuntu autoinstall ISO media.
