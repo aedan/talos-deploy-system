@@ -27,71 +27,10 @@ struct TalosDeployApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var resolvedApplicationIcon: NSImage?
-    private var dockTileIconView: NSImageView?
-
-    func applicationWillFinishLaunching(_ notification: Notification) {
-        applyApplicationIcon()
-    }
-
     func applicationDidFinishLaunching(_ notification: Notification) {
-        applyApplicationIcon()
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         NSApplication.shared.windows.first?.makeKeyAndOrderFront(nil)
-        applyWindowIcons()
-        DispatchQueue.main.async { [weak self] in
-            self?.applyWindowIcons()
-        }
-    }
-
-    private func applyApplicationIcon() {
-        let executableURL = URL(fileURLWithPath: CommandLine.arguments.first ?? "")
-        let candidates = [
-            Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
-            Bundle.main.url(forResource: "tds", withExtension: "icns"),
-            executableURL
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .appendingPathComponent("Resources/AppIcon.icns"),
-            executableURL
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .appendingPathComponent("Resources/tds.icns"),
-            executableURL
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .appendingPathComponent("Resources/TDS_TalosDeployApp.bundle/tds.icns"),
-            executableURL
-                .deletingLastPathComponent()
-                .appendingPathComponent("TDS_TalosDeployApp.bundle/tds.icns"),
-        ]
-
-        guard let iconURL = candidates.compactMap({ $0 }).first(where: { FileManager.default.fileExists(atPath: $0.path) }),
-              let image = NSImage(contentsOf: iconURL)
-        else { return }
-
-        image.isTemplate = false
-        resolvedApplicationIcon = image
-        NSApp.applicationIconImage = image
-        applyDockTileIcon(image)
-    }
-
-    private func applyWindowIcons() {
-        guard let image = resolvedApplicationIcon ?? NSApp.applicationIconImage else { return }
-        for window in NSApp.windows {
-            window.miniwindowImage = image
-        }
-    }
-
-    private func applyDockTileIcon(_ image: NSImage) {
-        let iconView = NSImageView(frame: NSRect(origin: .zero, size: NSApp.dockTile.size))
-        iconView.image = image
-        iconView.imageScaling = .scaleProportionallyUpOrDown
-        iconView.imageAlignment = .alignCenter
-        dockTileIconView = iconView
-        NSApp.dockTile.contentView = iconView
-        NSApp.dockTile.display()
     }
 }
 

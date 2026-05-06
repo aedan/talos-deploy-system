@@ -4,7 +4,7 @@ set -euo pipefail
 VERSION="${TDS_VERSION:-$(cat VERSION)}"
 CONFIGURATION="${CONFIGURATION:-release}"
 RELEASE_DIR="${RELEASE_DIR:-build-cache/release}"
-APP_PATH="build-cache/tds.app"
+APP_PATH="build-cache/TDS.app"
 CLI_PATH=".build/$CONFIGURATION/tds"
 CLI_STAGE="build-cache/tds-cli"
 
