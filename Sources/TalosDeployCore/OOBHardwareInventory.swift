@@ -58,7 +58,8 @@ public struct HPEIntegratedNICParser: Sendable {
     }
 }
 
-public final class HammertimeOOBHardwareInventoryClient: OOBHardwareInventoryClient, @unchecked Sendable {
+public final class HammertimeOOBHardwareInventoryClient: OOBHardwareInventoryClient {
+    /// Safety: The class is immutable after init. No mutable state is accessed concurrently.
     private let settings: HammertimeSettings
     private let runner: CommandRunning
     private let parser: HPEIntegratedNICParser

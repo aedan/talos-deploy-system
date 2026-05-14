@@ -34,7 +34,9 @@ public enum CoreBridgeError: Error, LocalizedError {
     }
 }
 
-public final class HammertimeBackedCoreClient: CoreClient, EnvironmentCoreSessionProviding, @unchecked Sendable {
+public final class HammertimeBackedCoreClient: CoreClient, EnvironmentCoreSessionProviding {
+    /// Safety: Holds CommandRunning (actor) and JSONDecoder. Both are thread-safe for concurrent use.
+    /// The class is immutable after init.
     private let settings: HammertimeSettings
     private let runner: CommandRunning
     private let decoder: JSONDecoder
@@ -202,7 +204,8 @@ struct CoreBridgeResourceLocator {
     }
 }
 
-public final class ConfiguredCoreClient: CoreClient, EnvironmentCoreSessionProviding, @unchecked Sendable {
+public final class ConfiguredCoreClient: CoreClient, EnvironmentCoreSessionProviding {
+    /// Safety: The class is immutable after init. No mutable state is accessed concurrently.
     private let bridgeClient: HammertimeBackedCoreClient
     private let httpClient: WSCoreClient
 

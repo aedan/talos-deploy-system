@@ -415,7 +415,7 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(bootPatch.contains("      - deviceSelector:\n          hardwareAddr: \"3c:a8:2a:1c:a0:28\""))
     }
 
-    func testStageWritesMaintenanceBundleForDeployerOwnedOperations() async throws {
+  func testStageWritesMaintenanceBundleForDeployerOwnedOperations() async throws {
         let temp = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         let deployer = DiscoveredDevice(id: "deployer", accountNumber: "0000000", name: "deployer-1")
         let cp = talosDevice(primaryIP: "192.0.2.10", privateIP: "198.51.100.10")
@@ -432,7 +432,8 @@ final class TalosDeployCoreTests: XCTestCase {
             ]
         )
 
-        let state = try await DeploymentCoordinator(settings: AppSettings()).stage(spec: spec, at: temp)
+        let coordinator = DeploymentCoordinator(settings: AppSettings())
+        let state = try await coordinator.stage(spec: spec, at: temp)
         let stateDirectory = URL(fileURLWithPath: state.localStateDirectory, isDirectory: true)
         let manifestData = try Data(contentsOf: stateDirectory.appending(path: "maintenance-bundle.json"))
         let decoder = JSONDecoder()
@@ -2067,7 +2068,7 @@ final class TalosDeployCoreTests: XCTestCase {
 
         XCTAssertFalse(controller.isInventoryLoading)
         XCTAssertEqual(controller.devices.map(\.id), [device.id])
-        XCTAssertTrue(controller.statusMessage.contains("Loaded 1 devices"))
+        XCTAssertTrue(controller.statusMessage?.contains("Loaded 1 devices") ?? false)
     }
 
     func testDeployerServicePlanIncludesManagedPackagesAndUnits() {
@@ -2083,7 +2084,10 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(plan.systemdUnits.contains("chrony.service"))
         XCTAssertTrue(plan.onlineInstallCommands.contains { $0.contains("DEBIAN_FRONTEND=noninteractive") })
         XCTAssertTrue(plan.onlineInstallCommands.contains { $0.contains("--no-install-recommends") })
+        XCTAssertTrue(plan.onlineInstallCommands.contains { $0.contains("install kubectl") })
+        XCTAssertTrue(plan.onlineInstallCommands.contains { $0.contains("root login and interactive shell PATH") })
         XCTAssertTrue(plan.cacheFallbackCommands.contains { $0.contains("/var/cache/tds") })
+        XCTAssertTrue(plan.cacheFallbackCommands.contains { $0.contains("/var/cache/tds/kubectl") })
     }
 
     func testPrepareDeployerServicesBoundsAptOperations() async throws {
@@ -2099,6 +2103,12 @@ final class TalosDeployCoreTests: XCTestCase {
         XCTAssertTrue(command.contains("Acquire::http::Timeout=30"))
         XCTAssertTrue(command.contains("timeout 420 apt-get"))
         XCTAssertTrue(command.contains("--no-install-recommends"))
+        XCTAssertTrue(command.contains("https://dl.k8s.io/release/stable.txt"))
+        XCTAssertTrue(command.contains("/usr/local/bin/kubectl"))
+        XCTAssertTrue(command.contains("/usr/local/bin/talosctl"))
+        XCTAssertTrue(command.contains("/etc/profile.d/tds.sh"))
+        XCTAssertTrue(command.contains("/root/.bashrc"))
+        XCTAssertTrue(command.contains("/root/.profile"))
     }
 
     func testPrepareDeployerServicesConfiguresChronyAsNTPServer() async throws {

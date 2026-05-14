@@ -15,9 +15,11 @@ public enum TalosDeploymentExecutionError: Error, LocalizedError, Equatable {
 
 public struct MaintenanceBundleBuilder {
     private let fileManager: FileManager
+    private let bundle: Bundle
 
-    public init(fileManager: FileManager = .default) {
+        public init(fileManager: FileManager = .default, bundle: Bundle = .main) {
         self.fileManager = fileManager
+        self.bundle = bundle
     }
 
     public func writeBundle(for state: DeploymentState, in directory: URL) throws -> MaintenanceBundleManifest {
@@ -29,18 +31,47 @@ public struct MaintenanceBundleBuilder {
         let scripts: [(String, String)] = [
             ("tds-prepare-talos-media.sh", renderPrepareTalosMediaScript(state: state)),
             ("tds-run-talos-deploy.sh", renderTalosDeployScript(state: state)),
-            ("health-check.sh", renderHealthCheckScript(state: state)),
-            ("apply-node.sh", renderApplyNodeScript(state: state)),
-            ("upgrade-talos.sh", renderUpgradeTalosScript(state: state)),
-            ("upgrade-kubernetes.sh", renderUpgradeKubernetesScript(state: state)),
-            ("rotate-configs.sh", renderRotateConfigsScript()),
-            ("collect-logs.sh", renderCollectLogsScript(state: state)),
         ]
 
         for script in scripts {
             let url = maintenanceDirectory.appending(path: script.0)
             try script.1.write(to: url, atomically: true, encoding: .utf8)
             try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        }
+
+     let externalScripts: [(String, String)] = [
+            ("health-check.sh", "talos-health.sh"),
+            ("apply-node.sh", "apply-config.sh"),
+            ("upgrade-talos.sh", "upgrade-talos.sh"),
+            ("upgrade-kubernetes.sh", "upgrade-k8s.sh"),
+            ("rotate-configs.sh", "rotate-configs.sh"),
+            ("collect-logs.sh", "collect-logs.sh"),
+        ]
+
+        for (filename, resourcePath) in externalScripts {
+            let resourceName = resourcePath.replacingOccurrences(of: "maintenance/", with: "")
+            
+            var resourceURL: URL?
+            
+            if bundle.path(forResource: resourceName, ofType: nil) != nil {
+                resourceURL = bundle.url(forResource: resourceName, withExtension: nil)
+            } else if let maintenanceURL = bundle.url(forResource: "maintenance", withExtension: nil) {
+                let candidate = maintenanceURL.appendingPathComponent(resourceName)
+                if fileManager.fileExists(atPath: candidate.path) {
+                    resourceURL = candidate
+                }
+            } else {
+                resourceURL = Bundle.module.url(forResource: resourceName, withExtension: nil, subdirectory: "maintenance")
+            }
+            
+            guard let resourceURL else {
+                continue
+            }
+            let targetURL = maintenanceDirectory.appending(path: filename)
+            if fileManager.fileExists(atPath: targetURL.path) {
+                try fileManager.removeItem(at: targetURL)
+            }
+            try fileManager.copyItem(at: resourceURL, to: targetURL)
         }
 
         let inventoryURL = inventoryDirectory.appending(path: "selected-devices.json")
@@ -683,6 +714,7 @@ public struct MaintenanceBundleBuilder {
 }
 
 public final class TalosDeploymentExecutor: @unchecked Sendable {
+    /// Safety: Uses non-Sendable types (AppSettings, OOBNodeBooting). Thread-safe via isolation.
     private let settings: AppSettings
     private let oobBooter: any OOBNodeBooting
     private let wipeDelayNanoseconds: UInt64
@@ -783,7 +815,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         _ = try await transport.run(waitForBootCommand, timeout: 7200)
         executedActions.append("Confirmed Talos API reachability before installed-disk boot preparation.")
 
-        let diskBoot = try await prepareInstalledDiskBoot(bootableTalosInstalls, state: state, reboot: false)
+        let diskBoot = try await prepareInstalledDiskBoot(bootableTalosInstalls, state: state, reboot: false, cancelToken: nil) { _ in } progressCallback: { _ in }
         executedActions.append(contentsOf: diskBoot.executedActions)
         warnings.append(contentsOf: diskBoot.warnings)
 
@@ -848,14 +880,14 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
             tdsProgress("Reconciling deployer host routes for resume")
             _ = try await transport.run(nodeRouteCommand, timeout: 120)
             executedActions.append("Reconciled deployer host routes to Talos node management IPs.")
-        }
-
+       }
+        
         let waitForBootCommand = renderWaitForTalosBootReadinessCommand(state: state)
         tdsProgress("Waiting for Talos nodes to report live or configured API before detaching OOB media")
         _ = try await transport.run(waitForBootCommand, timeout: 7200)
         executedActions.append("Confirmed Talos API reachability before installed-disk boot preparation.")
-
-        let diskBoot = try await prepareInstalledDiskBoot(bootableTalosInstalls, state: state, reboot: false)
+        
+        let diskBoot = try await prepareInstalledDiskBoot(bootableTalosInstalls, state: state, reboot: false, cancelToken: nil) { _ in } progressCallback: { _ in }
         executedActions.append(contentsOf: diskBoot.executedActions)
         warnings.append(contentsOf: diskBoot.warnings)
 
@@ -890,7 +922,10 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         state: DeploymentState,
         targetDeviceIDs: [String],
         reboot: Bool,
-        dryRun: Bool = false
+        dryRun: Bool = false,
+        cancelToken: CancellationToken? = nil,
+        outputCallback: (@Sendable (String) async -> Void)? = nil,
+        progressCallback: (@Sendable (Double) async -> Void)? = nil
     ) async throws -> TalosProvisioningExecution {
         let normalizedTargets = Set(targetDeviceIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
         let talosInstalls = state.plan.installs.filter { install in
@@ -907,7 +942,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
                 warnings: bootableTalosInstalls.isEmpty ? ["No boot-managed Talos nodes matched the requested disk-boot targets."] : []
             )
         }
-        return try await prepareInstalledDiskBoot(bootableTalosInstalls, state: state, reboot: reboot)
+        return try await prepareInstalledDiskBoot(bootableTalosInstalls, state: state, reboot: reboot, cancelToken: cancelToken, outputCallback: outputCallback, progressCallback: progressCallback)
     }
 
     public func reprovisionNodes(
@@ -990,14 +1025,18 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         )
     }
 
-    private func prepareInstalledDiskBoot(_ talosInstalls: [PlannedDeviceInstall], state: DeploymentState, reboot: Bool) async throws -> TalosProvisioningExecution {
+    private func prepareInstalledDiskBoot(_ talosInstalls: [PlannedDeviceInstall], state: DeploymentState, reboot: Bool, cancelToken: CancellationToken?, outputCallback: (@Sendable (String) async -> Void)?, progressCallback: (@Sendable (Double) async -> Void)?) async throws -> TalosProvisioningExecution {
         var executedActions: [String] = []
         var warnings: [String] = []
         guard !talosInstalls.isEmpty else {
             return TalosProvisioningExecution(warnings: ["No Talos nodes matched the requested installed-disk boot preparation."])
         }
 
+        let totalCount = talosInstalls.count
+        var processedCount = 0
+
         for install in talosInstalls {
+            try cancelToken?.checkCancellation()
             switch install.method {
             case .bootURL, .virtualMedia, .pxe:
                 tdsProgress("Preparing installed-disk boot for \(install.device.name) (\(install.device.id))")
@@ -1011,10 +1050,22 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
                 )
                 let rebootText = result.rebooted ? " and power-cycled" : ""
                 executedActions.append("Prepared installed-disk boot\(rebootText) for \(install.device.name) using \(result.diskBootSource).")
+                await outputCallback?("Prepared installed-disk boot\(rebootText) for \(install.device.name) using \(result.diskBootSource).")
+                processedCount += 1
+                let progress = Double(processedCount) / Double(totalCount)
+                await progressCallback?(progress)
             case .operatorLocalMedia:
                 warnings.append("\(install.device.name) uses operator local media; confirm local media is detached and disk boot is selected before final config apply.")
+                await outputCallback?("Warning: \(install.device.name) uses operator local media; confirm local media is detached and disk boot is selected before final config apply.")
+                processedCount += 1
+                let progress = Double(processedCount) / Double(totalCount)
+                await progressCallback?(progress)
             case .stagedOnly:
                 warnings.append("Skipped installed-disk boot preparation for staged-only node \(install.device.name).")
+                await outputCallback?("Skipped installed-disk boot preparation for staged-only node \(install.device.name).")
+                processedCount += 1
+                let progress = Double(processedCount) / Double(totalCount)
+                await progressCallback?(progress)
             }
         }
 

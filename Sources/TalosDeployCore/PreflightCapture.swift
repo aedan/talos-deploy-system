@@ -11,7 +11,8 @@ public enum PreinstallSnapshotError: Error, LocalizedError {
     }
 }
 
-public final class PreinstallSnapshotCapturer: @unchecked Sendable {
+public final class PreinstallSnapshotCapturer {
+    /// Safety: The class is immutable after init. No mutable state is accessed concurrently.
     private let settings: AppSettings
     private let coreClient: CoreClient
     private let hammertime: HammertimeAdapter

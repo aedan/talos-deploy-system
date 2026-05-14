@@ -7,7 +7,8 @@ public protocol HammertimeAdapter: Sendable {
     func openOOB(deviceID: String, via: String?) async throws -> CommandResult
 }
 
-public final class DefaultHammertimeAdapter: HammertimeAdapter, @unchecked Sendable {
+public final class DefaultHammertimeAdapter: HammertimeAdapter {
+    /// Safety: The class is immutable after init. No mutable state is accessed concurrently.
     private let settings: HammertimeSettings
     private let runner: CommandRunning
 
@@ -436,7 +437,8 @@ public protocol OOBNodeBooting: Sendable {
     func prepareDiskBoot(_ request: OOBDiskBootRequest) async throws -> OOBDiskBootResult
 }
 
-public final class HammertimeOOBBooter: OOBNodeBooting, @unchecked Sendable {
+public final class HammertimeOOBBooter: OOBNodeBooting {
+    /// Safety: The class is immutable after init. No mutable state is accessed concurrently.
     private let settings: HammertimeSettings
     private let runner: CommandRunning
     private let clpResetDelayNanoseconds: UInt64

@@ -45,6 +45,8 @@ public extension DeployerTransport {
 }
 
 public final class DirectSSHDeployerTransport: DeployerTransport, @unchecked Sendable {
+    /// Safety: Holds SSHCommandRouter which is @unchecked Sendable. The router wraps non-Sendable system APIs
+    /// but is designed for concurrent use. The class is immutable after init.
     public let method: DeployerAccessMethod
     public var targetDescription: String {
         "\(connection.user)@\(connection.host)"
@@ -97,7 +99,8 @@ public final class DirectSSHDeployerTransport: DeployerTransport, @unchecked Sen
     }
 }
 
-public final class HammertimeDeployerTransport: DeployerTransport, @unchecked Sendable {
+public final class HammertimeDeployerTransport: DeployerTransport {
+    /// Safety: The class is immutable after init. No mutable state is accessed concurrently.
     public let method: DeployerAccessMethod = .hammertime
     public var targetDescription: String { "hammertime:\(deviceID)" }
 
@@ -364,7 +367,8 @@ public enum DeployerTransportError: Error, LocalizedError {
     }
 }
 
-public final class DeployerTransportResolver: @unchecked Sendable {
+public final class DeployerTransportResolver {
+    /// Safety: The class is immutable after init. No mutable state is accessed concurrently.
     private let settings: AppSettings
     private let runner: CommandRunning
 

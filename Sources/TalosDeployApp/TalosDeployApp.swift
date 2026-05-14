@@ -63,18 +63,24 @@ private struct RootView: View {
                 RecoveryView()
             case .settings:
                 SettingsRootView()
-            }
+           }
         }
         .task {
             await controller.bootstrapSessionStatusIfNeeded()
         }
         .toolbar {
-            ToolbarItem(placement: .status) {
-                Text(controller.statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
+             ToolbarItem(placement: .status) {
+                 Text(controller.statusMessage ?? "")
+                     .font(.caption)
+                     .foregroundStyle(.secondary)
+             }
+         }
+    }
+}
+
+extension View {
+    func centeredContent(maxWidth: CGFloat = 1200) -> some View {
+        self.frame(maxWidth: maxWidth)
     }
 }
 
@@ -117,7 +123,6 @@ private enum SidebarItem: String, CaseIterable, Identifiable {
 
 private struct BootstrapDeployerView: View {
     @EnvironmentObject private var controller: AppController
-    @State private var iloPassword = ""
 
     var body: some View {
         ScrollView {
@@ -224,9 +229,9 @@ private struct BootstrapDeployerView: View {
                     TextField("iLO username", text: $controller.ubuntuOOBUsername)
                         .textFieldStyle(.roundedBorder)
                         .fieldHelp("Username used only for this iLO browser session.")
-                    SecureField("iLO password (not saved)", text: $iloPassword)
-                        .textFieldStyle(.roundedBorder)
-                        .fieldHelp("Password for the current iLO local-media attach; it is intentionally not persisted.")
+                    SecureField("iLO password", text: $controller.temporaryILOPassword)
+                         .textFieldStyle(.roundedBorder)
+                         .fieldHelp("Password for the current iLO local-media attach; persists for the app session.")
                     HStack {
                         Button("Prepare Local Media Session") {
                             controller.planUbuntuLocalMediaSession()
@@ -254,7 +259,7 @@ private struct BootstrapDeployerView: View {
                     IloLocalMediaWebView(
                         urlString: $controller.ubuntuOOBURL,
                         username: $controller.ubuntuOOBUsername,
-                        password: $iloPassword,
+                        password: $controller.temporaryILOPassword,
                         isoPath: controller.ubuntuLastArtifacts?.outputISOPath ?? controller.ubuntuOutputISOPath,
                         accessProfile: controller.defaultOOBAccessProfile,
                         accessProfileProxyPassword: controller.proxyPassword(for: controller.defaultOOBAccessProfile),
@@ -270,6 +275,7 @@ private struct BootstrapDeployerView: View {
                 }
             }
             .padding()
+            .frame(maxWidth: 1200)
         }
         .navigationTitle("Bootstrap Deployer")
     }
@@ -330,6 +336,7 @@ private struct TalosFactoryView: View {
                 }
             }
             .padding()
+            .frame(maxWidth: 1200)
         }
         .navigationTitle("Talos Factory")
     }
@@ -778,37 +785,79 @@ private struct StaticNetworkAdvancedEditor: View {
     @State private var routesJSON = ""
     @State private var vlansJSON = ""
     @State private var bridgesJSON = ""
+    @State private var routesValidationError: String? = nil
+    @State private var vlansValidationError: String? = nil
+    @State private var bridgesValidationError: String? = nil
 
     var body: some View {
-        DisclosureGroup("Advanced Routes, VLANs, And Bridges") {
+        DisclosureGroup("Advanced Routes, VLANs, And Bridges \(controller.hasUnsavedChanges(for: device.id) ? "•" : "")") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Routes JSON")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextEditor(text: $routesJSON)
-                    .font(.system(.caption, design: .monospaced))
-                    .frame(minHeight: 70)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+                VStack(alignment: .leading) {
+                    TextEditor(text: $routesJSON)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 70)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(routesValidationError != nil ? Color.red : Color.secondary.opacity(0.25)))
+                    if let error = routesValidationError {
+                        Label(error, systemImage: "xmark.circle")
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                    } else {
+                        Label("Valid", systemImage: "checkmark.circle")
+                            .foregroundStyle(.green)
+                            .font(.caption)
+                    }
+                }
                 Text("VLAN Interfaces JSON")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextEditor(text: $vlansJSON)
-                    .font(.system(.caption, design: .monospaced))
-                    .frame(minHeight: 90)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+                VStack(alignment: .leading) {
+                    TextEditor(text: $vlansJSON)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 90)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(vlansValidationError != nil ? Color.red : Color.secondary.opacity(0.25)))
+                    if let error = vlansValidationError {
+                        Label(error, systemImage: "xmark.circle")
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                    } else {
+                        Label("Valid", systemImage: "checkmark.circle")
+                            .foregroundStyle(.green)
+                            .font(.caption)
+                    }
+                }
                 Text("Bridge Interfaces JSON")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextEditor(text: $bridgesJSON)
-                    .font(.system(.caption, design: .monospaced))
-                    .frame(minHeight: 90)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
+                VStack(alignment: .leading) {
+                    TextEditor(text: $bridgesJSON)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 90)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(bridgesValidationError != nil ? Color.red : Color.secondary.opacity(0.25)))
+                    if let error = bridgesValidationError {
+                        Label(error, systemImage: "xmark.circle")
+                            .foregroundStyle(.red)
+                            .font(.caption)
+                    } else {
+                        Label("Valid", systemImage: "checkmark.circle")
+                            .foregroundStyle(.green)
+                            .font(.caption)
+                    }
+                }
                 HStack {
                     Button("Reload JSON") {
                         reload()
                     }
                     Button("Apply JSON") {
                         apply()
+                    }
+                    .disabled(!controller.hasUnsavedChanges(for: device.id))
+                    if controller.hasUnsavedChanges(for: device.id) {
+                        Label("Unsaved changes", systemImage: "dot.ring")
+                            .foregroundStyle(.orange)
+                            .font(.caption)
                     }
                 }
             }
@@ -820,13 +869,35 @@ private struct StaticNetworkAdvancedEditor: View {
     }
 
     private func reload() {
-        let config = controller.binding(for: device).staticNetwork
-        routesJSON = prettyJSONString(config.routes)
-        vlansJSON = prettyJSONString(config.vlans)
-        bridgesJSON = prettyJSONString(config.bridges)
+        let config = controller.binding(for: device)
+        routesJSON = prettyJSONString(config.staticNetwork.routes)
+        vlansJSON = prettyJSONString(config.staticNetwork.vlans)
+        bridgesJSON = prettyJSONString(config.staticNetwork.bridges)
+        controller.recordLoadedAssignment(config)
+        validate()
+    }
+
+    private func validate() {
+        routesValidationError = tryValidateJSON([StaticNetworkRoute].self, from: routesJSON)
+        vlansValidationError = tryValidateJSON([NetworkInterface].self, from: vlansJSON)
+        bridgesValidationError = tryValidateJSON([NetworkInterface].self, from: bridgesJSON)
+    }
+
+    private func tryValidateJSON<T: Decodable>(_ type: T.Type, from value: String) -> String? {
+        do {
+            _ = try decodeJSONString(type, from: value)
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
     }
 
     private func apply() {
+        validate()
+        guard routesValidationError == nil, vlansValidationError == nil, bridgesValidationError == nil else {
+            controller.statusMessage = "JSON validation failed. Please fix the errors before applying."
+            return
+        }
         do {
             var updated = controller.binding(for: device)
             updated.staticNetwork.routes = try decodeJSONString([StaticNetworkRoute].self, from: routesJSON)
@@ -848,39 +919,59 @@ private struct DeploymentView: View {
             VStack(alignment: .leading, spacing: 16) {
                 SectionCard(title: "Selected Inventory Deployment") {
                     HStack {
-                        Button("Stage Deployment") {
-                            Task { await controller.stageDeployment() }
-                        }
-                        .fieldHelp("Builds the local deployment state, Talos artifacts, network validation, and deployer maintenance bundle without touching servers.")
+                            Button("Stage Deployment") {
+                                Task { await controller.stageDeployment() }
+                            }
+                            .fieldHelp("Builds the local deployment state, Talos artifacts, network validation, and deployer maintenance bundle without touching servers.")
 
-                        Button("Dry Run") {
-                            Task { await controller.runDeployment(dryRun: true) }
-                        }
-                        .fieldHelp("Plans deployer access, provisioning, and bootstrap actions without running OOB, SSH, Hammertime, or talosctl commands.")
+                            Button("Dry Run") {
+                                Task { await controller.runDeployment(dryRun: true) }
+                            }
+                            .fieldHelp("Plans deployer access, provisioning, and bootstrap actions without running OOB, SSH, Hammertime, or talosctl commands.")
 
-                        Button("Execute Deployment") {
-                            Task { await controller.runDeployment(dryRun: false) }
+                            Button("Execute Deployment") {
+                                if controller.confirmDestructiveAction(
+                                    "Execute Deployment?",
+                                    message: "This will run the full deployment workflow including OOB boot, SSH commands, and talosctl operations. This action cannot be undone."
+                                ) {
+                                    Task { await controller.runDeployment(dryRun: false) }
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .fieldHelp("Runs the full owned workflow: validate deployer access, prepare services, sync state, boot Talos nodes, apply configs, bootstrap, and verify health.")
+                            .disabled(controller.isDeploymentExecuting)
+                            .opacity(controller.isDeploymentExecuting ? 0.7 : 1.0)
+                            if controller.isDeploymentExecuting {
+                                ProgressView()
+                            }
                         }
-                        .buttonStyle(.borderedProminent)
-                        .fieldHelp("Runs the full owned workflow: validate deployer access, prepare services, sync state, boot Talos nodes, apply configs, bootstrap, and verify health.")
-                    }
                 }
 
                 SectionCard(title: "Deployment Spec File") {
                     TextField("deployment-spec.json", text: $controller.deploymentSpecPath)
                         .textFieldStyle(.roundedBorder)
-                    HStack {
-                        Button("Plan Spec") {
-                            Task { await controller.planDeploymentSpecFromPath() }
+                   HStack {
+                            Button("Plan Spec") {
+                                Task { await controller.planDeploymentSpecFromPath() }
+                            }
+                            Button("Dry Run Spec") {
+                                Task { await controller.runDeploymentSpecFromPath(dryRun: true) }
+                            }
+                            Button("Execute Spec") {
+                                if controller.confirmDestructiveAction(
+                                    "Execute Spec?",
+                                    message: "This will execute the deployment from the spec file. This action cannot be undone."
+                                ) {
+                                    Task { await controller.runDeploymentSpecFromPath(dryRun: false) }
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(controller.isSpecExecuting)
+                            .opacity(controller.isSpecExecuting ? 0.7 : 1.0)
+                            if controller.isSpecExecuting {
+                                ProgressView()
+                            }
                         }
-                        Button("Dry Run Spec") {
-                            Task { await controller.runDeploymentSpecFromPath(dryRun: true) }
-                        }
-                        Button("Execute Spec") {
-                            Task { await controller.runDeploymentSpecFromPath(dryRun: false) }
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
                 }
 
                 if let plan = controller.lastPlan {
@@ -898,20 +989,28 @@ private struct DeploymentView: View {
                             .padding(.vertical, 4)
                         }
                     }
-                } else {
-                    Text("No deployment has been staged yet.")
-                        .foregroundStyle(.secondary)
-                }
+                 } else {
+                     Text("No deployment has been staged yet.")
+                         .foregroundStyle(.secondary)
+                 }
 
-                if let run = controller.lastRun {
-                    RunResultView(run: run)
-                }
-            }
-            .padding()
-        }
-        .navigationTitle("Deployment Run")
-    }
-}
+                 if let run = controller.lastRun {
+                     RunResultView(run: run)
+                 }
+                 
+                 if let status = controller.statusMessage {
+                      Text(status)
+                          .font(.caption)
+                          .foregroundStyle(.secondary)
+                          .padding(.top, 8)
+                  }
+              }
+              .padding()
+              .frame(maxWidth: 1200)
+          }
+          .navigationTitle("Deployment Run")
+      }
+  }
 
 private struct DeployerOpsView: View {
     @EnvironmentObject private var controller: AppController
@@ -923,24 +1022,48 @@ private struct DeployerOpsView: View {
                     TextField("Device override, optional", text: $controller.deployerOpsDeviceID)
                         .textFieldStyle(.roundedBorder)
                         .fieldHelp("Blank uses the selected deployer; enter a device ID to match the CLI deployer commands directly.")
-                    HStack {
-                        Button("Plan Services") {
-                            controller.planDeployerServices()
+                  HStack {
+                            Button("Plan Services") {
+                                controller.planDeployerServices()
+                            }
+                            Button("Access Test") {
+                                Task { await controller.testDeployerAccess() }
+                            }
+                            Button("Prepare Services") {
+                                if controller.confirmDestructiveAction(
+                                    "Prepare Deployer Services?",
+                                    message: "This will install and start services on the deployer node. This action cannot be undone."
+                                ) {
+                                    Task { await controller.prepareDeployerServices() }
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(controller.isDeployerServicesExecuting)
+                            .opacity(controller.isDeployerServicesExecuting ? 0.7 : 1.0)
+                            if controller.isDeployerServicesExecuting {
+                                ProgressView()
+                            }
                         }
-                        Button("Access Test") {
-                            Task { await controller.testDeployerAccess() }
-                        }
-                        Button("Prepare Services") {
-                            Task { await controller.prepareDeployerServices() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
                     if let validation = controller.lastDeployerAccessValidation {
-                        Text("Access: \(validation.method.displayName) via \(validation.target)")
-                            .font(.caption)
+                        HStack {
+                            if validation.succeeded {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                                    .frame(width: 16)
+                                Text("Access: \(validation.method.displayName) via \(validation.target)")
+                                    .font(.caption)
+                            } else {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundColor(.red)
+                                    .frame(width: 16)
+                                Text("Access: \(validation.method.displayName) via \(validation.target)")
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                            }
+                        }
                         Text(validation.message)
                             .font(.caption)
-                            .foregroundStyle(validation.succeeded ? Color.secondary : Color.red)
+                            .foregroundStyle(validation.succeeded ? .green : .red)
                     }
                     if let plan = controller.lastDeployerServicePlan {
                         Text("Packages: \(plan.packages.joined(separator: ", "))")
@@ -960,15 +1083,23 @@ private struct DeployerOpsView: View {
                                     .font(.system(.caption, design: .monospaced))
                                     .textSelection(.enabled)
                             }
-                        }
+                       }
                     }
-                }
-            }
-            .padding()
-        }
-        .navigationTitle("Deployer Ops")
-    }
-}
+                    
+                    if let status = controller.statusMessage {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 8)
+                    }
+                  }
+              }
+              .padding()
+              .frame(maxWidth: 1200)
+          }
+          .navigationTitle("Deployer Ops")
+      }
+  }
 
 private struct RecoveryView: View {
     @EnvironmentObject private var controller: AppController
@@ -997,15 +1128,25 @@ private struct RecoveryView: View {
                 }
 
                 SectionCard(title: "Resume") {
-                    HStack {
-                        Button("Resume Dry Run") {
-                            Task { await controller.resumeDeployment(dryRun: true) }
+                  HStack {
+                            Button("Resume Dry Run") {
+                                Task { await controller.resumeDeployment(dryRun: true) }
+                            }
+                            Button("Resume Execute") {
+                                if controller.confirmDestructiveAction(
+                                    "Resume Deployment?",
+                                    message: "This will resume a previously staged deployment. This action cannot be undone."
+                                ) {
+                                    Task { await controller.resumeDeployment(dryRun: false) }
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(controller.isResumeExecuting)
+                            .opacity(controller.isResumeExecuting ? 0.7 : 1.0)
+                            if controller.isResumeExecuting {
+                                ProgressView()
+                            }
                         }
-                        Button("Resume Execute") {
-                            Task { await controller.resumeDeployment(dryRun: false) }
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
                 }
 
                 SectionCard(title: "Reprovision Talos Nodes") {
@@ -1017,9 +1158,19 @@ private struct RecoveryView: View {
                             Task { await controller.reprovisionDeployment(dryRun: true) }
                         }
                         Button("Reprovision Execute") {
-                            Task { await controller.reprovisionDeployment(dryRun: false) }
+                            if controller.confirmDestructiveAction(
+                                "Reprovision Talos Nodes?",
+                                message: "This will reprovision Talos nodes using media boot. This destroys the current Talos installation."
+                            ) {
+                                Task { await controller.reprovisionDeployment(dryRun: false) }
+                            }
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(controller.isReprovisionExecuting)
+                        .opacity(controller.isReprovisionExecuting ? 0.7 : 1.0)
+                        if controller.isReprovisionExecuting {
+                            ProgressView()
+                        }
                     }
                 }
 
@@ -1030,12 +1181,61 @@ private struct RecoveryView: View {
                             Task { await controller.prepareInstalledDiskBoot(dryRun: true) }
                         }
                         Button("Disk Boot Execute") {
-                            Task { await controller.prepareInstalledDiskBoot(dryRun: false) }
+                            if controller.confirmDestructiveAction(
+                                "Installed-Disk Boot?",
+                                message: "This will configure nodes to boot from installed disk. This cannot be undone."
+                            ) {
+                                Task { await controller.prepareInstalledDiskBoot(dryRun: false) }
+                            }
                         }
                         .buttonStyle(.borderedProminent)
+                        .disabled(controller.isDiskBootExecuting)
+                        .opacity(controller.isDiskBootExecuting ? 0.7 : 1.0)
+                        if controller.isDiskBootExecuting {
+                            ProgressView()
+                        }
                     }
                     if let execution = controller.lastDiskBootExecution {
                         ProvisioningExecutionView(execution: execution)
+                    }
+                    
+                    if !controller.operationOutput.isEmpty || controller.operationProgress > 0 {
+                        SectionCard(title: "Operation Log") {
+                            if controller.operationProgress > 0 {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Text("Progress")
+                                        Spacer()
+                                        Text(String(format: "%.0f%%", controller.operationProgress * 100))
+                                    }
+                                    ProgressView(value: controller.operationProgress)
+                                        .progressViewStyle(.linear)
+                                }
+                                .padding(.bottom, 8)
+                            }
+                            
+                            ScrollView(.vertical, showsIndicators: true) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    ForEach(controller.operationOutput, id: \.self) { line in
+                                        Text(line)
+                                            .font(.system(.caption, design: .monospaced))
+                                            .textSelection(.enabled)
+                                    }
+                                }
+                                .padding(.vertical, 8)
+                            }
+                            .frame(height: 150)
+                        }
+                    }
+                    
+                    if controller.isDeploymentExecuting || controller.isSpecExecuting || controller.isDeployerServicesExecuting || controller.isResumeExecuting || controller.isReprovisionExecuting || controller.isDiskBootExecuting {
+                        SectionCard(title: "Operation Control") {
+                            Button("Cancel Current Operation") {
+                                controller.cancelCurrentOperation()
+                            }
+                            .buttonStyle(.bordered)
+                            .foregroundStyle(.red)
+                        }
                     }
                 }
 
@@ -1063,27 +1263,34 @@ private struct RecoveryView: View {
                         }
                     }
                     if let manifest = controller.lastMaintenanceBundle {
-                        Text("Bundle: \(manifest.clusterName) at \(manifest.stateRoot)")
-                            .font(.caption)
-                        Text("Scripts: \(manifest.scripts.joined(separator: ", "))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
+                     Text("Bundle: \(manifest.clusterName) at \(manifest.stateRoot)")
+                          .font(.caption)
+                      Text("Scripts: \(manifest.scripts.joined(separator: ", "))")
+                          .font(.caption)
+                          .foregroundStyle(.secondary)
+                      }
+                  }
 
-                SectionCard(title: "Direct OOB URL Boot") {
-                    DirectOOBBootFields(defaultImageURL: "")
-                }
+                  SectionCard(title: "Direct OOB URL Boot") {
+                      DirectOOBBootFields(defaultImageURL: "")
+                  }
 
-                if let run = controller.lastRun {
-                    RunResultView(run: run)
-                }
-            }
-            .padding()
-        }
-        .navigationTitle("Recovery")
-    }
-}
+                  if let run = controller.lastRun {
+                      RunResultView(run: run)
+                  }
+                  
+                  if let status = controller.statusMessage {
+                      Text(status)
+                          .font(.caption)
+                          .foregroundStyle(.secondary)
+                          .padding(.top, 8)
+                  }
+              }
+              .padding()
+          }
+          .navigationTitle("Recovery")
+      }
+  }
 
 private struct DirectOOBBootFields: View {
     @EnvironmentObject private var controller: AppController
@@ -1192,6 +1399,96 @@ private struct ProvisioningExecutionView: View {
                     .foregroundStyle(.orange)
             }
         }
+    }
+}
+
+private struct OperationHistoryView: View {
+    @EnvironmentObject private var controller: AppController
+
+    private let formatter: DateComponentsFormatter = {
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .abbreviated
+        formatter.allowedUnits = [.hour, .minute, .second]
+        return formatter
+    }()
+
+    var body: some View {
+        SectionCard(title: "Operation History") {
+            if controller.operationHistory.isEmpty {
+                Text("No operations completed yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(controller.operationHistory.reversed()) { entry in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(entry.operationType)
+                                        .font(.caption)
+                                        .fontWeight(.medium)
+                                    Spacer()
+                                    switch entry.status {
+                                    case .completed:
+                                        Text("✓ Completed")
+                                            .font(.caption)
+                                            .foregroundStyle(.green)
+                                    case .failed:
+                                        Text("✗ Failed")
+                                            .font(.caption)
+                                            .foregroundStyle(.red)
+                                    case .canceled:
+                                        Text("⊘ Canceled")
+                                            .font(.caption)
+                                            .foregroundStyle(.orange)
+                                    case .inProgress:
+                                        Text("→ In Progress")
+                                            .font(.caption)
+                                            .foregroundStyle(.blue)
+                                    case .pending:
+                                        Text("• Pending")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Text(entry.startTime, style: .time)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if let message = entry.message {
+                                    Text(message)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                if let endTime = entry.endTime {
+                                    let duration = endTime.timeIntervalSince(entry.startTime)
+                                    if let durationString = formatter.string(from: duration) {
+                                        Text("Duration: \(durationString)")
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 8)
+                            .background {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.gray.opacity(0.1))
+                            }
+                        }
+                    }
+                    .padding(.vertical, 8)
+                }
+                .frame(height: 200)
+            }
+        }
+    }
+
+    private var units: DateComponentsFormatter {
+        let formatter = DateComponentsFormatter()
+        formatter.unitsStyle = .full
+        formatter.allowedUnits = [.minute, .second]
+        formatter.zeroFormattingBehavior = .dropAll
+        return formatter
     }
 }
 
@@ -1522,6 +1819,7 @@ private struct SettingsRootView: View {
             .background(Color(nsColor: .windowBackgroundColor))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: 1200)
         .navigationTitle("Settings")
     }
 }
@@ -1533,49 +1831,49 @@ private struct IloLocalMediaWebView: NSViewRepresentable {
     let isoPath: String
     let accessProfile: AccessProfile?
     let accessProfileProxyPassword: String
-    @Binding var statusMessage: String
+   @Binding var statusMessage: String?
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
+     func makeCoordinator() -> Coordinator {
+         Coordinator(self)
+     }
 
-    func makeNSView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
-        context.coordinator.configureProxy(on: configuration)
-        let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = context.coordinator
-        webView.uiDelegate = context.coordinator
-        webView.allowsBackForwardNavigationGestures = true
-        context.coordinator.loadIfPossible(webView)
-        return webView
-    }
+     func makeNSView(context: Context) -> WKWebView {
+         let configuration = WKWebViewConfiguration()
+         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+         context.coordinator.configureProxy(on: configuration)
+         let webView = WKWebView(frame: .zero, configuration: configuration)
+         webView.navigationDelegate = context.coordinator
+         webView.uiDelegate = context.coordinator
+         webView.allowsBackForwardNavigationGestures = true
+         context.coordinator.loadIfPossible(webView)
+         return webView
+     }
 
-    func updateNSView(_ webView: WKWebView, context: Context) {
-        context.coordinator.parent = self
-        context.coordinator.loadIfPossible(webView)
-    }
+     func updateNSView(_ webView: WKWebView, context: Context) {
+         context.coordinator.parent = self
+         context.coordinator.loadIfPossible(webView)
+     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
-        var parent: IloLocalMediaWebView
-        private var lastLoadedURL = ""
+     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+         var parent: IloLocalMediaWebView
+         private var lastLoadedURL = ""
 
-        init(_ parent: IloLocalMediaWebView) {
-            self.parent = parent
-        }
+         init(_ parent: IloLocalMediaWebView) {
+             self.parent = parent
+         }
 
-        func configureProxy(on configuration: WKWebViewConfiguration) {
-            guard #available(macOS 14.0, *) else { return }
-            guard let profile = parent.accessProfile,
-                  let proxy = WebViewProxyConfiguration(profile: profile, password: parent.accessProfileProxyPassword)
-            else { return }
+         func configureProxy(on configuration: WKWebViewConfiguration) {
+             guard #available(macOS 14.0, *) else { return }
+             guard let profile = parent.accessProfile,
+                   let proxy = WebViewProxyConfiguration(profile: profile, password: parent.accessProfileProxyPassword)
+             else { return }
 
-            let dataStore = WKWebsiteDataStore.nonPersistent()
-            dataStore.proxyConfigurations = [proxy.configuration]
-            configuration.websiteDataStore = dataStore
-        }
+             let dataStore = WKWebsiteDataStore.nonPersistent()
+             dataStore.proxyConfigurations = [proxy.configuration]
+             configuration.websiteDataStore = dataStore
+         }
 
-        func loadIfPossible(_ webView: WKWebView) {
+         func loadIfPossible(_ webView: WKWebView) {
             let raw = parent.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !raw.isEmpty, raw != lastLoadedURL else { return }
             let normalized = raw.hasPrefix("http://") || raw.hasPrefix("https://") ? raw : "https://\(raw)"

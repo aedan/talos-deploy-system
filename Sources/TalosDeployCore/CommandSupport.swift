@@ -43,6 +43,10 @@ public enum CommandError: Error, LocalizedError {
     }
 }
 
+/// Protocol for running local or remote commands.
+/// Conforming types are marked @unchecked Sendable because they wrap non-Sendable system APIs (Process, SSH)
+/// but all conforming types are either stateless after init (delegating to thread-safe APIs)
+/// or protected by their own isolation (e.g., LocalCommandRunner is an actor).
 public protocol CommandRunning: Sendable {
     func run(
         _ executable: String,
@@ -70,7 +74,7 @@ public extension CommandRunning {
     }
 }
 
-public final class LocalCommandRunner: CommandRunning, @unchecked Sendable {
+public actor LocalCommandRunner: CommandRunning {
     public init() {}
 
     public func run(
@@ -164,6 +168,7 @@ public final class LocalCommandRunner: CommandRunning, @unchecked Sendable {
 }
 
 private final class LockedData: @unchecked Sendable {
+    /// Safety: Uses NSLock to protect mutable storage. Thread-safe for concurrent access.
     private let lock = NSLock()
     private var storage = Data()
 
@@ -218,7 +223,8 @@ extension SSHConnection {
     }
 }
 
-public final class SSHCommandRouter: @unchecked Sendable {
+public final class SSHCommandRouter {
+    /// Safety: Wraps non-Sendable system APIs (SSH, Process). Designed for concurrent use.
     private let runner: CommandRunning
 
     public init(runner: CommandRunning = LocalCommandRunner()) {
@@ -250,7 +256,7 @@ public final class SSHCommandRouter: @unchecked Sendable {
         }
         arguments.append(localPath.path + "/")
         arguments.append("\(connection.user)@\(connection.host):\(remotePath)/")
-        _ = try await runner.run("/usr/bin/rsync", arguments: arguments, environment: [:], currentDirectory: nil, timeout: 300)
+        _ = try await runner.run(ShellPath.resolve("rsync", fallback: "/usr/bin/rsync"), arguments: arguments, environment: [:], currentDirectory: nil, timeout: 300)
     }
 
     @discardableResult
@@ -269,7 +275,7 @@ public final class SSHCommandRouter: @unchecked Sendable {
         }
         arguments.append("\(connection.user)@\(connection.host)")
         arguments.append(remoteCommand)
-        return try await runner.run("/usr/bin/ssh", arguments: arguments, environment: [:], currentDirectory: nil, timeout: timeout)
+        return try await runner.run(ShellPath.resolve("ssh", fallback: "/usr/bin/ssh"), arguments: arguments, environment: [:], currentDirectory: nil, timeout: timeout)
     }
 }
 
@@ -281,6 +287,48 @@ func tdsProgress(_ message: String) {
     guard ProcessInfo.processInfo.environment["TDS_PROGRESS"] != "0" else { return }
     let timestamp = ISO8601DateFormatter().string(from: Date())
     FileHandle.standardError.write(Data("[tds] \(timestamp) \(message)\n".utf8))
+}
+
+/// Resolves an executable name to its full path by searching PATH with fallbacks.
+/// This avoids hardcoded paths like `/usr/bin/ssh` that break in non-standard environments
+/// (Nix, Homebrew, custom PATH configurations).
+public struct ShellPath {
+    /// Default fallback paths searched in order when `which` is not available.
+    public static let defaultFallbacks: [String] = [
+        "/usr/bin",
+        "/bin",
+        "/usr/local/bin",
+        "/usr/sbin",
+        "/sbin",
+    ]
+
+    /// Searches PATH for the given executable name, returning the first match or nil.
+    public static func which(_ name: String) -> String? {
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        let directories = path.split(separator: ":").map(String.init)
+        for directory in directories {
+            let candidate = directory + "/" + name
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    /// Returns the resolved path for the given executable, searching PATH first then
+    /// falling back to the provided fallback paths and finally the hardcoded default.
+    public static func resolve(_ name: String, fallback hardcodedDefault: String) -> String {
+        if let found = which(name) {
+            return found
+        }
+        for dir in ShellPath.defaultFallbacks {
+            let candidate = dir + "/" + name
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return hardcodedDefault
+    }
 }
 
 public extension String {

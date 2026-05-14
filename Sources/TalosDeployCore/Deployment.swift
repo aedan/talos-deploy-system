@@ -1,5 +1,63 @@
 import Combine
 import Foundation
+import AppKit
+
+public struct OperationHistoryEntry: Identifiable, Codable, Sendable {
+    public let id: UUID
+    public let operationType: String
+    public let startTime: Date
+    public let endTime: Date?
+    public let status: Status
+    public let message: String?
+
+    public enum Status: String, Codable, Sendable {
+        case pending, inProgress, completed, canceled, failed
+    }
+
+    public init(
+        id: UUID = UUID(),
+        operationType: String,
+        startTime: Date,
+        endTime: Date? = nil,
+        status: Status = .pending,
+        message: String? = nil
+    ) {
+        self.id = id
+        self.operationType = operationType
+        self.startTime = startTime
+        self.endTime = endTime
+        self.status = status
+        self.message = message
+    }
+}
+
+public class CancellationToken: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isCancelled = false
+
+    public func cancel() {
+        lock.lock()
+        isCancelled = true
+        lock.unlock()
+    }
+
+    public func checkCancellation() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        if isCancelled {
+            throw CancellationError()
+        }
+    }
+
+    public init() {}
+}
+
+public extension CancellationToken {
+    static func checkCurrent(_ token: CancellationToken?) throws {
+        guard let token else { return }
+        try token.checkCancellation()
+    }
+}
 
 public protocol AccessProfileManager: Sendable {
     func defaultProfile(from settings: AppSettings) -> AccessProfile
@@ -39,7 +97,8 @@ public protocol RedfishClient: Sendable {
     func probe(device: DiscoveredDevice, accessProfile: AccessProfile?) async throws -> RedfishProbeResult
 }
 
-public final class DefaultRedfishClient: RedfishClient, @unchecked Sendable {
+public final class DefaultRedfishClient: RedfishClient {
+    /// Safety: URLSession is thread-safe for concurrent use. The class is immutable after init.
     private let session: URLSession
 
     public init(session: URLSession = .shared) {
@@ -85,6 +144,8 @@ public protocol DeployerHostClient: Sendable {
 }
 
 public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sendable {
+    /// Safety: Holds SSHCommandRouter which is @unchecked Sendable. The router wraps non-Sendable system APIs
+    /// but is designed for concurrent use. The class is immutable after init.
     private let router: SSHCommandRouter
 
     public init(router: SSHCommandRouter = SSHCommandRouter()) {
@@ -117,10 +178,13 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
                 "DEBIAN_FRONTEND=noninteractive apt-get update",
                 "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \(packages.joined(separator: " "))",
                 "install pinned talosctl \(talosctlVersion) into \(configuration.stateRoot)/bin/talosctl",
+                "install kubectl into \(configuration.stateRoot)/bin/kubectl and link it into /usr/local/bin",
+                "add \(configuration.stateRoot)/bin to root login and interactive shell PATH",
             ],
             cacheFallbackCommands: [
                 "dpkg -i \(configuration.packageCacheRoot)/apt/*.deb || DEBIAN_FRONTEND=noninteractive apt-get -f install -y",
                 "install cached talosctl from \(configuration.packageCacheRoot)/talosctl/",
+                "install cached kubectl from \(configuration.packageCacheRoot)/kubectl/",
             ],
             systemdUnits: [
                 "tds-media-http.service",
@@ -173,9 +237,30 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
         let dnsmasqConfig = renderDnsmasqConfig(configuration: configuration)
         let remoteCommand = """
         set -e
-        sudo mkdir -p \(shellEscape(binRoot)) \(shellEscape(dnsmasqRoot)) \(shellEscape(mediaRoot)) \(shellEscape(logRoot)) \(shellEscape(registryRoot)) \(shellEscape(cacheRoot))/apt \(shellEscape(cacheRoot))/talosctl
+        sudo mkdir -p \(shellEscape(binRoot)) \(shellEscape(dnsmasqRoot)) \(shellEscape(mediaRoot)) \(shellEscape(logRoot)) \(shellEscape(registryRoot)) \(shellEscape(cacheRoot))/apt \(shellEscape(cacheRoot))/talosctl \(shellEscape(cacheRoot))/kubectl /usr/local/bin
         sudo mkdir -p \(shellEscape("\(configuration.stateRoot)/maintenance")) \(shellEscape("\(configuration.stateRoot)/machine-configs")) \(shellEscape("\(configuration.stateRoot)/generated")) \(shellEscape("\(configuration.stateRoot)/run"))
         sudo chown -R "$(id -un):$(id -gn)" \(shellEscape(configuration.stateRoot)) \(shellEscape(cacheRoot)) || true
+        cat > /tmp/tds-path.sh <<'EOF'
+        # Managed by tds. Adds deployer-managed tools such as talosctl and kubectl.
+        TDS_BIN_ROOT=\(shellEscape(binRoot))
+        if [ -z "${PATH:-}" ]; then
+          export PATH="$TDS_BIN_ROOT"
+        else
+          case ":$PATH:" in
+            *:"$TDS_BIN_ROOT":*) ;;
+            *) export PATH="$PATH:$TDS_BIN_ROOT" ;;
+          esac
+        fi
+        EOF
+        sudo install -m 0644 /tmp/tds-path.sh /etc/profile.d/tds.sh
+        rm -f /tmp/tds-path.sh
+        sudo touch /root/.profile /root/.bashrc
+        if ! sudo grep -Fq '. /etc/profile.d/tds.sh' /root/.profile; then
+          printf '\\n# Managed by tds.\\n[ -r /etc/profile.d/tds.sh ] && . /etc/profile.d/tds.sh\\n' | sudo tee -a /root/.profile >/dev/null
+        fi
+        if ! sudo grep -Fq '. /etc/profile.d/tds.sh' /root/.bashrc; then
+          printf '\\n# Managed by tds.\\n[ -r /etc/profile.d/tds.sh ] && . /etc/profile.d/tds.sh\\n' | sudo tee -a /root/.bashrc >/dev/null
+        fi
         if command -v apt-get >/dev/null 2>&1; then
           export DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a
           APT_OPTIONS="-o Dpkg::Use-Pty=0 -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
@@ -200,6 +285,32 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
         elif [ -x \(shellEscape("\(cacheRoot)/talosctl/talosctl")) ]; then
           cp \(shellEscape("\(cacheRoot)/talosctl/talosctl")) \(shellEscape("\(binRoot)/talosctl"))
           chmod 0755 \(shellEscape("\(binRoot)/talosctl"))
+        fi
+        if [ -x \(shellEscape("\(binRoot)/talosctl")) ]; then
+          sudo ln -sf \(shellEscape("\(binRoot)/talosctl")) /usr/local/bin/talosctl || true
+        fi
+        KUBECTL_BIN=\(shellEscape("\(binRoot)/kubectl"))
+        KUBECTL_VERSION=""
+        if [ -s \(shellEscape("\(cacheRoot)/kubectl/version")) ]; then
+          KUBECTL_VERSION="$(tr -d '[:space:]' < \(shellEscape("\(cacheRoot)/kubectl/version")))"
+        fi
+        if [ -z "$KUBECTL_VERSION" ] && command -v curl >/dev/null 2>&1; then
+          KUBECTL_VERSION="$(curl -fsSL https://dl.k8s.io/release/stable.txt 2>/dev/null || true)"
+        fi
+        if [ -n "$KUBECTL_VERSION" ] && command -v curl >/dev/null 2>&1; then
+          rm -f "${KUBECTL_BIN}.tmp"
+          if curl -fsSL -o "${KUBECTL_BIN}.tmp" "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TDS_TALOS_ARCH}/kubectl"; then
+            mv "${KUBECTL_BIN}.tmp" "$KUBECTL_BIN"
+            chmod 0755 "$KUBECTL_BIN"
+          else
+            rm -f "${KUBECTL_BIN}.tmp"
+          fi
+        elif [ -x \(shellEscape("\(cacheRoot)/kubectl/kubectl")) ]; then
+          cp \(shellEscape("\(cacheRoot)/kubectl/kubectl")) "$KUBECTL_BIN"
+          chmod 0755 "$KUBECTL_BIN"
+        fi
+        if [ -x "$KUBECTL_BIN" ]; then
+          sudo ln -sf "$KUBECTL_BIN" /usr/local/bin/kubectl || true
         fi
         cat > \(shellEscape("\(dnsmasqRoot)/tds-dnsmasq.conf")) <<'EOF'
         \(dnsmasqConfig)
@@ -750,6 +861,7 @@ public struct TalosFactoryClient: Sendable {
 }
 
 public final class DefaultTalosBuilder: TalosBuilder, @unchecked Sendable {
+    /// Safety: Uses FileManager which is thread-safe. The class is immutable after init.
     private let fileManager: FileManager
 
     public init(fileManager: FileManager = .default) {
@@ -1630,7 +1742,8 @@ public struct DeploymentPlanner: Sendable {
     }
 }
 
-public final class DeploymentCoordinator: @unchecked Sendable {
+public final class DeploymentCoordinator {
+    /// Safety: The class is immutable after init. No mutable state is accessed concurrently.
     private let settings: AppSettings
     private let builder: TalosBuilder
     private let deployerHostClient: DeployerHostClient
@@ -1657,7 +1770,8 @@ public final class DeploymentCoordinator: @unchecked Sendable {
         self.fileManager = fileManager
     }
 
-    public func stage(spec: DeploymentSpec, at baseDirectory: URL) async throws -> DeploymentState {
+  public func stage(spec: DeploymentSpec, at baseDirectory: URL, bundle: Bundle? = nil) async throws -> DeploymentState {
+        let maintenanceBundle = bundle ?? Self.defaultBundle
         tdsProgress("Staging deployment state for \(spec.clusterName)")
         let enrichment = await enrichSpecForOOBHardwareSelectors(spec)
         let spec = enrichment.spec
@@ -1673,12 +1787,22 @@ public final class DeploymentCoordinator: @unchecked Sendable {
             localStateDirectory: localStateDirectory.path,
             deployerSynchronized: false
         )
-        _ = try MaintenanceBundleBuilder(fileManager: fileManager).writeBundle(for: state, in: localStateDirectory)
+        _ = try MaintenanceBundleBuilder(fileManager: fileManager, bundle: maintenanceBundle).writeBundle(for: state, in: localStateDirectory)
         state.events.append(DeploymentEvent(message: "Maintenance bundle generated for deployer-owned operations."))
         _ = try stateStore.save(state, to: localStateDirectory)
         tdsProgress("Deployment state staged at \(localStateDirectory.path)")
         return state
     }
+    
+    private static let defaultBundle: Bundle = {
+        let mainPath = Bundle.main.bundleURL.appendingPathComponent("TDS_TalosDeployCore.bundle").path
+        let buildPath = "/Users/aedan/Documents/GitHub/talos-deploy-system/.build/arm64-apple-macosx/debug/TDS_TalosDeployCore.bundle"
+        
+        if let bundle = Bundle(path: mainPath) ?? Bundle(path: buildPath) {
+            return bundle
+        }
+        return Bundle.main
+    }()
 
     private func enrichSpecForOOBHardwareSelectors(_ spec: DeploymentSpec) async -> OOBNetworkSelectorEnrichment {
         guard let oobHardwareInventoryClient,
@@ -2173,12 +2297,19 @@ public final class AppController: ObservableObject {
     @Published public var ubuntuLastValidation: UbuntuIsoValidationResult?
     @Published public var ubuntuNetworkPlan: NetworkRebuildPlan?
     @Published public var ubuntuLocalMediaState: LocalMediaSessionState?
+    @Published public var temporaryILOPassword: String
     @Published public var accessProfileProxyPasswords: [UUID: String]
     @Published public var availableTalosVersions: [TalosFactoryVersion]
     @Published public var talosVersionRefreshStatus: String
     @Published public var useManualTalosVersion: Bool
     @Published public var inventoryFilterText: String
     @Published public var isInventoryLoading: Bool
+    @Published public var isDeploymentExecuting: Bool
+    @Published public var isSpecExecuting: Bool
+    @Published public var isDeployerServicesExecuting: Bool
+    @Published public var isResumeExecuting: Bool
+    @Published public var isReprovisionExecuting: Bool
+    @Published public var isDiskBootExecuting: Bool
     @Published public var deploymentSpecPath: String
     @Published public var recoveryStatePath: String
     @Published public var recoveryTargetDeviceIDs: String
@@ -2189,9 +2320,14 @@ public final class AppController: ObservableObject {
     @Published public var directOOBImageURL: String
     @Published public var directOOBOneTimeBoot: String
     @Published public var directOOBReboot: Bool
-    @Published public var statusMessage: String
+      @Published public var statusMessage: String?
+      @Published public var operationOutput: [String]
+      @Published public var operationProgress: Double
+      @Published public var operationHistory: [OperationHistoryEntry]
+      private var currentCancelToken: CancellationToken?
+      private var loadedAssignmentSnapshots: [String: DeviceAssignment] = [:]
 
-    private let settingsController: SettingsController
+     private let settingsController: SettingsController
     private let authProvider: AuthProvider
     private let coreClient: CoreClient
     private let environmentSessionProvider: EnvironmentCoreSessionProviding?
@@ -2247,12 +2383,23 @@ public final class AppController: ObservableObject {
         self.ubuntuSSHKeyFiles = ""
         self.ubuntuOOBURL = ""
         self.ubuntuOOBUsername = ""
+        self.temporaryILOPassword = ""
         self.accessProfileProxyPasswords = Self.loadProxyPasswords(for: loadedSettings.accessProfiles, secretStore: secretStore)
         self.availableTalosVersions = []
         self.talosVersionRefreshStatus = "Talos versions have not been refreshed yet."
         self.useManualTalosVersion = false
         self.inventoryFilterText = ""
         self.isInventoryLoading = false
+        self.isDeploymentExecuting = false
+        self.isSpecExecuting = false
+        self.isDeployerServicesExecuting = false
+        self.isResumeExecuting = false
+        self.isReprovisionExecuting = false
+        self.isDiskBootExecuting = false
+        self.statusMessage = nil
+        self.operationOutput = []
+        self.operationProgress = 0.0
+        self.operationHistory = []
         self.deploymentSpecPath = ""
         self.recoveryStatePath = ""
         self.recoveryTargetDeviceIDs = ""
@@ -2454,13 +2601,16 @@ public final class AppController: ObservableObject {
             }
             devices = loadedDevices
             for device in loadedDevices where assignments[device.id] == nil {
-                assignments[device.id] = defaultAssignment(for: device.id)
+                let assignment = defaultAssignment(for: device.id)
+                assignments[device.id] = assignment
+                loadedAssignmentSnapshots[device.id] = assignment
             }
             for device in loadedDevices where !device.isClusterEligible {
                 var assignment = assignments[device.id] ?? defaultAssignment(for: device.id)
                 assignment.role = .unassigned
                 assignment.shouldInstallOS = false
                 assignments[device.id] = assignment
+                loadedAssignmentSnapshots[device.id] = assignment
             }
             statusMessage = "Loaded \(loadedDevices.count) devices for account \(resolvedAccountNumber), \(clusterEligibleDevices.count) eligible for cluster roles."
         } catch {
@@ -2512,6 +2662,31 @@ public final class AppController: ObservableObject {
 
     public func updateAssignment(_ assignment: DeviceAssignment) {
         assignments[assignment.deviceID] = assignment
+        loadedAssignmentSnapshots.removeValue(forKey: assignment.deviceID)
+    }
+
+    public func refresh() async {
+        await refreshInventory()
+    }
+
+    public func resume() async {
+        guard !isDeploymentExecuting else { return }
+        guard let state = lastState else {
+            statusMessage = "No deployment state to resume. Run a dry-run first."
+            return
+        }
+        statusMessage = "Resuming deployment for \(state.spec.clusterName)..."
+        await runDeployment(dryRun: false)
+    }
+
+    public func recordLoadedAssignment(_ assignment: DeviceAssignment) {
+        loadedAssignmentSnapshots[assignment.deviceID] = assignment
+    }
+
+    public func hasUnsavedChanges(for deviceID: String) -> Bool {
+        guard let loaded = loadedAssignmentSnapshots[deviceID] else { return false }
+        guard let current = assignments[deviceID] else { return false }
+        return loaded != current
     }
 
     public func selectTalosVersion(_ version: String) {
@@ -2655,12 +2830,15 @@ public final class AppController: ObservableObject {
             lastPlan = state.plan
             lastRun = nil
             statusMessage = "Deployment staged at \(state.localStateDirectory)."
+            completeOperation(status: .completed, message: statusMessage)
         } catch {
             statusMessage = error.localizedDescription
+            completeOperation(status: .failed, message: error.localizedDescription)
         }
     }
 
     public func planDeploymentSpecFromPath() async {
+        startOperation("planDeploymentSpecFromPath", message: "Planning deployment spec...")
         do {
             let spec = try loadDeploymentSpec(from: deploymentSpecPath)
             let plan = try DeploymentPlanner(settings: settings).makePlan(spec: spec)
@@ -2668,55 +2846,72 @@ public final class AppController: ObservableObject {
             lastState = nil
             lastRun = nil
             statusMessage = "Planned deployment spec from \(deploymentSpecPath)."
+            completeOperation(status: .completed, message: statusMessage)
         } catch {
             statusMessage = error.localizedDescription
+            completeOperation(status: .failed, message: error.localizedDescription)
         }
     }
 
-    public func runDeploymentSpecFromPath(dryRun: Bool) async {
-        do {
-            let spec = try loadDeploymentSpec(from: deploymentSpecPath)
-            try? paths.ensureExists()
-            let coordinator = DeploymentCoordinator(
-                settings: settings,
-                oobHardwareInventoryClient: makeOOBHardwareInventoryClient()
-            )
-            let state = try await coordinator.stage(spec: spec, at: paths.stateDirectory)
-            let run = try await coordinator.run(state: state, dryRun: dryRun)
-            lastState = run.state
-            lastPlan = run.state.plan
-            lastRun = run
-            statusMessage = dryRun ? "Deployment spec dry run completed." : "Deployment spec execution completed."
-        } catch {
-            statusMessage = error.localizedDescription
-        }
-    }
+   public func runDeploymentSpecFromPath(dryRun: Bool) async {
+  isSpecExecuting = true
+          defer { isSpecExecuting = false }
+          operationOutput = []
+          startOperation("runDeploymentSpecFromPath", message: dryRun ? "Running deployment spec dry run..." : "Running deployment spec...")
+          do {
+              let spec = try loadDeploymentSpec(from: deploymentSpecPath)
+              try? paths.ensureExists()
+              let coordinator = DeploymentCoordinator(
+                  settings: settings,
+                  oobHardwareInventoryClient: makeOOBHardwareInventoryClient()
+              )
+              let state = try await coordinator.stage(spec: spec, at: paths.stateDirectory)
+              let run = try await coordinator.run(state: state, dryRun: dryRun)
+              lastState = run.state
+              lastPlan = run.state.plan
+              lastRun = run
+              statusMessage = dryRun ? "Deployment spec dry run completed." : "Deployment spec execution completed."
+              completeOperation(status: .completed, message: statusMessage)
+          } catch {
+              statusMessage = error.localizedDescription
+              completeOperation(status: .failed, message: error.localizedDescription)
+          }
+      }
 
-    public func runDeployment(dryRun: Bool) async {
-        guard let state = lastState else {
-            await stageDeployment()
-            guard let staged = lastState else { return }
-            await runDeployment(state: staged, dryRun: dryRun)
-            return
-        }
-        await runDeployment(state: state, dryRun: dryRun)
-    }
+ public func runDeployment(dryRun: Bool) async {
+          isDeploymentExecuting = true
+          defer { isDeploymentExecuting = false }
+          operationOutput = []
+          startOperation("runDeployment", message: dryRun ? "Running deployment dry run..." : "Running deployment...")
+          guard let state = lastState else {
+              await stageDeployment()
+              guard let staged = lastState else { 
+                  completeOperation(status: .failed, message: "Failed to stage deployment")
+                  return 
+              }
+              await runDeployment(state: staged, dryRun: dryRun)
+              return
+          }
+          await runDeployment(state: state, dryRun: dryRun)
+      }
 
-    private func runDeployment(state: DeploymentState, dryRun: Bool) async {
-        let coordinator = DeploymentCoordinator(
-            settings: settings,
-            oobHardwareInventoryClient: makeOOBHardwareInventoryClient()
-        )
-        do {
-            let run = try await coordinator.run(state: state, dryRun: dryRun)
-            lastRun = run
-            lastState = run.state
-            lastPlan = run.state.plan
-            statusMessage = dryRun ? "Deployment dry run completed." : "Deployment execution completed."
-        } catch {
-            statusMessage = error.localizedDescription
-        }
-    }
+     private func runDeployment(state: DeploymentState, dryRun: Bool) async {
+         let coordinator = DeploymentCoordinator(
+             settings: settings,
+             oobHardwareInventoryClient: makeOOBHardwareInventoryClient()
+         )
+         do {
+             let run = try await coordinator.run(state: state, dryRun: dryRun)
+             lastRun = run
+             lastState = run.state
+             lastPlan = run.state.plan
+             statusMessage = dryRun ? "Deployment dry run completed." : "Deployment execution completed."
+             completeOperation(status: .completed, message: statusMessage)
+         } catch {
+             statusMessage = error.localizedDescription
+             completeOperation(status: .failed, message: error.localizedDescription)
+         }
+     }
 
     private func deployerServiceConfiguration(talosVersion: String? = nil) -> DeployerMediaServiceConfiguration {
         var configuration = DeployerMediaServiceConfiguration(defaults: settings.deployer)
@@ -2758,23 +2953,29 @@ public final class AppController: ObservableObject {
         }
     }
 
-    public func prepareDeployerServices() async {
-        do {
-            let deployer = try deployerForOperations()
-            let selection = try await DeployerTransportResolver(settings: settings).resolve(
-                request: deployerAccessRequest(for: deployer),
-                deployer: deployer
-            )
-            lastDeployerAccessValidation = selection.validation
-            lastDeployerServicePlan = try await DefaultDeployerHostClient().prepareDeployerServices(
-                configuration: deployerServiceConfiguration(),
-                transport: selection.transport
-            )
-            statusMessage = "Prepared deployer services through \(selection.validation.method.displayName)."
-        } catch {
-            statusMessage = error.localizedDescription
-        }
-    }
+  public func prepareDeployerServices() async {
+          isDeployerServicesExecuting = true
+          defer { isDeployerServicesExecuting = false }
+          operationOutput = []
+          startOperation("prepareDeployerServices", message: "Preparing deployer services...")
+          do {
+              let deployer = try deployerForOperations()
+              let selection = try await DeployerTransportResolver(settings: settings).resolve(
+                  request: deployerAccessRequest(for: deployer),
+                  deployer: deployer
+              )
+              lastDeployerAccessValidation = selection.validation
+              lastDeployerServicePlan = try await DefaultDeployerHostClient().prepareDeployerServices(
+                  configuration: deployerServiceConfiguration(),
+                  transport: selection.transport
+              )
+              statusMessage = "Prepared deployer services through \(selection.validation.method.displayName)."
+              completeOperation(status: .completed, message: "Prepared deployer services through \(selection.validation.method.displayName).")
+          } catch {
+              statusMessage = error.localizedDescription
+              completeOperation(status: .failed, message: error.localizedDescription)
+          }
+      }
 
     public func loadDeploymentStateFromPath() {
         do {
@@ -2788,65 +2989,143 @@ public final class AppController: ObservableObject {
         }
     }
 
-    public func resumeDeployment(dryRun: Bool) async {
-        do {
-            let state = try stateFromRecoveryPathOrLastState()
-            let run = try await DeploymentCoordinator(settings: settings).resumeDeployerExecution(
-                state: state,
-                dryRun: dryRun
-            )
-            lastRun = run
-            lastState = run.state
-            lastPlan = run.state.plan
-            statusMessage = dryRun ? "Resume dry run completed." : "Resume completed."
-        } catch {
-            statusMessage = error.localizedDescription
-        }
-    }
+public func resumeDeployment(dryRun: Bool) async {
+          isResumeExecuting = true
+          defer { isResumeExecuting = false }
+          operationOutput = []
+          startOperation("resumeDeployment", message: dryRun ? "Resuming deployment dry run..." : "Resuming deployment...")
+          do {
+              let state = try stateFromRecoveryPathOrLastState()
+              let run = try await DeploymentCoordinator(settings: settings).resumeDeployerExecution(
+                  state: state,
+                  dryRun: dryRun
+              )
+              lastRun = run
+              lastState = run.state
+              lastPlan = run.state.plan
+              statusMessage = dryRun ? "Resume dry run completed." : "Resume completed."
+              completeOperation(status: .completed, message: statusMessage)
+          } catch {
+              statusMessage = error.localizedDescription
+              completeOperation(status: .failed, message: error.localizedDescription)
+          }
+      }
 
     public func reprovisionDeployment(dryRun: Bool) async {
-        do {
-            let state = try stateFromRecoveryPathOrLastState()
-            let run = try await DeploymentCoordinator(settings: settings).reprovisionTalosNodes(
-                state: state,
-                targetDeviceIDs: targetDeviceIDs(),
-                wipeFirst: recoveryWipeFirst,
-                dryRun: dryRun
-            )
-            lastRun = run
-            lastState = run.state
-            lastPlan = run.state.plan
-            statusMessage = dryRun ? "Reprovision dry run completed." : "Reprovision requests completed."
-        } catch {
-            statusMessage = error.localizedDescription
-        }
-    }
+          isReprovisionExecuting = true
+          defer { isReprovisionExecuting = false }
+          operationOutput = []
+          startOperation("reprovisionDeployment", message: dryRun ? "Reprovisioning Talos nodes dry run..." : "Reprovisioning Talos nodes...")
+          do {
+             let state = try stateFromRecoveryPathOrLastState()
+             let run = try await DeploymentCoordinator(settings: settings).reprovisionTalosNodes(
+                 state: state,
+                 targetDeviceIDs: targetDeviceIDs(),
+                 wipeFirst: recoveryWipeFirst,
+                 dryRun: dryRun
+             )
+             lastRun = run
+             lastState = run.state
+             lastPlan = run.state.plan
+             statusMessage = dryRun ? "Reprovision dry run completed." : "Reprovision requests completed."
+             completeOperation(status: .completed, message: statusMessage)
+         } catch {
+             statusMessage = error.localizedDescription
+             completeOperation(status: .failed, message: error.localizedDescription)
+         }
+     }
 
-    public func prepareInstalledDiskBoot(dryRun: Bool) async {
-        do {
-            let state = try stateFromRecoveryPathOrLastState()
-            let execution = try await TalosDeploymentExecutor(settings: settings).prepareInstalledDiskBoot(
-                state: state,
-                targetDeviceIDs: targetDeviceIDs(),
-                reboot: recoveryRebootAfterDiskBoot,
-                dryRun: dryRun
-            )
-            lastDiskBootExecution = execution
-            statusMessage = dryRun ? "Disk boot dry run completed." : "Installed-disk boot prepared."
-        } catch {
-            statusMessage = error.localizedDescription
+ public func prepareInstalledDiskBoot(dryRun: Bool) async {
+           isDiskBootExecuting = true
+           defer { isDiskBootExecuting = false }
+           operationOutput = []
+           operationProgress = 0.0
+           startOperation("prepareInstalledDiskBoot", message: dryRun ? "Preparing installed-disk boot dry run..." : "Preparing installed-disk boot...")
+           do {
+               let state = try stateFromRecoveryPathOrLastState()
+      let execution = try await TalosDeploymentExecutor(settings: settings).prepareInstalledDiskBoot(
+                    state: state,
+                    targetDeviceIDs: targetDeviceIDs(),
+                    reboot: recoveryRebootAfterDiskBoot,
+                    dryRun: dryRun,
+                    cancelToken: currentCancelToken,
+                    outputCallback: { [weak self] in await self?.appendOperationOutput($0) },
+                    progressCallback: { [weak self] in await self?.updateOperationProgress($0) }
+                )
+               lastDiskBootExecution = execution
+               statusMessage = dryRun ? "Disk boot dry run completed." : "Installed-disk boot prepared."
+               completeOperation(status: .completed, message: statusMessage)
+           } catch {
+               statusMessage = error.localizedDescription
+               completeOperation(status: .failed, message: error.localizedDescription)
+           }
         }
-    }
 
-    public func verifyDeploymentState() {
-        do {
-            let state = try stateFromRecoveryPathOrLastState()
-            lastClusterHealth = DeploymentCoordinator(settings: settings).verify(state: state)
-            statusMessage = "Generated verification command plan."
-        } catch {
-            statusMessage = error.localizedDescription
+     public func clearOperationOutput() {
+         operationOutput = []
+     }
+
+     public func appendOperationOutput(_ line: String) {
+          operationOutput.append(line)
+      }
+
+     public func updateOperationProgress(_ progress: Double) {
+           operationProgress = progress
+       }
+
+      public func startOperation(_ type: String, message: String? = nil) {
+           let entry = OperationHistoryEntry(operationType: type, startTime: Date(), message: message)
+           operationHistory.append(entry)
+           operationProgress = 0.0
+           currentCancelToken = CancellationToken()
+       }
+
+      public func completeOperation(status: OperationHistoryEntry.Status, message: String? = nil) {
+            guard let last = operationHistory.last, last.status == .pending || last.status == .inProgress else { return }
+            let index = operationHistory.firstIndex(where: { $0.id == last.id })!
+            operationHistory[index] = OperationHistoryEntry(
+                id: last.id,
+                operationType: last.operationType,
+                startTime: last.startTime,
+                endTime: Date(),
+                status: status,
+                message: message ?? last.message
+            )
+            currentCancelToken = nil
+            showSystemNotification(for: status, operationType: last.operationType, message: message ?? last.message)
         }
-    }
+
+      public func cancelCurrentOperation() {
+            currentCancelToken?.cancel()
+        }
+
+       private func showSystemNotification(for status: OperationHistoryEntry.Status, operationType: String, message: String?) {
+            guard status == .completed || status == .failed else { return }
+            
+            let notification = NSUserNotification()
+            notification.identifier = UUID().uuidString
+            notification.title = status == .completed ? "Operation Completed" : "Operation Failed"
+            notification.subtitle = operationType
+            notification.informativeText = message ?? "See the Operation Log for details."
+            
+            if status == .completed {
+                notification.soundName = NSUserNotificationDefaultSoundName
+            } else {
+                notification.soundName = "NSUserNotificationDefaultSoundName"
+            }
+            
+            NSUserNotificationCenter.default.scheduleNotification(notification)
+        }
+
+       public func verifyDeploymentState() {
+         do {
+             let state = try stateFromRecoveryPathOrLastState()
+             lastClusterHealth = DeploymentCoordinator(settings: settings).verify(state: state)
+             statusMessage = "Generated verification command plan."
+         } catch {
+             statusMessage = error.localizedDescription
+         }
+     }
 
     public func writeMaintenanceBundle() {
         do {
@@ -3050,6 +3329,16 @@ public final class AppController: ObservableObject {
             }
         }
         return Array(Set(keys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).sorted()
+    }
+
+    public func confirmDestructiveAction(_ title: String, message: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Confirm")
+        return alert.runModal() == .alertSecondButtonReturn
     }
 }
 

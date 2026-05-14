@@ -68,7 +68,7 @@ Deployer:
 - Ubuntu 24.04, either preexisting or installed by generated TDS media.
 - SSH reachable by direct SSH, SSH ProxyJump, or Hammertime.
 - Network reachability to Talos node management IPs on the final management network.
-- Package access or cached packages for deployer-managed tools: `dnsmasq`, `python3`, `openssh-client`, `xorriso`, `docker-registry`, `skopeo`, `chrony`, and `curl`.
+- Package access or cached packages for deployer-managed tools: `dnsmasq`, `python3`, `openssh-client`, `xorriso`, `docker-registry`, `skopeo`, `chrony`, `curl`, `talosctl`, and `kubectl`.
 - Ability to host HTTP media on the address the OOB controllers can fetch.
 - Ability to host an OCI registry on an address Talos nodes can reach, if Talos nodes do not have Internet access.
 
@@ -262,6 +262,8 @@ After Ubuntu is reachable, TDS prepares deployer services:
 - `skopeo` for copying images into the deployer registry.
 - `chrony` so Talos nodes can sync time from the deployer.
 - Pinned or configured `talosctl`.
+- `kubectl`, installed under the TDS state root and symlinked into `/usr/local/bin`.
+- A root shell PATH profile snippet so `/var/lib/talos-deploy/bin` tools can be run by name after login.
 
 Deployer state is stored under:
 
@@ -559,6 +561,17 @@ The deployer maintenance bundle includes:
 - `talos-artifacts.json`
 
 This bundle is the practical runbook on the deployer. It is useful for debugging and for future maintenance after the initial deployment.
+
+To inspect the cluster from the deployer after bootstrap, log in to the deployer and use the kubeconfig in the durable state directory:
+
+```bash
+cd /var/lib/talos-deploy/<account>/<cluster>
+export KUBECONFIG="$PWD/kubeconfig"
+kubectl get nodes -o wide
+kubectl get pods -A
+```
+
+TDS adds the deployer bin directory to root shell startup files, so a fresh root login can run `kubectl` and `talosctl` by name.
 
 ## OpenStack Lab Harness
 

@@ -21,12 +21,13 @@ let package = Package(
         ),
     ],
     targets: [
-        .target(
-            name: "TalosDeployCore",
-            resources: [
-                .copy("Resources/core_bridge.py"),
-            ]
-        ),
+       .target(
+             name: "TalosDeployCore",
+             resources: [
+                 .copy("Resources/core_bridge.py"),
+                 .copy("Resources/maintenance"),
+             ]
+         ),
         .executableTarget(
             name: "TalosDeployCLI",
             dependencies: ["TalosDeployCore"]
@@ -38,9 +39,11 @@ let package = Package(
                 .copy("Resources/tds.icns"),
             ]
         ),
-        .testTarget(
-            name: "TalosDeployCoreTests",
-            dependencies: ["TalosDeployCore"]
-        ),
+      .testTarget(
+             name: "TalosDeployCoreTests",
+             dependencies: ["TalosDeployCore"],
+             resources: [
+             ]
+         ),
     ]
 )

@@ -17,7 +17,7 @@ For the operator walkthrough, start with [QUICKSTART.md](QUICKSTART.md). For the
 - `xorriso` for Ubuntu autoinstall ISO rebuild and validation.
 - Stock Ubuntu 24.04 server ISO for deployer bootstrap installs.
 - SSH access to the Ubuntu deployer after install for service preparation and Talos execution.
-- Ubuntu package access or a prepared package cache for deployer-managed packages such as `dnsmasq`, `xorriso`, `docker-registry`, and `skopeo`.
+- Ubuntu package access or a prepared package cache for deployer-managed packages/tools such as `dnsmasq`, `xorriso`, `docker-registry`, `skopeo`, `talosctl`, and `kubectl`.
 - `TDS_RACK_PASSWORD_HASH` and `TDS_ROOT_PASSWORD_HASH`, or equivalent secure UI input, when building Ubuntu deployer media.
 - Optional access-profile credentials for HTTP/SOCKS proxies or bastions that reach OOB networks.
 
@@ -130,6 +130,7 @@ Deployer Defaults:
 Deployer Ownership:
 
 - `tds` validates the selected access path, prepares services, syncs generated state, boots Talos nodes, runs `talosctl` from the deployer, and leaves maintenance state under `/var/lib/talos-deploy/<account>/<cluster>/`.
+- After bootstrap, operators can log into the deployer, `cd` into that state directory, export `KUBECONFIG="$PWD/kubeconfig"`, and run `kubectl`. TDS adds the deployer bin directory to root's shell `PATH`.
 - The deployer copy is the operational source for future maintenance. The workstation copy exists for UI resume and debugging.
 - Maintenance scripts include health checks, per-node apply, Talos/Kubernetes upgrade helpers, config rotation, and log collection.
 

@@ -7,6 +7,7 @@ public protocol AuthProvider: Sendable {
 }
 
 public final class KeychainAuthProvider: AuthProvider, @unchecked Sendable {
+    /// Safety: Uses Keychain which is thread-safe. The class is immutable after init.
     private let sessionStore: CoreSessionStore
 
     public init(sessionStore: CoreSessionStore = CoreSessionStore()) {
@@ -60,6 +61,7 @@ public enum CoreClientError: Error, LocalizedError {
 }
 
 public final class WSCoreClient: CoreClient, @unchecked Sendable {
+    /// Safety: Uses URLSession which is thread-safe. The class is immutable after init.
     private let settings: CoreAPISettings
     private let sessionStore: CoreSessionStore
     private let urlSession: URLSession

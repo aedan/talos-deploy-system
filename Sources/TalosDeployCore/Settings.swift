@@ -32,7 +32,9 @@ public struct AppPaths: Sendable {
     }
 }
 
-public final class JSONFileStore<Value: Codable & Sendable>: @unchecked Sendable {
+public final class JSONFileStore<Value: Codable & Sendable> {
+    /// Safety: Uses FileManager which is thread-safe. File operations are synchronous but isolated per instance.
+    /// The class is immutable after init.
     private let url: URL
     private let fileManager: FileManager
     private let encoder: JSONEncoder
@@ -66,7 +68,8 @@ public final class JSONFileStore<Value: Codable & Sendable>: @unchecked Sendable
     public var fileURL: URL { url }
 }
 
-public final class SettingsController: @unchecked Sendable {
+public final class SettingsController {
+    /// Safety: The class is immutable after init. No mutable state is accessed concurrently.
     private let store: JSONFileStore<AppSettings>
 
     public init(paths: AppPaths = AppPaths()) {
@@ -108,7 +111,8 @@ public enum SecretStoreError: Error, LocalizedError {
     }
 }
 
-public final class KeychainSecretStore: @unchecked Sendable {
+public final class KeychainSecretStore {
+    /// Safety: Uses Keychain which is thread-safe. The class is immutable after init.
     private let service: String
 
     public init(service: String = "com.aedan.tds") {
@@ -171,6 +175,7 @@ public final class KeychainSecretStore: @unchecked Sendable {
 }
 
 public final class CoreSessionStore: @unchecked Sendable {
+    /// Safety: Uses NSLock internally via JSONFileStore and Keychain which are thread-safe.
     private let metadataStore: JSONFileStore<CoreSession?>
     private let secretStore: KeychainSecretStore
 
@@ -204,6 +209,7 @@ public final class CoreSessionStore: @unchecked Sendable {
 }
 
 public final class DeploymentStateStore: @unchecked Sendable {
+    /// Safety: The class is immutable after init. No mutable state is accessed concurrently.
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
     private let fileManager: FileManager

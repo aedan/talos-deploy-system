@@ -1496,44 +1496,48 @@ public struct CoreSession: Codable, Equatable, Sendable {
     }
 }
 
-public struct AppSettings: Codable, Equatable, Sendable {
-    public var core: CoreAPISettings
-    public var hammertime: HammertimeSettings
-    public var talos: TalosDefaults
-    public var deployer: DeployerDefaults
-    public var bootstrapMedia: BootstrapMediaDefaults
-    public var safety: SafetySettings
-    public var accessProfiles: [AccessProfile]
+   public struct AppSettings: Codable, Equatable, Sendable {
+        public var core: CoreAPISettings
+        public var hammertime: HammertimeSettings
+        public var talos: TalosDefaults
+        public var deployer: DeployerDefaults
+        public var bootstrapMedia: BootstrapMediaDefaults
+        public var safety: SafetySettings
+        public var accessProfiles: [AccessProfile]
+        public var deploymentSpecPath: String
 
-    public init(
-        core: CoreAPISettings = CoreAPISettings(),
-        hammertime: HammertimeSettings = HammertimeSettings(),
-        talos: TalosDefaults = TalosDefaults(),
-        deployer: DeployerDefaults = DeployerDefaults(),
-        bootstrapMedia: BootstrapMediaDefaults = BootstrapMediaDefaults(),
-        safety: SafetySettings = SafetySettings(),
-        accessProfiles: [AccessProfile] = [.directDefault]
-    ) {
-        self.core = core
-        self.hammertime = hammertime
-        self.talos = talos
-        self.deployer = deployer
-        self.bootstrapMedia = bootstrapMedia
-        self.safety = safety
-        self.accessProfiles = accessProfiles
+        public init(
+            core: CoreAPISettings = CoreAPISettings(),
+            hammertime: HammertimeSettings = HammertimeSettings(),
+            talos: TalosDefaults = TalosDefaults(),
+            deployer: DeployerDefaults = DeployerDefaults(),
+            bootstrapMedia: BootstrapMediaDefaults = BootstrapMediaDefaults(),
+            safety: SafetySettings = SafetySettings(),
+            accessProfiles: [AccessProfile] = [.directDefault],
+            deploymentSpecPath: String = ""
+        ) {
+            self.core = core
+            self.hammertime = hammertime
+            self.talos = talos
+            self.deployer = deployer
+            self.bootstrapMedia = bootstrapMedia
+            self.safety = safety
+            self.accessProfiles = accessProfiles
+            self.deploymentSpecPath = deploymentSpecPath
+        }
     }
-}
 
-extension AppSettings {
-    enum CodingKeys: String, CodingKey {
-        case core
-        case hammertime
-        case talos
-        case deployer
-        case bootstrapMedia
-        case safety
-        case accessProfiles
-    }
+    extension AppSettings {
+        enum CodingKeys: String, CodingKey {
+            case core
+            case hammertime
+            case talos
+            case deployer
+            case bootstrapMedia
+            case safety
+            case accessProfiles
+            case deploymentSpecPath
+        }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -1544,6 +1548,7 @@ extension AppSettings {
         self.bootstrapMedia = try container.decodeIfPresent(BootstrapMediaDefaults.self, forKey: .bootstrapMedia) ?? BootstrapMediaDefaults()
         self.safety = try container.decodeIfPresent(SafetySettings.self, forKey: .safety) ?? SafetySettings()
         self.accessProfiles = try container.decodeIfPresent([AccessProfile].self, forKey: .accessProfiles) ?? [.directDefault]
+        self.deploymentSpecPath = try container.decodeIfPresent(String.self, forKey: .deploymentSpecPath) ?? ""
     }
 }
 

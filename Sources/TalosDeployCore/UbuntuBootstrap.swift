@@ -284,7 +284,8 @@ public struct UbuntuAutoinstallArtifacts: Codable, Equatable, Sendable {
     }
 }
 
-public final class UbuntuAutoinstallBuilder: @unchecked Sendable {
+public final class UbuntuAutoinstallBuilder {
+    /// Safety: The class is immutable after init. No mutable state is accessed concurrently.
     private let runner: CommandRunning
     private let fileManager: FileManager
     private let scriptPath: String
@@ -467,7 +468,7 @@ public final class UbuntuAutoinstallBuilder: @unchecked Sendable {
         }
 
         _ = try await runner.run(
-            "/bin/bash",
+            ShellPath.resolve("bash", fallback: "/bin/bash"),
             arguments: arguments,
             environment: [:],
             currentDirectory: nil,
@@ -498,7 +499,7 @@ public final class UbuntuAutoinstallBuilder: @unchecked Sendable {
         for (source, destination) in extract {
             do {
                 _ = try await runner.run(
-                    "/usr/bin/env",
+                    ShellPath.resolve("env", fallback: "/usr/bin/env"),
                     arguments: ["xorriso", "-osirrox", "on", "-indev", isoPath, "-extract", source, destination.path],
                     environment: [:],
                     currentDirectory: nil,
@@ -629,7 +630,8 @@ public struct DeployerBootstrapRun: Codable, Equatable, Sendable {
     }
 }
 
-public final class BootstrapDeployerInstaller: @unchecked Sendable {
+public final class BootstrapDeployerInstaller {
+    /// Safety: The class is immutable after init. No mutable state is accessed concurrently.
     private let builder: UbuntuAutoinstallBuilder
     private let localMediaSession: LocalMediaSession
 
