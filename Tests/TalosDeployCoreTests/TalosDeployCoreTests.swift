@@ -2098,7 +2098,7 @@ final class TalosDeployCoreTests: XCTestCase {
             transport: transport
         )
 
-        let command = try XCTUnwrap(transport.commands.first)
+        let command = try XCTUnwrap(transport.scriptCommands.first)
         XCTAssertTrue(command.contains("DEBIAN_FRONTEND=noninteractive"))
         XCTAssertTrue(command.contains("Acquire::http::Timeout=30"))
         XCTAssertTrue(command.contains("timeout 420 apt-get"))
@@ -2119,7 +2119,7 @@ final class TalosDeployCoreTests: XCTestCase {
             transport: transport
         )
 
-        let command = try XCTUnwrap(transport.commands.first)
+        let command = try XCTUnwrap(transport.scriptCommands.first)
         XCTAssertTrue(command.contains("port 123"))
         XCTAssertTrue(command.contains("allow 172.16.0.0/12"))
         XCTAssertTrue(command.contains("systemctl enable --now chrony"))
@@ -2133,7 +2133,7 @@ final class TalosDeployCoreTests: XCTestCase {
             transport: transport
         )
 
-        let command = try XCTUnwrap(transport.commands.first)
+        let command = try XCTUnwrap(transport.scriptCommands.first)
         XCTAssertTrue(command.contains("port=53"))
         XCTAssertTrue(command.contains("bind-interfaces"))
         XCTAssertTrue(command.contains("listen-address=198.51.100.20"))
@@ -2640,8 +2640,9 @@ private final class RecordingDeployerTransport: DeployerTransport, @unchecked Se
         )
     }
 
-    func run(_ remoteCommand: String, timeout: TimeInterval?) async throws -> CommandResult {
-        commands.append(remoteCommand)
+    func run(_ remoteCommand: String, asRoot: Bool, timeout: TimeInterval?) async throws -> CommandResult {
+        let prefixed = asRoot ? "sudo \(remoteCommand)" : remoteCommand
+        commands.append(prefixed)
         return CommandResult(executable: "recording", arguments: [], stdout: "", stderr: "", exitCode: 0)
     }
 

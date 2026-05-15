@@ -750,15 +750,15 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         let nodeRouteCommand = renderTalosNodeRouteCommand(state: state)
         let startMediaCommand = renderStartMediaCommand(state: state, configuration: configuration)
         tdsProgress("Preparing deployer-hosted Talos ISO and media service")
-        _ = try await transport.run(startMediaCommand, timeout: 900)
-        tdsProgress("Deployer-hosted Talos media service is ready")
-        executedActions.append("Prepared deployer-hosted Talos media at \(talosISOPath).")
-        if !nodeRouteCommand.isEmpty {
-            tdsProgress("Reconciling deployer host routes to Talos nodes")
-            _ = try await transport.run(nodeRouteCommand, timeout: 120)
-            tdsProgress("Deployer host routes to Talos nodes are reconciled")
-            executedActions.append("Reconciled deployer host routes to Talos node management IPs.")
-        }
+         _ = try await transport.run(startMediaCommand, asRoot: true, timeout: 900)
+         tdsProgress("Deployer-hosted Talos media service is ready")
+         executedActions.append("Prepared deployer-hosted Talos media at \(talosISOPath).")
+         if !nodeRouteCommand.isEmpty {
+             tdsProgress("Reconciling deployer host routes to Talos nodes")
+             _ = try await transport.run(nodeRouteCommand, asRoot: true, timeout: 120)
+             tdsProgress("Deployer host routes to Talos nodes are reconciled")
+             executedActions.append("Reconciled deployer host routes to Talos node management IPs.")
+         }
         if mediaBaseURL.isEmpty {
             warnings.append("No deployer media address is configured; OOB boot URL actions must use PXE, direct virtual media, or operator local media.")
         }
@@ -770,14 +770,14 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         ./maintenance/tds-prepare-talos-media.sh
         """
         tdsProgress("Generating node-specific Talos machine configs and boot media")
-        _ = try await transport.run(prepareMediaCommand, timeout: 1800)
+        _ = try await transport.run(prepareMediaCommand, asRoot: false, timeout: 1800)
         tdsProgress("Node-specific Talos boot media generated")
         executedActions.append("Generated node-specific Talos boot media with embedded machine configs.")
         if !registryCacheCommand.isEmpty {
-            tdsProgress("Caching Talos installer and cluster images in deployer registry")
-            _ = try await transport.run(registryCacheCommand, timeout: 3600)
-            tdsProgress("Talos installer and cluster images are cached in deployer registry")
-            executedActions.append("Cached Talos installer and cluster images in deployer registry at \(registryInstallerImage ?? "configured registry").")
+             tdsProgress("Caching Talos installer and cluster images in deployer registry")
+             _ = try await transport.run(registryCacheCommand, asRoot: true, timeout: 3600)
+             tdsProgress("Talos installer and cluster images are cached in deployer registry")
+             executedActions.append("Cached Talos installer and cluster images in deployer registry at \(registryInstallerImage ?? "configured registry").")
             if !state.spec.talosProvisioning.deployerRegistryAddressCIDR.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 executedActions.append("Ensured deployer node-facing registry address \(state.spec.talosProvisioning.deployerRegistryAddressCIDR).")
             }
@@ -812,7 +812,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
 
         let waitForBootCommand = renderWaitForTalosBootReadinessCommand(state: state)
         tdsProgress("Waiting for Talos nodes to finish live boot before detaching OOB media")
-        _ = try await transport.run(waitForBootCommand, timeout: 7200)
+        _ = try await transport.run(waitForBootCommand, asRoot: false, timeout: 7200)
         executedActions.append("Confirmed Talos API reachability before installed-disk boot preparation.")
 
         let diskBoot = try await prepareInstalledDiskBoot(bootableTalosInstalls, state: state, reboot: false, cancelToken: nil) { _ in } progressCallback: { _ in }
@@ -825,7 +825,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         ./maintenance/tds-run-talos-deploy.sh
         """
         tdsProgress("Running deployer-owned Talos apply/bootstrap/health script")
-        _ = try await transport.run(bootstrapCommand, timeout: 3600)
+        _ = try await transport.run(bootstrapCommand, asRoot: false, timeout: 3600)
         tdsProgress("Deployer-owned Talos apply/bootstrap/health script completed")
         executedActions.append("Ran deployer-owned Talos apply/bootstrap/health script.")
 
@@ -859,32 +859,32 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         )
         let nodeRouteCommand = renderTalosNodeRouteCommand(state: state)
         let startMediaCommand = renderStartMediaCommand(state: state, configuration: configuration)
-        tdsProgress("Restarting deployer-hosted media service for resume")
-        _ = try await transport.run(startMediaCommand, timeout: 900)
-        executedActions.append("Restarted deployer-hosted Talos media service for resume.")
-        let prepareMediaCommand = """
-        cd \(shellEscape(state.plan.durableStateDirectory)) && \\
-        TDS_MEDIA_ROOT=\(shellEscape(configuration.mediaRoot)) \\
-        TDS_TALOS_VERSION=\(shellEscape(state.spec.talosVersion)) \\
-        ./maintenance/tds-prepare-talos-media.sh
-        """
-        tdsProgress("Regenerating node-specific Talos machine configs and boot media for resume")
-        _ = try await transport.run(prepareMediaCommand, timeout: 1800)
-        executedActions.append("Regenerated node-specific Talos boot media and machine configs for resume.")
-        if !registryCacheCommand.isEmpty {
-            tdsProgress("Revalidating deployer registry cache for resume")
-            _ = try await transport.run(registryCacheCommand, timeout: 3600)
-            executedActions.append("Revalidated Talos installer and cluster image cache in deployer registry.")
-        }
-        if !nodeRouteCommand.isEmpty {
-            tdsProgress("Reconciling deployer host routes for resume")
-            _ = try await transport.run(nodeRouteCommand, timeout: 120)
-            executedActions.append("Reconciled deployer host routes to Talos node management IPs.")
-       }
+       tdsProgress("Restarting deployer-hosted media service for resume")
+         _ = try await transport.run(startMediaCommand, asRoot: true, timeout: 900)
+         executedActions.append("Restarted deployer-hosted Talos media service for resume.")
+         let prepareMediaCommand = """
+         cd \(shellEscape(state.plan.durableStateDirectory)) && \\
+         TDS_MEDIA_ROOT=\(shellEscape(configuration.mediaRoot)) \\
+         TDS_TALOS_VERSION=\(shellEscape(state.spec.talosVersion)) \\
+         ./maintenance/tds-prepare-talos-media.sh
+         """
+         tdsProgress("Regenerating node-specific Talos machine configs and boot media for resume")
+         _ = try await transport.run(prepareMediaCommand, asRoot: false, timeout: 1800)
+         executedActions.append("Regenerated node-specific Talos boot media and machine configs for resume.")
+         if !registryCacheCommand.isEmpty {
+             tdsProgress("Revalidating deployer registry cache for resume")
+             _ = try await transport.run(registryCacheCommand, asRoot: true, timeout: 3600)
+             executedActions.append("Revalidated Talos installer and cluster image cache in deployer registry.")
+         }
+         if !nodeRouteCommand.isEmpty {
+             tdsProgress("Reconciling deployer host routes for resume")
+             _ = try await transport.run(nodeRouteCommand, asRoot: true, timeout: 120)
+             executedActions.append("Reconciled deployer host routes to Talos node management IPs.")
+         }
         
         let waitForBootCommand = renderWaitForTalosBootReadinessCommand(state: state)
         tdsProgress("Waiting for Talos nodes to report live or configured API before detaching OOB media")
-        _ = try await transport.run(waitForBootCommand, timeout: 7200)
+        _ = try await transport.run(waitForBootCommand, asRoot: false, timeout: 7200)
         executedActions.append("Confirmed Talos API reachability before installed-disk boot preparation.")
         
         let diskBoot = try await prepareInstalledDiskBoot(bootableTalosInstalls, state: state, reboot: false, cancelToken: nil) { _ in } progressCallback: { _ in }
@@ -897,7 +897,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         ./maintenance/tds-run-talos-deploy.sh
         """
         tdsProgress("Resuming deployer-owned Talos apply/bootstrap/health script")
-        _ = try await transport.run(bootstrapCommand, timeout: 7200)
+        _ = try await transport.run(bootstrapCommand, asRoot: false, timeout: 7200)
         tdsProgress("Deployer-owned Talos resume script completed")
         executedActions.append("Resumed deployer-owned Talos apply/bootstrap/health script.")
 
@@ -972,9 +972,9 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         }
 
         let startMediaCommand = renderStartMediaCommand(state: state, configuration: configuration)
-        tdsProgress("Preparing deployer-hosted media before Talos node reprovision")
-        _ = try await transport.run(startMediaCommand, timeout: 900)
-        executedActions.append("Prepared deployer-hosted media service before reprovisioning \(talosInstalls.count) Talos node(s).")
+      tdsProgress("Preparing deployer-hosted media before Talos node reprovision")
+         _ = try await transport.run(startMediaCommand, asRoot: true, timeout: 900)
+         executedActions.append("Prepared deployer-hosted media service before reprovisioning \(talosInstalls.count) Talos node(s).")
 
         let prepareMediaCommand = """
         cd \(shellEscape(state.plan.durableStateDirectory)) && \\
@@ -982,7 +982,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         TDS_TALOS_VERSION=\(shellEscape(state.spec.talosVersion)) \\
         ./maintenance/tds-prepare-talos-media.sh
         """
-        _ = try await transport.run(prepareMediaCommand, timeout: 1800)
+        _ = try await transport.run(prepareMediaCommand, asRoot: false, timeout: 1800)
         executedActions.append("Regenerated node-specific Talos boot media before reprovisioning.")
 
         if wipeFirst {
@@ -1015,7 +1015,7 @@ public final class TalosDeploymentExecutor: @unchecked Sendable {
         )
         let waitTimeout = TimeInterval(max(1800, talosInstalls.count * 1300))
         tdsProgress("Waiting for reprovisioned Talos nodes to expose the live/configured API")
-        _ = try await transport.run(waitForBootCommand, timeout: waitTimeout)
+        _ = try await transport.run(waitForBootCommand, asRoot: false, timeout: waitTimeout)
         executedActions.append("Confirmed Talos API reachability for reprovisioned nodes before resume/apply.")
 
         return TalosProvisioningExecution(

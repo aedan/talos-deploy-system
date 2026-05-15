@@ -166,7 +166,7 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
 
     public func setHostname(_ hostname: String, transport: any DeployerTransport) async throws {
         let escaped = shellEscape(hostname)
-        _ = try await transport.run("sudo hostnamectl set-hostname \(escaped) || hostnamectl set-hostname \(escaped)", timeout: 120)
+        _ = try await transport.run("sudo hostnamectl set-hostname \(escaped) || hostnamectl set-hostname \(escaped)", asRoot: false, timeout: 120)
     }
 
     public func planDeployerServices(configuration: DeployerMediaServiceConfiguration) -> DeployerServicePlan {
@@ -383,7 +383,7 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
         fi
         sudo systemctl daemon-reload || true
         """
-        _ = try await transport.run(remoteCommand, timeout: 900)
+        _ = try await transport.runScript(remoteCommand, arguments: [], asRoot: true, timeout: 900)
         return plan
     }
 
@@ -516,7 +516,7 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
         START_COMMAND=\(shellEscape(startCommand))
         EOF
         """
-        _ = try await transport.run(remoteCommand, timeout: 300)
+        _ = try await transport.runScript(remoteCommand, arguments: [], asRoot: true, timeout: 300)
 
         return DeployerMediaServicePlan(
             mediaRoot: mediaRoot,
@@ -540,7 +540,7 @@ public final class DefaultDeployerHostClient: DeployerHostClient, @unchecked Sen
     }
 
     public func syncState(localDirectory: URL, remoteStateRoot: String, transport: any DeployerTransport) async throws {
-        _ = try await transport.run("mkdir -p \(shellEscape(remoteStateRoot))", timeout: 120)
+        _ = try await transport.run("mkdir -p \(shellEscape(remoteStateRoot))", asRoot: true, timeout: 120)
         try await transport.copy(localPath: localDirectory, remotePath: remoteStateRoot, delete: false)
     }
 }
