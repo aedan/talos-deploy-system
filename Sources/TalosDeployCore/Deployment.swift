@@ -1916,8 +1916,12 @@ public final class DeploymentCoordinator {
             )
             updated.events.append(DeploymentEvent(message: "Selected deployer access path: \(selection.validation.method.displayName) via \(selection.validation.target)."))
             tdsProgress("Selected deployer access path \(selection.validation.method.displayName) via \(selection.validation.target)")
-            tdsProgress("Setting deployer hostname to \(hostname)")
-            try await deployerHostClient.setHostname(hostname, transport: transport)
+            if deployer.assignment.deployerMode == .bootstrap {
+                tdsProgress("Setting deployer hostname to \(hostname)")
+                try await deployerHostClient.setHostname(hostname, transport: transport)
+            } else {
+                updated.events.append(DeploymentEvent(message: "Skipping hostname change for existing deployer \(hostname)."))
+            }
             tdsProgress("Preparing deployer services")
             servicePlan = try await deployerHostClient.prepareDeployerServices(
                 configuration: serviceConfiguration,
