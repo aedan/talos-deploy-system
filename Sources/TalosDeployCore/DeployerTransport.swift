@@ -33,14 +33,14 @@ public protocol DeployerTransport: Sendable {
     var targetDescription: String { get }
 
     func validate() async throws -> DeployerAccessValidation
-    func run(_ remoteCommand: String, timeout: TimeInterval?) async throws -> CommandResult
+    func run(_ remoteCommand: String, asRoot: Bool, timeout: TimeInterval?) async throws -> CommandResult
     func copy(localPath: URL, remotePath: String, delete: Bool) async throws
     func runScript(_ script: String, arguments: [String], asRoot: Bool, timeout: TimeInterval?) async throws -> CommandResult
 }
 
 public extension DeployerTransport {
-    func run(_ remoteCommand: String) async throws -> CommandResult {
-        try await run(remoteCommand, timeout: nil)
+    func run(_ remoteCommand: String, asRoot: Bool = false) async throws -> CommandResult {
+        try await run(remoteCommand, asRoot: asRoot, timeout: nil)
     }
 }
 
@@ -72,8 +72,9 @@ public final class DirectSSHDeployerTransport: DeployerTransport, @unchecked Sen
         )
     }
 
-    public func run(_ remoteCommand: String, timeout: TimeInterval? = nil) async throws -> CommandResult {
-        try await router.run(connection: connection, remoteCommand: remoteCommand, timeout: timeout ?? 60)
+    public func run(_ remoteCommand: String, asRoot: Bool = false, timeout: TimeInterval? = nil) async throws -> CommandResult {
+        let command = asRoot ? "sudo \(remoteCommand)" : remoteCommand
+        return try await router.run(connection: connection, remoteCommand: command, timeout: timeout ?? 60)
     }
 
     public func copy(localPath: URL, remotePath: String, delete: Bool) async throws {
@@ -170,10 +171,14 @@ public final class HammertimeDeployerTransport: DeployerTransport {
         throw HammertimeTransportError.validationTimedOut(deviceID)
     }
 
-    public func run(_ remoteCommand: String, timeout: TimeInterval? = nil) async throws -> CommandResult {
-        try await runner.run(
+    public func run(_ remoteCommand: String, asRoot: Bool = false, timeout: TimeInterval? = nil) async throws -> CommandResult {
+        var arguments = commonArguments() + ["command"] + commandOptions() + copyMethodOptions() + ["--command", remoteCommand, deviceID]
+        if asRoot {
+            arguments.append("--root")
+        }
+        return try await runner.run(
             settings.binaryPath.expandingTildeInPath(),
-            arguments: commonArguments() + ["command"] + commandOptions() + copyMethodOptions() + ["--command", remoteCommand, deviceID],
+            arguments: arguments,
             environment: [:],
             currentDirectory: nil,
             timeout: timeout ?? TimeInterval(settings.commandTimeoutSeconds)
